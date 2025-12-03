@@ -5,10 +5,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from io import BytesIO
 
 import qrcode
 import requests
 import websocket
+from PIL import Image
 
 log_lock = threading.Lock()
 
@@ -18,17 +20,22 @@ def log(msg):
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
 
-def get_ykt_cookie():
-    """雨课堂扫码登录获取Cookie"""
+def get_cookie():
+    """扫码登录获取Cookie"""
     login_data = {}
 
     def on_message(ws, message):
         msg = json.loads(message)
-        if "qrcode" in msg and msg["qrcode"]:
+        if "ticket" in msg and msg["ticket"]:
+            resp = requests.get(msg["ticket"])
+            img = Image.open(BytesIO(resp.content))
+            from pyzbar.pyzbar import decode
+
+            url = decode(img)[0].data.decode("utf-8")
             qr = qrcode.QRCode()
-            qr.add_data(msg["qrcode"])
+            qr.add_data(url)
             qr.print_ascii(invert=True)
-            print("\n请使用雨课堂扫码登录...")
+            print("\n请使用微信扫码登录...")
 
         if msg.get("op") == "loginsuccess":
             login_data.update(msg)
@@ -39,19 +46,41 @@ def get_ykt_cookie():
             json.dumps({
                 "op": "requestlogin",
                 "role": "web",
-                "version": 1.4,
-                "type": "qrcode",
+                "version": "1.4",
+                "purpose": "login",
+                "xtbz": "xt",
+                "x-client": "web",
             })
         )
 
     ws = websocket.WebSocketApp(
-        "wss://www.yuketang.cn/wsapp/", on_message=on_message, on_open=on_open
+        "wss://www.xuetangx.com/wsapp/", on_message=on_message, on_open=on_open
     )
     ws.run_forever()
 
     response = requests.post(
-        "https://www.yuketang.cn/pc/web_login",
-        json={"Auth": login_data["Auth"], "UserID": str(login_data["UserID"])},
+        "https://www.xuetangx.com/api/v1/u/login/wx/",
+        json={
+            "s_s": login_data["token"],
+            "preset_properties": {
+                "$timezone_offset": -480,
+                "$screen_height": 1067,
+                "$screen_width": 1707,
+                "$lib": "js",
+                "$lib_version": "1.19.14",
+                "$latest_traffic_source_type": "直接流量",
+                "$latest_search_keyword": "未取到值_直接打开",
+                "$latest_referrer": "",
+                "$is_first_day": False,
+                "$referrer": "https://www.xuetangx.com/",
+                "$referrer_host": "www.xuetangx.com",
+                "$url": "https://www.xuetangx.com/",
+                "$url_path": "/",
+                "$title": "学堂在线 - 精品在线课程学习平台",
+                "_distinct_id": "19a16647ffb7cf-0590d22341cefa4-4c657b58-1821369-19a16647ffc129c",
+            },
+            "page_name": "首页",
+        },
     )
 
     return {
@@ -61,8 +90,12 @@ def get_ykt_cookie():
 
 
 def init_session():
-    log("🔐 正在获取雨课堂Cookie...")
-    cookies = get_ykt_cookie()
+    log("🔐 正在获取学堂在线Cookie...")
+    # cookies = get_cookie()
+    cookies = {
+        "csrftoken": "yDDymSsXbZZwDUW6PD7H6DIKx0wcovbf",
+        "sessionid": "8blpu8j4ora3nxz8qh9tsxqd43mm8rss",
+    }
 
     if not cookies["csrftoken"] or not cookies["sessionid"]:
         log("❌ Cookie获取失败！")
@@ -70,20 +103,21 @@ def init_session():
 
     log("✅ Cookie获取成功！")
 
-    headers = {
+    return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Content-Type": "application/json",
         "Cookie": f"csrftoken={cookies['csrftoken']}; sessionid={cookies['sessionid']}",
+        "X-CSRFToken": cookies["csrftoken"],
+        "Xtbz": "xt",
     }
-    return headers
 
 
 def get_basic_info(headers: dict) -> dict:
     response = requests.get(
-        "https://www.yuketang.cn/api/v3/user/basic-info", headers=headers
+        "https://www.xuetangx.com/api/v1/u/user/basic_profile/", headers=headers
     )
     resp = json.loads(response.text)
-    if resp["code"] != 0:
+    if not resp["success"]:
         log("❌ 获取用户信息失败！")
         exit(1)
 
@@ -91,21 +125,22 @@ def get_basic_info(headers: dict) -> dict:
 
 
 def get_courses(headers: dict):
-    url = "https://www.yuketang.cn/v2/api/web/courses/list?identity=2"
+    url = "https://www.xuetangx.com/api/v1/lms/user/user-courses/?status=1&page=1"
     response = requests.get(url, headers=headers)
     resp = json.loads(response.text)
-    if resp["errcode"] != 0:
+    if not resp["success"]:
         log("❌ 获取课程列表失败！")
         exit(1)
 
     try:
         courses = []
-        for course in resp["data"]["list"]:
+        for course in resp["data"]["product_list"]:
             courses.append({
-                "name": course["course"]["name"],
+                "name": course["name"],
                 "classroom_id": course["classroom_id"],
-                "university_id": course["course"]["university_id"],
-                "id": course["course"]["id"],
+                "sign": course["sign"],
+                "product_id": course["product_id"],
+                "sku_id": course["sku_id"],
             })
         return courses
     except:
@@ -113,26 +148,8 @@ def get_courses(headers: dict):
         exit(1)
 
 
-def get_classroom_info(course: dict, headers: dict) -> tuple[dict, dict]:
-    url = (
-        f"https://www.yuketang.cn/v2/api/web/classrooms/{course['classroom_id']}?role=5"
-    )
-    headers = headers.copy()
-    headers["Cookie"] += (
-        f"; xtbz=ykt; platform_type=1; uv_id={course['university_id']}; university_id={course['university_id']}; platform_id=3; classroom_id={course['classroom_id']}; classroomID={course['classroom_id']}"
-    )
-    headers["Xtbz"] = "ykt"
-    response = requests.get(url, headers=headers)
-    data = json.loads(response.text)
-    if data["errcode"] != 0:
-        log("❌ 获取课程信息失败！")
-        exit(1)
-    return data["data"], headers
-
-
-def get_videos(course: dict, headers: dict) -> tuple[dict, dict, dict]:
-    course_info, headers = get_classroom_info(course, headers)
-    url = f"https://www.yuketang.cn/mooc-api/v1/lms/learn/course/chapter?cid={course['classroom_id']}&sign={course_info['course_sign']}&term=latest&uv_id={course['university_id']}&classroom_id={course['classroom_id']}"
+def get_videos(course: dict, headers: dict) -> tuple[dict, dict]:
+    url = f"https://www.xuetangx.com/api/v1/lms/learn/course/chapter?cid={course['classroom_id']}&sign={course['sign']}"
     try:
         response = requests.get(url, headers=headers)
         data = json.loads(response.text)["data"]["course_chapter"]
@@ -145,16 +162,26 @@ def get_videos(course: dict, headers: dict) -> tuple[dict, dict, dict]:
                         videos[leaf["id"]] = leaf["name"]
 
         log(f"📋 找到 {len(videos)} 个视频")
-        return videos, headers, course_info
+        return videos, headers
     except:
         log("❌ 获取视频列表失败！")
         exit(1)
 
 
-def watch_video(video_id, video_name, classroom_info, user_id, headers):
+def watch_video(video_id, video_name, classroom_id, course_sign, headers):
     video_id = str(video_id)
-    classroom_id = str(classroom_info["id"])
-    progress_url = f"https://www.yuketang.cn/video-log/get_video_watch_progress/?cid={classroom_info['course_id']}&user_id={user_id}&classroom_id={classroom_id}&video_type=video&vtype=rate&video_id={video_id}&snapshot=1"
+
+    resp = requests.get(
+        f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{classroom_id}/{video_id}/?sign={course_sign}",
+        headers=headers,
+    )
+
+    data = resp.json()["data"]
+
+    user_id = data["user_id"]
+    sku_id = data["sku_id"]
+    course_id = data["course_id"]
+    progress_url = f"https://www.xuetangx.com/video-log/get_video_watch_progress/??cid={course_id}&user_id={user_id}&classroom_id={classroom_id}&video_type=video&vtype=rate&video_id={video_id}"
 
     response = requests.get(progress_url, headers=headers)
     if '"completed":1' in response.text:
@@ -172,7 +199,7 @@ def watch_video(video_id, video_name, classroom_info, user_id, headers):
     except:
         pass
 
-    heartbeat_url = "https://www.yuketang.cn/video-log/heartbeat/"
+    heartbeat_url = "https://www.xuetangx.com/video-log/heartbeat/"
     timestamp = int(time.time() * 1000)
 
     LEARNING_RATE = 8
@@ -192,10 +219,10 @@ def watch_video(video_id, video_name, classroom_info, user_id, headers):
                 "ts": str(timestamp),
                 "u": int(user_id),
                 "uip": "",
-                "c": classroom_info["course_id"],
+                "c": int(course_id),
                 "v": int(video_id),
-                "skuid": classroom_info["free_sku_id"],
-                "classroomid": classroom_id,
+                "skuid": sku_id,
+                "classroomid": str(classroom_id),
                 "cc": video_id,
                 "d": 4976.5,
                 "pg": f"{video_id}_{''.join(random.sample('abcdefghijklmnopqrstuvwxyz0123456789', 4))}",
@@ -218,7 +245,10 @@ def watch_video(video_id, video_name, classroom_info, user_id, headers):
             time.sleep(float(delay_time) + 0.5)
             log("🔄 重新发送请求...")
             requests.post(
-                heartbeat_url, headers=headers, json={"heart_data": heart_data}
+                heartbeat_url,
+                headers=headers,
+                json={"heart_data": heart_data},
+                timeout=20,
             )
         except:
             pass
@@ -262,7 +292,7 @@ def ykt_main():
 
     for idx, course in enumerate(target_courses, 1):
         log(f"\n🎯 [{idx}/{len(target_courses)}] 处理课程: {course['name']}")
-        videos, headers, classroom_info = get_videos(course, headers)
+        videos, headers = get_videos(course, headers)
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
@@ -271,8 +301,8 @@ def ykt_main():
                     watch_video,
                     video_id,
                     video_name,
-                    classroom_info,
-                    userinfo["id"],
+                    course["classroom_id"],
+                    course["sign"],
                     headers,
                 )
                 futures.append(future)
