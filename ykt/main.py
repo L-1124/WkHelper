@@ -1,10 +1,10 @@
-from api import get_basic_info, get_courses
-from auth import init_session
-from logic import fetch_homeworks, learn_videos, save_answers
-from utils import get_input, log
+from .api import get_basic_info, get_courses
+from .auth import init_session
+from .logic import fetch_homeworks, learn_videos, save_answers
+from .utils import get_input, log
 
 
-def ykt_main():
+def main():
     session = init_session()
 
     userinfo = get_basic_info(session)
@@ -64,4 +64,4 @@ def ykt_main():
 
 
 if __name__ == "__main__":
-    ykt_main()
+    main()

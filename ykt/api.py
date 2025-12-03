@@ -1,8 +1,9 @@
 import json
 
 import requests
-from models import ClassroomInfo, Course, Homework, Question, SubmitResult, UserInfo
-from utils import log
+
+from .models import ClassroomInfo, Course, Homework, Question, SubmitResult, UserInfo
+from .utils import log
 
 
 def _get_course_kwargs(course: Course) -> dict:

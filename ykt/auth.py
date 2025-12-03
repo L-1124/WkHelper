@@ -3,10 +3,11 @@ import json
 import qrcode
 import requests
 import websocket
-from utils import log
+
+from .utils import log
 
 
-def get_ykt_cookie() -> dict:
+def get_cookie() -> dict:
     """雨课堂扫码登录获取Cookie"""
     login_data = {}
 
@@ -54,16 +55,7 @@ def get_ykt_cookie() -> dict:
 
 def init_session() -> requests.Session:
     log("🔐 正在获取雨课堂Cookie...")
-    # cookies = get_ykt_cookie()
-    # print(cookies)
-    # cookies = {
-    #     "csrftoken": "PEJRun5G257tuzixrAMJkUD68qd5QpKi",
-    #     "sessionid": "hoaqtgfa3in0trymdm0mur4r0t8nonil",
-    # }
-    cookies = {
-        "csrftoken": "NlEHVywHUKJxQyTFOjH14fNKn3NZqd7w",
-        "sessionid": "6ykf8yzdmtdber887o3ccnnfvw4tx908",
-    }
+    cookies = get_cookie()
 
     if not cookies["csrftoken"] or not cookies["sessionid"]:
         log("❌ Cookie获取失败！")

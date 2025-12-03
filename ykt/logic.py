@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import requests
-from api import (
+
+from .api import (
     check_text_finish_status,
     get_homework_questions,
     get_homeworks,
@@ -16,8 +17,8 @@ from api import (
     get_videos,
     submit_homework_answer,
 )
-from models import ClassroomInfo, Course, Homework, UserInfo
-from utils import get_input, log
+from .models import ClassroomInfo, Course, Homework, UserInfo
+from .utils import get_input, log
 
 
 def load_answer_file(course_name: str) -> dict[str, dict[str, list[str]]]:
