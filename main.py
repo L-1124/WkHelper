@@ -1,5 +1,5 @@
-from xtzx import main as xtzx_main
-from ykt.main import main as ykt_main
+from wkhelper.xtzx.main import main as xtzx_main
+from wkhelper.ykt.main import main as ykt_main
 
 
 def main():

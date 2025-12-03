@@ -1,7 +1,7 @@
+from ..utils import get_input, log
 from .api import get_basic_info, get_courses
 from .auth import init_session
 from .logic import fetch_homeworks, learn_videos, save_answers
-from .utils import get_input, log
 
 
 def main():

@@ -7,10 +7,10 @@ import websocket
 from PIL import Image
 from pyzbar.pyzbar import decode
 
-from .utils import log
+from ..utils import log
 
 
-def get_cookie():
+def get_cookie() -> dict[str, str | None]:
     """扫码登录获取Cookie"""
     login_data = {}
 
@@ -78,7 +78,7 @@ def get_cookie():
     }
 
 
-def init_session():
+def init_session() -> dict[str, str]:
     log("🔐 正在获取学堂在线Cookie...")
     cookies = get_cookie()
 

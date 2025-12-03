@@ -4,7 +4,7 @@ import qrcode
 import requests
 import websocket
 
-from .utils import log
+from ..utils import log
 
 
 def get_cookie() -> dict:
@@ -71,6 +71,5 @@ def init_session() -> requests.Session:
         "X-CSRFToken": cookies["csrftoken"],
         "Xtbz": "ykt",
     })
-    session.verify = False
     session.cookies.update(cookies)
     return session

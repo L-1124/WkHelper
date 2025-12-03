@@ -2,13 +2,22 @@ import json
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-from .utils import log
+from ..utils import log
+from .api import get_videos
+from .models import Course
 
 
-def watch_video(video_id, video_name, classroom_id, course_sign, headers):
+def watch_video(
+    video_id: int | str,
+    video_name: str,
+    classroom_id: int | str,
+    course_sign: str,
+    headers: dict,
+):
     video_id = str(video_id)
 
     resp = requests.get(
@@ -102,3 +111,25 @@ def watch_video(video_id, video_name, classroom_id, course_sign, headers):
             pass
 
     log(f"✅ {video_name} 完成！")
+
+
+def learn_videos(target_courses: list[Course], headers: dict):
+    for idx, course in enumerate(target_courses, 1):
+        log(f"\n🎯 [{idx}/{len(target_courses)}] 处理课程: {course['name']}")
+        videos, headers = get_videos(course, headers)
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for video_id, video_name in videos.items():
+                future = executor.submit(
+                    watch_video,
+                    video_id,
+                    video_name,
+                    course["classroom_id"],
+                    course["sign"],
+                    headers,
+                )
+                futures.append(future)
+
+            for future in futures:
+                future.result()

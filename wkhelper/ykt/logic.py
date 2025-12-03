@@ -8,6 +8,7 @@ from datetime import datetime
 
 import requests
 
+from ..utils import get_input, log
 from .api import (
     check_text_finish_status,
     get_homework_questions,
@@ -18,7 +19,6 @@ from .api import (
     submit_homework_answer,
 )
 from .models import ClassroomInfo, Course, Homework, UserInfo
-from .utils import get_input, log
 
 
 def load_answer_file(course_name: str) -> dict[str, dict[str, list[str]]]:

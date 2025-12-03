@@ -2,11 +2,11 @@ import json
 
 import requests
 
-from .models import Course
-from .utils import log
+from ..utils import log
+from .models import Course, UserInfo
 
 
-def get_basic_info(headers: dict) -> dict:
+def get_basic_info(headers: dict) -> UserInfo:
     response = requests.get(
         "https://www.xuetangx.com/api/v1/u/user/basic_profile/", headers=headers
     )
