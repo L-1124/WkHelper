@@ -32,7 +32,7 @@
 ### 安装依赖
 
 ```bash
-pip install -r requirements.txt
+pip install .
 ```
 
 ### 运行程序
