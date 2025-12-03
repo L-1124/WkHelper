@@ -1,5 +1,5 @@
-from xtzx import main
-from ykt.main import main
+from xtzx import main as xtzx_main
+from ykt.main import main as ykt_main
 
 
 def main():
@@ -13,9 +13,9 @@ def main():
     choice = input("\n输入平台编号: ").strip()
 
     if choice == "1":
-        main()
+        ykt_main()
     elif choice == "2":
-        main()
+        xtzx_main()
     else:
         print("❌ 输入无效，程序退出")
 
