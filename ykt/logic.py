@@ -312,6 +312,39 @@ def fetch_homeworks(target_courses: list[Course], session: requests.Session):
             )
 
 
+def _fetch_single_homework_answers(
+    course: Course, hw: Homework, session: requests.Session
+) -> dict:
+    """获取单个作业的答案"""
+    leaf_type_id = get_leaf_info(course, hw["id"], session)
+    if not leaf_type_id:
+        return {}
+
+    questions = get_homework_questions(leaf_type_id, course, session)
+    hw_answers = {}
+    for q in questions:
+        # 提取 LibraryID
+        library_id = None
+        if "content" in q:
+            library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
+
+        version = q["content"].get("Version")
+
+        if not library_id or not version:
+            continue
+
+        ans = None
+        if "user" in q and q["user"].get("answer"):
+            ans = q["user"]["answer"]
+
+        if library_id and ans:
+            if str(library_id) not in hw_answers:
+                hw_answers[str(library_id)] = {}
+            hw_answers[str(library_id)][version] = ans
+
+    return hw_answers
+
+
 def save_answers(course: Course, session: requests.Session):
     """生成并保存课程答案"""
     log(f"🔍 正在扫描课程答案: {course['name']}")
@@ -319,31 +352,17 @@ def save_answers(course: Course, session: requests.Session):
 
     answers_data = {}
 
-    for hw in homeworks:
-        leaf_type_id = get_leaf_info(course, hw["id"], session)
-        if not leaf_type_id:
-            continue
-
-        questions = get_homework_questions(leaf_type_id, course, session)
-        for q in questions:
-            # 提取 LibraryID
-            library_id = None
-            if "content" in q:
-                library_id = q["content"].get("LibraryID") or q["content"].get(
-                    "library_id"
-                )
-
-            version = q["content"].get("Version")
-
-            if not library_id and not version:
-                continue
-
-            ans = None
-            if "user" in q and q["user"].get("answer"):
-                ans = q["user"]["answer"]
-
-            if library_id and ans:
-                answers_data.setdefault(str(library_id), {})[version] = ans
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(_fetch_single_homework_answers, course, hw, session)
+            for hw in homeworks
+        ]
+        for future in futures:
+            hw_answers = future.result()
+            for lib_id, versions in hw_answers.items():
+                if lib_id not in answers_data:
+                    answers_data[lib_id] = {}
+                answers_data[lib_id].update(versions)
 
     if not answers_data:
         log("⚠️ 未找到任何答案")

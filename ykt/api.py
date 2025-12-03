@@ -51,8 +51,8 @@ def get_courses(session: requests.Session) -> list[Course]:
                 "id": course["course"]["id"],
             })
         return courses
-    except Exception:
-        log("❌ 获取课程列表失败！")
+    except Exception as e:
+        log(f"❌ 获取课程列表失败！错误: {e}")
         exit(1)
 
 
@@ -81,9 +81,16 @@ def get_chapter_info(
         response = session.get(url, **kwargs)
         data = json.loads(response.text)["data"]["course_chapter"]
         return data, kwargs, course_info
-    except Exception:
-        log("❌ 获取章节信息失败！")
+    except Exception as e:
+        log(f"❌ 获取章节信息失败！错误: {e}")
         exit(1)
+
+
+def _iter_leaves(chapter_data: list[dict]):
+    for chapter in chapter_data:
+        if "section_leaf_list" in chapter:
+            for section in chapter["section_leaf_list"]:
+                yield from section.get("leaf_list", [section])
 
 
 def get_videos(
@@ -92,13 +99,11 @@ def get_videos(
     """获取课程视频（leaf_type == 0）"""
     chapter_data, kwargs, course_info = get_chapter_info(course, session)
 
-    videos: dict[int, str] = {}
-    for chapter in chapter_data:
-        if "section_leaf_list" in chapter:
-            for section in chapter["section_leaf_list"]:
-                for leaf in section.get("leaf_list", [section]):
-                    if leaf.get("leaf_type") == 0:
-                        videos[leaf["id"]] = leaf["name"]
+    videos = {
+        leaf["id"]: leaf["name"]
+        for leaf in _iter_leaves(chapter_data)
+        if leaf.get("leaf_type") == 0
+    }
 
     log(f"📋 找到 {len(videos)} 个视频")
     return videos, kwargs, course_info
@@ -110,13 +115,11 @@ def get_texts(
     """获取课程图文（leaf_type == 3）"""
     chapter_data, kwargs, course_info = get_chapter_info(course, session)
 
-    texts: dict[int, str] = {}
-    for chapter in chapter_data:
-        if "section_leaf_list" in chapter:
-            for section in chapter["section_leaf_list"]:
-                for leaf in section.get("leaf_list", [section]):
-                    if leaf.get("leaf_type") == 3:
-                        texts[leaf["id"]] = leaf["name"]
+    texts = {
+        leaf["id"]: leaf["name"]
+        for leaf in _iter_leaves(chapter_data)
+        if leaf.get("leaf_type") == 3
+    }
 
     log(f"📋 找到 {len(texts)} 个图文")
     return texts, kwargs, course_info
@@ -127,20 +130,19 @@ def get_homeworks(
 ) -> tuple[list[Homework], dict, ClassroomInfo]:
     """获取课程中的课堂作业（leaf_type == 6）"""
     chapter_data, kwargs, course_info = get_chapter_info(course, session)
-    homeworks: list[Homework] = []
-    for chapter in chapter_data:
-        if "section_leaf_list" in chapter:
-            for section in chapter["section_leaf_list"]:
-                for leaf in section.get("leaf_list", [section]):
-                    if leaf.get("leaf_type") == 6:
-                        homeworks.append({
-                            "id": leaf["id"],
-                            "name": leaf["name"],
-                            "start_time": leaf.get("start_time"),
-                            "score_deadline": leaf.get("score_deadline"),
-                            "is_score": leaf.get("is_score"),
-                            "chapter_id": leaf.get("chapter_id"),
-                        })
+
+    homeworks: list[Homework] = [
+        {
+            "id": leaf["id"],
+            "name": leaf["name"],
+            "start_time": leaf.get("start_time"),
+            "score_deadline": leaf.get("score_deadline"),
+            "is_score": leaf.get("is_score"),
+            "chapter_id": leaf.get("chapter_id"),
+        }
+        for leaf in _iter_leaves(chapter_data)
+        if leaf.get("leaf_type") == 6
+    ]
 
     log(f"📋 找到 {len(homeworks)} 个课堂作业")
     return homeworks, kwargs, course_info
@@ -158,8 +160,8 @@ def get_leaf_info(
         if data.get("success") or data.get("data"):
             return data.get("data", {}).get("content_info", {}).get("leaf_type_id")
         return None
-    except Exception:
-        log("❌ 获取 leaf_info 失败！")
+    except Exception as e:
+        log(f"❌ 获取 leaf_info 失败！错误: {e}")
         return None
 
 
@@ -175,8 +177,8 @@ def get_homework_questions(
         if data.get("success", False):
             return data.get("data", {}).get("problems", [])
         return []
-    except Exception:
-        log("❌ 获取作业题目失败！")
+    except Exception as e:
+        log(f"❌ 获取作业题目失败！错误: {e}")
         return []
 
 
@@ -189,8 +191,8 @@ def check_text_finish_status(
     try:
         response = session.get(url, **kwargs)
         return json.loads(response.text)
-    except Exception:
-        log("❌ 获取图文阅读状态失败！")
+    except Exception as e:
+        log(f"❌ 获取图文阅读状态失败！错误: {e}")
         return {}
 
 
@@ -227,5 +229,6 @@ def submit_homework_answer(
                 "correct_answer": result_data.get("answer", []),
             }
         return {"success": False, "is_correct": False, "correct_answer": []}
-    except Exception:
+    except Exception as e:
+        log(f"❌ 提交答案失败！错误: {e}")
         return {"success": False, "is_correct": False, "correct_answer": []}

@@ -2,38 +2,38 @@ from typing import Any, Required, TypedDict
 
 
 class Course(TypedDict):
-    name: str
-    classroom_id: int
-    university_id: int
-    id: int
+    name: Required[str]
+    classroom_id: Required[int]
+    university_id: Required[int]
+    id: Required[int]
 
 
 class Homework(TypedDict):
-    id: int
-    name: str
-    start_time: int | None
-    score_deadline: int | None
-    is_score: bool | None
-    chapter_id: int | None
+    id: Required[int]
+    name: Required[str]
+    start_time: Required[int | None]
+    score_deadline: Required[int | None]
+    is_score: Required[bool | None]
+    chapter_id: Required[int | None]
 
 
 class SubmitResult(TypedDict):
-    success: bool
-    is_correct: bool
-    correct_answer: list[str]
+    success: Required[bool]
+    is_correct: Required[bool]
+    correct_answer: Required[list[str]]
 
 
 class UserInfo(TypedDict):
-    id: int
-    name: str
-    school: str
+    id: Required[int]
+    name: Required[str]
+    school: Required[str]
 
 
 class ClassroomInfo(TypedDict):
-    id: int
-    course_id: int
-    course_sign: str
-    free_sku_id: int
+    id: Required[int]
+    course_id: Required[int]
+    course_sign: Required[str]
+    free_sku_id: Required[int]
 
 
 class Question(TypedDict, total=False):
