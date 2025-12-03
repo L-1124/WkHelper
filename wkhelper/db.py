@@ -1,7 +1,6 @@
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 
@@ -30,26 +29,22 @@ class DB:
     def save_answer(self, library_id: str, version: str, answer: list | str):
         table_name = self._get_table_name(library_id)
 
-        tz = timezone(timedelta(hours=8))
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
         with self.lock:
             try:
                 self.cursor.execute(f"""
                     CREATE TABLE IF NOT EXISTS "{table_name}" (
                         version TEXT PRIMARY KEY,
-                        answer TEXT,
-                        update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        answer TEXT
                     )
                 """)
 
                 answer_json = json.dumps(answer, ensure_ascii=False)
                 self.cursor.execute(
                     f"""
-                    INSERT OR REPLACE INTO "{table_name}" (version, answer, update_time)
-                    VALUES (?, ?, ?)
+                    INSERT OR REPLACE INTO "{table_name}" (version, answer)
+                    VALUES (?, ?)
                 """,
-                    (str(version), answer_json, now),
+                    (str(version), answer_json),
                 )
                 self.conn.commit()
             except Exception as e:
