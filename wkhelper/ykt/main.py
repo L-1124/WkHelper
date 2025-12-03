@@ -1,7 +1,7 @@
 from ..utils import get_input, log
 from .api import get_basic_info, get_courses
 from .auth import init_session
-from .logic import fetch_homeworks, learn_videos, save_answers
+from .logic import fetch_homeworks, learn_videos, random_answer, save_answers
 
 
 def main():
@@ -58,6 +58,7 @@ def main():
         elif mode == "3":
             for course in target_courses:
                 save_answers(course, session)
+
         log("✅ 任务完成！\n")
 
     log("👋 再见！")

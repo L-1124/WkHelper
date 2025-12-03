@@ -1,5 +1,4 @@
 import json
-import os
 import random
 import re
 import time
@@ -8,6 +7,7 @@ from datetime import datetime
 
 import requests
 
+from ..db import db
 from ..utils import get_input, log
 from .api import (
     check_text_finish_status,
@@ -19,22 +19,6 @@ from .api import (
     submit_homework_answer,
 )
 from .models import ClassroomInfo, Course, Homework, UserInfo
-
-
-def load_answer_file(course_name: str) -> dict[str, dict[str, list[str]]]:
-    """加载答案文件，格式为 JSON: {"LibraryID": {"Version": ["答案"], ...}, ...}"""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, "answer", f"{course_name}_lib.json")
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            log(f"📖 加载答案文件: {file_path}")
-            return json.load(f)
-    except FileNotFoundError:
-        # log(f"❌ 答案文件不存在: {file_path}")
-        return {}
-    except json.JSONDecodeError:
-        log("❌ 答案文件格式错误，请使用 JSON 格式")
-        return {}
 
 
 def watch_video(
@@ -141,7 +125,6 @@ def read_text(
 
 def process_single_homework(
     hw: Homework,
-    course_answers: dict[str, dict[str, list[str]]],
     course: Course,
     course_info: ClassroomInfo,
     session: requests.Session,
@@ -181,9 +164,7 @@ def process_single_homework(
         library_id = str(library_id)
 
         # 查找答案
-        answer = None
-        if library_id in course_answers and version in course_answers[library_id]:
-            answer = course_answers[library_id][version]
+        answer = db.get_answer(library_id, version)
 
         if answer:
             problem_id = q.get("problem_id") or q.get("id")
@@ -275,13 +256,115 @@ def learn_texts(target_courses: list[Course], session: requests.Session):
                 future.result()
 
 
+def process_random_homework(
+    hw: Homework,
+    course: Course,
+    course_info: ClassroomInfo,
+    session: requests.Session,
+    kwargs: dict,
+):
+    """处理单个作业的随机答题"""
+    log(f"\n🎲 正在随机答题: {hw['name']}")
+
+    # 获取 leaf_type_id
+    leaf_type_id = get_leaf_info(course, hw["id"], session)
+    if not leaf_type_id:
+        log("  ❌ 无法获取作业详情ID (leaf_type_id)")
+        return
+
+    questions = get_homework_questions(leaf_type_id, course, session)
+
+    if not questions:
+        log("  ⚠️ 未获取到题目")
+        return
+
+    log(f"  📋 共 {len(questions)} 道题目")
+
+    for i, q in enumerate(questions, 1):
+        if q.get("user", {}).get("is_right", False):
+            log(f"  ✅ 第{i}题 已正确，跳过")
+            continue
+
+        if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 999):
+            log(f"  ⏭️ 第{i}题 次数耗尽，跳过")
+            continue
+
+        problem_id = q.get("problem_id") or q.get("id")
+
+        # 尝试获取选项
+        options = []
+        if "content" in q and "Options" in q["content"]:
+            options = [opt["key"] for opt in q["content"]["Options"]]
+
+        if not options:
+            options = ["A", "B", "C", "D"]
+
+        # 随机生成答案
+        answer = [random.choice(options)]
+
+        # 提交
+        result = submit_homework_answer(
+            problem_id, answer, course_info, session, kwargs
+        )
+        if result["success"]:
+            status = "正确" if result["is_correct"] else "错误"
+            correct_ans = result.get("correct_answer")
+            log(f"  🎲 第{i}题 随机提交 {answer} -> {status}")
+            if correct_ans:
+                log(f"     正确答案: {correct_ans}")
+        else:
+            log(f"  ❌ 第{i}题 提交失败")
+
+        time.sleep(random.uniform(2, 3))
+
+
+def random_answer(target_courses: list[Course], session: requests.Session):
+    """随机答题（用于获取答案）"""
+    for idx, course in enumerate(target_courses, 1):
+        log(f"\n🎲 [{idx}/{len(target_courses)}] 随机答题: {course['name']}")
+        homeworks, kwargs, course_info = get_homeworks(course, session)
+
+        if not homeworks:
+            log("暂无作业")
+            continue
+
+        for i, hw in enumerate(homeworks, 1):
+            deadline_str = "无截止时间"
+            if hw["score_deadline"]:
+                deadline_str = datetime.fromtimestamp(
+                    hw["score_deadline"] / 1000
+                ).strftime("%Y-%m-%d %H:%M")
+            log(f"  [{i}] {hw['name']}  截止: {deadline_str}")
+
+        hw_choice = get_input(
+            [],
+            "选择作业编号（0表示全部，q返回）: ",
+            lambda x: x.isdigit() and int(x) <= len(homeworks),
+        )
+        if not hw_choice:
+            continue
+
+        target_hws = (
+            homeworks if int(hw_choice) == 0 else [homeworks[int(hw_choice) - 1]]
+        )
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for hw in target_hws:
+                future = executor.submit(
+                    process_random_homework, hw, course, course_info, session, kwargs
+                )
+                futures.append(future)
+
+            for future in futures:
+                future.result()
+
+
 def fetch_homeworks(target_courses: list[Course], session: requests.Session):
     """获取课程作业"""
     for idx, course in enumerate(target_courses, 1):
         log(f"\n📝 [{idx}/{len(target_courses)}] 获取课程作业: {course['name']}")
         homeworks, kwargs, course_info = get_homeworks(course, session)
-
-        course_answers = load_answer_file(course["name"])
 
         if not homeworks:
             log("暂无作业")
@@ -308,9 +391,7 @@ def fetch_homeworks(target_courses: list[Course], session: requests.Session):
         )
 
         for hw in target_hws:
-            process_single_homework(
-                hw, course_answers, course, course_info, session, kwargs
-            )
+            process_single_homework(hw, course, course_info, session, kwargs)
 
 
 def _fetch_single_homework_answers(
@@ -351,8 +432,7 @@ def save_answers(course: Course, session: requests.Session):
     log(f"🔍 正在扫描课程答案: {course['name']}")
     homeworks, _, _ = get_homeworks(course, session)
 
-    answers_data = {}
-
+    count = 0
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = [
             executor.submit(_fetch_single_homework_answers, course, hw, session)
@@ -361,19 +441,12 @@ def save_answers(course: Course, session: requests.Session):
         for future in futures:
             hw_answers = future.result()
             for lib_id, versions in hw_answers.items():
-                if lib_id not in answers_data:
-                    answers_data[lib_id] = {}
-                answers_data[lib_id].update(versions)
+                for ver, ans in versions.items():
+                    db.save_answer(lib_id, ver, ans)
+                    count += 1
 
-    if not answers_data:
+    if count == 0:
         log("⚠️ 未找到任何答案")
         return
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, "answer", f"{course['name']}_lib.json")
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(answers_data, f, ensure_ascii=False, indent=2)
-
-    log(f"✅ 答案已保存至: {file_path}")
+    log(f"✅ 已保存 {count} 条答案到数据库")

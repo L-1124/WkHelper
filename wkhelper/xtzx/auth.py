@@ -10,7 +10,7 @@ from pyzbar.pyzbar import decode
 from ..utils import log
 
 
-def get_cookie() -> dict[str, str | None]:
+def get_cookie() -> dict:
     """扫码登录获取Cookie"""
     login_data = {}
 
@@ -73,12 +73,12 @@ def get_cookie() -> dict[str, str | None]:
     )
 
     return {
-        "csrftoken": response.cookies.get("csrftoken"),
-        "sessionid": response.cookies.get("sessionid"),
+        "csrftoken": response.cookies.get("csrftoken", ""),
+        "sessionid": response.cookies.get("sessionid", ""),
     }
 
 
-def init_session() -> dict[str, str]:
+def init_session() -> requests.Session:
     log("🔐 正在获取学堂在线Cookie...")
     cookies = get_cookie()
 
@@ -88,10 +88,12 @@ def init_session() -> dict[str, str]:
 
     log("✅ Cookie获取成功！")
 
-    return {
+    session = requests.Session()
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Content-Type": "application/json",
-        "Cookie": f"csrftoken={cookies['csrftoken']}; sessionid={cookies['sessionid']}",
         "X-CSRFToken": cookies["csrftoken"],
         "Xtbz": "xt",
-    }
+    })
+    session.cookies.update(cookies)
+    return session

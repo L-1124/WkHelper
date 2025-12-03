@@ -3,12 +3,20 @@ import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import requests
 
-from ..utils import log
-from .api import get_videos
-from .models import Course
+from ..db import db
+from ..utils import get_input, log
+from .api import (
+    get_homework_questions,
+    get_homeworks,
+    get_leaf_type_id,
+    get_videos,
+    submit_homework_answer,
+)
+from .models import ClassroomInfo, Course, Homework
 
 
 def watch_video(
@@ -16,13 +24,12 @@ def watch_video(
     video_name: str,
     classroom_id: int | str,
     course_sign: str,
-    headers: dict,
+    session: requests.Session,
 ):
     video_id = str(video_id)
 
-    resp = requests.get(
-        f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{classroom_id}/{video_id}/?sign={course_sign}",
-        headers=headers,
+    resp = session.get(
+        f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{classroom_id}/{video_id}/?sign={course_sign}"
     )
 
     data = resp.json()["data"]
@@ -32,7 +39,7 @@ def watch_video(
     course_id = data["course_id"]
     progress_url = f"https://www.xuetangx.com/video-log/get_video_watch_progress/??cid={course_id}&user_id={user_id}&classroom_id={classroom_id}&video_type=video&vtype=rate&video_id={video_id}"
 
-    response = requests.get(progress_url, headers=headers)
+    response = session.get(progress_url)
     if '"completed":1' in response.text:
         log(f"⏭️  {video_name} 已完成，跳过")
         return
@@ -82,9 +89,7 @@ def watch_video(
         ]
 
         video_frame += LEARNING_RATE * 3
-        r = requests.post(
-            heartbeat_url, headers=headers, json={"heart_data": heart_data}
-        )
+        r = session.post(heartbeat_url, json={"heart_data": heart_data})
 
         try:
             match = re.search(r"Expected available in(.+?)second.", r.text)
@@ -93,9 +98,8 @@ def watch_video(
                 log(f"⚠️  服务器限流，需等待 {delay_time} 秒")
                 time.sleep(float(delay_time) + 0.5)
                 log("🔄 重新发送请求...")
-                requests.post(
+                session.post(
                     heartbeat_url,
-                    headers=headers,
                     json={"heart_data": heart_data},
                     timeout=20,
                 )
@@ -104,7 +108,7 @@ def watch_video(
 
         time.sleep(0.5)
         try:
-            response = requests.get(progress_url, headers=headers)
+            response = session.get(progress_url)
             rate = json.loads(response.text)["data"][video_id].get("rate", 0) or 0
             log(f"📊 {video_name} 进度: {float(rate) * 100:.1f}%")
         except Exception:
@@ -113,10 +117,146 @@ def watch_video(
     log(f"✅ {video_name} 完成！")
 
 
-def learn_videos(target_courses: list[Course], headers: dict):
+def process_single_homework(
+    hw: Homework,
+    course: Course,
+    course_info: ClassroomInfo,
+    session: requests.Session,
+):
+    """处理单个作业的答题"""
+    log(f"\n🎯 正在处理: {hw['name']}")
+
+    # 获取 leaf_type_id
+    leaf_type_id = get_leaf_type_id(course, hw["id"], session)
+    if not leaf_type_id:
+        log("  ❌ 无法获取作业详情ID (leaf_type_id)")
+        return
+
+    questions = get_homework_questions(leaf_type_id, course, session)
+
+    if not questions:
+        log("  ⚠️ 未获取到题目")
+        return
+
+    log(f"  📋 共 {len(questions)} 道题目")
+
+    success_count = 0
+    correct_count = 0
+    for i, q in enumerate(questions, 1):
+        # 尝试从题目内容中获取 LibraryID 和 Version
+        library_id = None
+        version = None
+        if "content" in q:
+            library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
+            version = q["content"].get("Version")
+
+        if not library_id or not version:
+            log(f"  ⚠️ 第{i}题 无法获取 LibraryID 或 Version，跳过")
+            continue
+
+        library_id = str(library_id)
+
+        # 查找答案
+        answer = db.get_answer(library_id, version)
+
+        if answer:
+            problem_id = q.get("problem_id") or q.get("id")
+            if problem_id is None:
+                log(f"  ⚠️ 第{i}题 无法获取题目ID，跳过")
+                continue
+
+            if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 1):
+                log(f"  ⏭️ 第{i}题 达到最大回答次数，跳过")
+                continue
+
+            result = submit_homework_answer(
+                hw["chapter_id"], leaf_type_id, problem_id, answer, course_info, session
+            )
+            if result["success"]:
+                success_count += 1
+                if result["is_correct"]:
+                    correct_count += 1
+                    log(f"  ✅ 第{i}题 提交成功 - 回答正确")
+                else:
+                    correct_ans = ", ".join(result["correct_answer"])
+                    log(f"  ⚠️ 第{i}题 提交成功 - 回答错误，正确答案: {correct_ans}")
+            else:
+                print(result)
+                log(f"  ❌ 第{i}题 提交失败")
+            time.sleep(random.uniform(3, 4))
+        else:
+            log(f"  ⏭️ 第{i}题 无答案 (LibID: {library_id}, Ver: {version})，跳过")
+
+    log(
+        f"  📊 提交 {success_count}/{len(questions)} 道，正确 {correct_count}/{success_count} 道"
+    )
+
+
+def process_random_homework(
+    hw: Homework,
+    course: Course,
+    course_info: ClassroomInfo,
+    session: requests.Session,
+):
+    """处理单个作业的随机答题"""
+    log(f"\n🎲 正在随机答题: {hw['name']}")
+
+    # 获取 leaf_type_id
+    leaf_type_id = get_leaf_type_id(course, hw["id"], session)
+    if not leaf_type_id:
+        log("  ❌ 无法获取作业详情ID (leaf_type_id)")
+        return
+
+    questions = get_homework_questions(leaf_type_id, course, session)
+
+    if not questions:
+        log("  ⚠️ 未获取到题目")
+        return
+
+    log(f"  📋 共 {len(questions)} 道题目")
+
+    for i, q in enumerate(questions, 1):
+        if q.get("user", {}).get("is_right", False):
+            log(f"  ✅ 第{i}题 已正确，跳过")
+            continue
+
+        if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 999):
+            log(f"  ⏭️ 第{i}题 次数耗尽，跳过")
+            continue
+
+        problem_id = q.get("problem_id") or q.get("id")
+
+        # 尝试获取选项
+        options = []
+        if "content" in q and "Options" in q["content"]:
+            options = [opt["key"] for opt in q["content"]["Options"]]
+
+        if not options:
+            options = ["A", "B", "C", "D"]
+
+        # 随机生成答案
+        answer = [random.choice(options)]
+
+        # 提交
+        result = submit_homework_answer(
+            hw["chapter_id"], leaf_type_id, problem_id, answer, course_info, session
+        )
+        if result["success"]:
+            status = "正确" if result["is_correct"] else "错误"
+            correct_ans = result.get("correct_answer")
+            log(f"  🎲 第{i}题 随机提交 {answer} -> {status}")
+            if correct_ans:
+                log(f"     正确答案: {correct_ans}")
+        else:
+            log(f"  ❌ 第{i}题 提交失败")
+
+        time.sleep(random.uniform(2, 3))
+
+
+def learn_videos(target_courses: list[Course], session: requests.Session):
     for idx, course in enumerate(target_courses, 1):
         log(f"\n🎯 [{idx}/{len(target_courses)}] 处理课程: {course['name']}")
-        videos, headers = get_videos(course, headers)
+        videos, session = get_videos(course, session)
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
@@ -127,9 +267,143 @@ def learn_videos(target_courses: list[Course], headers: dict):
                     video_name,
                     course["classroom_id"],
                     course["sign"],
-                    headers,
+                    session,
                 )
                 futures.append(future)
 
             for future in futures:
                 future.result()
+
+
+def fetch_homeworks(target_courses: list[Course], session: requests.Session):
+    """获取课程作业"""
+    for idx, course in enumerate(target_courses, 1):
+        log(f"\n📝 [{idx}/{len(target_courses)}] 获取课程作业: {course['name']}")
+        homeworks, session, course_info = get_homeworks(course, session)
+
+        if not homeworks:
+            log("暂无作业")
+            continue
+
+        for i, hw in enumerate(homeworks, 1):
+            deadline_str = "无截止时间"
+            if hw["score_deadline"]:
+                deadline_str = datetime.fromtimestamp(
+                    hw["score_deadline"] / 1000
+                ).strftime("%Y-%m-%d %H:%M")
+            log(f"  [{i}] {hw['name']}  截止: {deadline_str}")
+
+        hw_choice = get_input(
+            [],
+            "选择作业编号（0表示全部，q返回）: ",
+            lambda x: x.isdigit() and int(x) <= len(homeworks),
+        )
+        if not hw_choice:
+            continue
+
+        target_hws = (
+            homeworks if int(hw_choice) == 0 else [homeworks[int(hw_choice) - 1]]
+        )
+
+        for hw in target_hws:
+            process_single_homework(hw, course, course_info, session)
+
+
+def random_answer(target_courses: list[Course], session: requests.Session):
+    """随机答题（用于获取答案）"""
+    for idx, course in enumerate(target_courses, 1):
+        log(f"\n🎲 [{idx}/{len(target_courses)}] 随机答题: {course['name']}")
+        homeworks, session, course_info = get_homeworks(course, session)
+
+        if not homeworks:
+            log("暂无作业")
+            continue
+
+        for i, hw in enumerate(homeworks, 1):
+            deadline_str = "无截止时间"
+            if hw["score_deadline"]:
+                deadline_str = datetime.fromtimestamp(
+                    hw["score_deadline"] / 1000
+                ).strftime("%Y-%m-%d %H:%M")
+            log(f"  [{i}] {hw['name']}  截止: {deadline_str}")
+
+        hw_choice = get_input(
+            [],
+            "选择作业编号（0表示全部，q返回）: ",
+            lambda x: x.isdigit() and int(x) <= len(homeworks),
+        )
+        if not hw_choice:
+            continue
+
+        target_hws = (
+            homeworks if int(hw_choice) == 0 else [homeworks[int(hw_choice) - 1]]
+        )
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for hw in target_hws:
+                future = executor.submit(
+                    process_random_homework, hw, course, course_info, session
+                )
+                futures.append(future)
+
+            for future in futures:
+                future.result()
+
+
+def _fetch_single_homework_answers(
+    course: Course, hw: Homework, session: requests.Session
+) -> dict:
+    """获取单个作业的答案"""
+    leaf_type_id = get_leaf_type_id(course, hw["id"], session)
+    if not leaf_type_id:
+        return {}
+
+    questions = get_homework_questions(leaf_type_id, course, session)
+    hw_answers = {}
+    for q in questions:
+        # 提取 LibraryID
+        library_id = None
+        if "content" in q:
+            library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
+
+        version = q["content"].get("Version")
+
+        if not library_id or not version:
+            continue
+
+        ans = None
+        if "user" in q and q["user"].get("answer"):
+            ans = q["user"]["answer"]
+
+        if library_id and ans:
+            if str(library_id) not in hw_answers:
+                hw_answers[str(library_id)] = {}
+            hw_answers[str(library_id)][version] = ans
+
+    return hw_answers
+
+
+def save_answers(course: Course, session: requests.Session):
+    """生成并保存课程答案"""
+    log(f"🔍 正在扫描课程答案: {course['name']}")
+    homeworks, _, _ = get_homeworks(course, session)
+
+    count = 0
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(_fetch_single_homework_answers, course, hw, session)
+            for hw in homeworks
+        ]
+        for future in futures:
+            hw_answers = future.result()
+            for lib_id, versions in hw_answers.items():
+                for version, answer in versions.items():
+                    db.save_answer(lib_id, version, answer)
+                    count += 1
+
+    if count == 0:
+        log("⚠️ 未找到任何答案")
+        return
+
+    log(f"✅ 已保存 {count} 个答案到数据库")
