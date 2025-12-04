@@ -216,9 +216,30 @@ def learn_videos(
         log(f"\n🎯 [{idx}/{len(target_courses)}] 处理课程: {course['name']}")
         videos, kwargs, classroom_info = get_videos(course, session)
 
+        video_list = list(videos.items())
+        if not video_list:
+            log("暂无视频")
+            continue
+
+        for i, (vid, vname) in enumerate(video_list, 1):
+            log(f"  [{i}] {vname}")
+
+        v_choice = get_input(
+            [],
+            "选择视频编号（0表示全部，多选空格分隔，q返回）: ",
+            lambda x: all(p.isdigit() and int(p) <= len(video_list) for p in x.split()),
+        )
+        if not v_choice:
+            continue
+
+        choices = [int(x) for x in v_choice.split()]
+        target_videos = (
+            video_list if 0 in choices else [video_list[i - 1] for i in choices]
+        )
+
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
-            for video_id, video_name in videos.items():
+            for video_id, video_name in target_videos:
                 future = executor.submit(
                     watch_video,
                     video_id,
@@ -338,15 +359,14 @@ def random_answer(target_courses: list[Course], session: requests.Session):
 
         hw_choice = get_input(
             [],
-            "选择作业编号（0表示全部，q返回）: ",
-            lambda x: x.isdigit() and int(x) <= len(homeworks),
+            "选择作业编号（0表示全部，多选空格分隔，q返回）: ",
+            lambda x: all(p.isdigit() and int(p) <= len(homeworks) for p in x.split()),
         )
         if not hw_choice:
             continue
 
-        target_hws = (
-            homeworks if int(hw_choice) == 0 else [homeworks[int(hw_choice) - 1]]
-        )
+        choices = [int(x) for x in hw_choice.split()]
+        target_hws = homeworks if 0 in choices else [homeworks[i - 1] for i in choices]
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
@@ -380,15 +400,14 @@ def fetch_homeworks(target_courses: list[Course], session: requests.Session):
 
         hw_choice = get_input(
             [],
-            "选择作业编号（0表示全部，q返回）: ",
-            lambda x: x.isdigit() and int(x) <= len(homeworks),
+            "选择作业编号（0表示全部，多选空格分隔，q返回）: ",
+            lambda x: all(p.isdigit() and int(p) <= len(homeworks) for p in x.split()),
         )
         if not hw_choice:
             continue
 
-        target_hws = (
-            homeworks if int(hw_choice) == 0 else [homeworks[int(hw_choice) - 1]]
-        )
+        choices = [int(x) for x in hw_choice.split()]
+        target_hws = homeworks if 0 in choices else [homeworks[i - 1] for i in choices]
 
         for hw in target_hws:
             process_single_homework(hw, course, course_info, session, kwargs)
