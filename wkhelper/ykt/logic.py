@@ -147,9 +147,7 @@ def process_single_homework(
 
     log(f"  📋 共 {len(questions)} 道题目")
 
-    success_count = 0
-    correct_count = 0
-    for i, q in enumerate(questions, 1):
+    def submit_one(i, q):
         # 尝试从题目内容中获取 LibraryID 和 Version
         library_id = None
         version = None
@@ -159,7 +157,7 @@ def process_single_homework(
 
         if not library_id or not version:
             log(f"  ⚠️ 第{i}题 无法获取 LibraryID 或 Version，跳过")
-            continue
+            return False, False
 
         library_id = str(library_id)
 
@@ -170,11 +168,11 @@ def process_single_homework(
             problem_id = q.get("problem_id") or q.get("id")
             if problem_id is None:
                 log(f"  ⚠️ 第{i}题 无法获取题目ID，跳过")
-                continue
+                return False, False
 
             if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 1):
                 log(f"  ⏭️ 第{i}题 达到最大回答次数，跳过")
-                continue
+                return False, False
 
             # 多选题答案处理：如果是 "ABC" 这种形式，转换为 ["A", "B", "C"]
             if (
@@ -189,19 +187,33 @@ def process_single_homework(
                 problem_id, answer, course_info, session, kwargs
             )
             if result["success"]:
-                success_count += 1
                 if result["is_correct"]:
-                    correct_count += 1
                     log(f"  ✅ 第{i}题 提交成功 - 回答正确")
+                    return True, True
                 else:
                     correct_ans = ", ".join(result["correct_answer"])
                     log(f"  ⚠️ 第{i}题 提交成功 - 回答错误，正确答案: {correct_ans}")
+                    return True, False
             else:
-                print(result)
                 log(f"  ❌ 第{i}题 提交失败")
-            time.sleep(random.uniform(3, 4))
+                return False, False
         else:
             log(f"  ⏭️ 第{i}题 无答案 (LibID: {library_id}, Ver: {version})，跳过")
+            return False, False
+
+    success_count = 0
+    correct_count = 0
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [
+            executor.submit(submit_one, i, q) for i, q in enumerate(questions, 1)
+        ]
+        for future in futures:
+            s, c = future.result()
+            if s:
+                success_count += 1
+            if c:
+                correct_count += 1
 
     log(
         f"  📊 提交 {success_count}/{len(questions)} 道，正确 {correct_count}/{success_count} 道"
@@ -409,8 +421,16 @@ def fetch_homeworks(target_courses: list[Course], session: requests.Session):
         choices = [int(x) for x in hw_choice.split()]
         target_hws = homeworks if 0 in choices else [homeworks[i - 1] for i in choices]
 
-        for hw in target_hws:
-            process_single_homework(hw, course, course_info, session, kwargs)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for hw in target_hws:
+                future = executor.submit(
+                    process_single_homework, hw, course, course_info, session, kwargs
+                )
+                futures.append(future)
+
+            for future in futures:
+                future.result()
 
 
 def _fetch_single_homework_answers(

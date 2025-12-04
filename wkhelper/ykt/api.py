@@ -1,4 +1,6 @@
 import json
+import re
+import time
 
 import requests
 
@@ -219,6 +221,18 @@ def submit_homework_answer(
 
     try:
         response = session.post(url, json=payload, **kwargs)
+
+        # 处理限流
+        match = re.search(r"Expected available in(.+?)second.", response.text)
+        if match:
+            delay_time = match.group(1).strip()
+            log(f"⚠️  服务器限流，需等待 {delay_time} 秒")
+            time.sleep(float(delay_time) + 0.5)
+            log("🔄 重新发送请求...")
+            return submit_homework_answer(
+                problem_id, answer, course_info, session, kwargs
+            )
+
         data = json.loads(response.text)
         if data.get("success") is True:
             result_data = data.get("data", {})
