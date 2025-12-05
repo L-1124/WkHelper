@@ -106,7 +106,7 @@ def watch_video(
         except Exception:
             pass
 
-        time.sleep(0.5)
+        time.sleep(1.5)
         try:
             response = session.get(progress_url)
             rate = json.loads(response.text)["data"][video_id].get("rate", 0) or 0

@@ -1,4 +1,5 @@
 import json
+import random
 import re
 import time
 
@@ -177,6 +178,8 @@ def submit_homework_answer(
             data = json.loads(response.text)
             if data.get("success") is True:
                 result_data = data.get("data", {})
+                # 添加3-4秒随机延迟，模拟人工操作
+                time.sleep(random.uniform(3, 4))
                 return {
                     "success": True,
                     "is_correct": result_data.get(
