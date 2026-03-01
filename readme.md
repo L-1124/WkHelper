@@ -1,19 +1,34 @@
-## 🤝 贡献
+# WKHELPER
 
-欢迎提交 Issue 和 Pull Request！
+---
 
-如果这个工具对您有帮助，欢迎 Star ⭐
+![Python Version](https://img.shields.io/badge/Python-3.14%2B-blue)
+![Package Manager](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)
 
-## ⚠️ 免责声明
+网课平台命令行学习助手，支持雨课堂与学堂在线
 
-**本工具仅供学习研究使用，请合理使用并遵守学校相关规定。**
+## 功能
 
-- 使用本工具造成的任何后果由使用者自行承担
-- 请勿用于商业用途或其他违反学校规定的行为
-- 建议适当了解课程内容，培养真正的学习能力
-- 作者不对使用本工具产生的任何问题负责
+- 自动完成视频学习
+- 自动完成作业(需要题库)
+- 随机答题以获取答案
 
-使用本工具即表示您已阅读并同意以上声明。
+## 开发与测试
 
+### 环境要求
 
+- Python `>= 3.14`
+- `uv`（依赖管理与运行）
 
+```bash
+uv sync
+uv run pre-commit install
+uv run ruff check . --fix
+uv run ruff format .
+uv run pytest -q
+```
+
+## 注意事项
+
+> [!WARNING]
+> 本工具仅用于学习与研究，请遵守学校及平台规则。使用风险与后果由使用者自行承担。
