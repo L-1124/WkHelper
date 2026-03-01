@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import math
 import random
+import re
 from typing import Any
 
 import httpx
@@ -391,8 +393,21 @@ class YuketangPlatform(BasePlatform):
                     "problem_id": problem_id,
                     "answer": answer,
                 }
-                resp_obj = await client.post(s_url, json=payload, **(kwargs or {}))
-                return resp_obj.json()
+
+                while True:
+                    resp_obj = await client.post(s_url, json=payload, **(kwargs or {}))
+                    match = re.search(r"Expected available in(.+?)second.", resp_obj.text)
+                    if match:
+                        delay_time = float(match.group(1).strip())
+                        remain = max(1, math.ceil(delay_time))
+                        while remain > 0:
+                            self.ui.update_homework_status(homework.name, f"⚠️ 限流，等待 {remain}s")
+                            await asyncio.sleep(1)
+                            remain -= 1
+                        self.ui.update_homework_status(homework.name, "🔄 重试中...")
+                        self.ui.update_homework_status(homework.name, "🧠 答题中")
+                        continue
+                    return resp_obj.json()
 
             if is_random:
                 await generic_random_answer(

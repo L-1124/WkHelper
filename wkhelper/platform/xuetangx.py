@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import random
 import re
 from io import BytesIO
@@ -406,8 +407,14 @@ class XuetangXPlatform(BasePlatform):
                     response = await client.post(url_apply, json=payload)
                     match = re.search(r"Expected available in(.+?)second.", response.text)
                     if match:
-                        delay_time = match.group(1).strip()
-                        await asyncio.sleep(float(delay_time) + 0.5)
+                        delay_time = float(match.group(1).strip())
+                        remain = max(1, math.ceil(delay_time))
+                        while remain > 0:
+                            self.ui.update_homework_status(homework.name, f"⚠️ 限流，等待 {remain}s")
+                            await asyncio.sleep(1)
+                            remain -= 1
+                        self.ui.update_homework_status(homework.name, "🔄 重试中...")
+                        self.ui.update_homework_status(homework.name, "🧠 答题中")
                         continue
 
                     data = response.json()
