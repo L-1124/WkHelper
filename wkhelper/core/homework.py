@@ -120,7 +120,7 @@ async def process_question(
     # 2. 查找数据库
     answer = db.get_answer(library_id, version)
     if not answer:
-        logger.info(f"  ⏭️ 第{idx}题 无答案 (LibID: {library_id}, Ver: {version})，跳过")
+        logger.debug(f"  ⏭️ 第{idx}题 无答案 (LibID: {library_id}, Ver: {version})，跳过")
         return False, False
 
     # 3. 验证
@@ -130,7 +130,7 @@ async def process_question(
         return False, False
 
     if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 1):
-        logger.info(f"  ⏭️ 第{idx}题 达到最大回答次数，跳过")
+        logger.debug(f"  ⏭️ 第{idx}题 达到最大回答次数，跳过")
         return False, False
 
     # 4. 提交
@@ -139,7 +139,7 @@ async def process_question(
 
     if result.get("success"):
         if result.get("is_correct"):
-            logger.info(f"  ✅ 第{idx}题 提交成功 - 回答正确")
+            logger.debug(f"  ✅ 第{idx}题 提交成功 - 回答正确")
             return True, True
         else:
             correct_ans = ", ".join(result.get("correct_answer", []))
@@ -170,7 +170,7 @@ async def generic_process_homework(
         logger.warning("  ⚠️ 未获取到题目")
         return
 
-    logger.info(f"  📋 共 {len(questions)} 道题目")
+    logger.debug(f"  📋 共 {len(questions)} 道题目")
 
     success_count = 0
     correct_count = 0
@@ -208,7 +208,7 @@ async def generic_process_homework(
         for i, q in enumerate(questions, 1):
             tg.create_task(worker(i, q))
 
-    logger.info(f"  📊 提交 {success_count}/{len(questions)} 道，正确 {correct_count}/{success_count} 道")
+    logger.debug(f"  📊 提交 {success_count}/{len(questions)} 道，正确 {correct_count}/{success_count} 道")
 
 
 async def generic_random_answer(
@@ -229,19 +229,19 @@ async def generic_random_answer(
         logger.warning("  ⚠️ 未获取到题目")
         return
 
-    logger.info(f"  📋 共 {len(questions)} 道题目")
+    logger.debug(f"  📋 共 {len(questions)} 道题目")
 
     processed_count = 0
     for i, q in enumerate(questions, 1):
         if q.get("user", {}).get("is_right", False):
-            logger.info(f"  ✅ 第{i}题 已正确，跳过")
+            logger.debug(f"  ✅ 第{i}题 已正确，跳过")
             processed_count += 1
             if on_progress:
                 await _maybe_call(on_progress(processed_count, len(questions)))
             continue
 
         if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 999):
-            logger.info(f"  ⏭️ 第{i}题 次数耗尽，跳过")
+            logger.debug(f"  ⏭️ 第{i}题 次数耗尽，跳过")
             processed_count += 1
             if on_progress:
                 await _maybe_call(on_progress(processed_count, len(questions)))
@@ -264,9 +264,9 @@ async def generic_random_answer(
         if result.get("success"):
             status = "正确" if result.get("is_correct") else "错误"
             correct_ans = result.get("correct_answer")
-            logger.info(f"  🎲 第{i}题 随机提交 {answer} -> {status}")
+            logger.debug(f"  🎲 第{i}题 随机提交 {answer} -> {status}")
             if correct_ans:
-                logger.info(f"     正确答案: {correct_ans}")
+                logger.debug(f"     正确答案: {correct_ans}")
                 library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
                 version = q["content"].get("Version")
                 if library_id and version:

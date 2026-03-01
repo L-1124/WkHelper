@@ -52,6 +52,8 @@ class RichUI:
         self._video_progress_lock = Lock()
         self._homework_progress: dict[str, tuple[int, int]] = {}
         self._homework_status: dict[str, str] = {}
+        self._homework_eta_state: dict[str, tuple[int, float, float | None]] = {}
+        self._homework_rate_limit_deadline: dict[str, float] = {}
         self._homework_progress_live: Live | None = None
         self._homework_progress_lock = Lock()
         self._setup_logging()
@@ -306,6 +308,13 @@ class RichUI:
     def update_video_status(self, video_name: str, status: str | None) -> None:
         """更新视频状态展示；None/空字符串表示清空状态。"""
         with self._video_progress_lock:
+            # 状态可能先于首次进度到达（例如一上来就被限流），
+            # 先创建占位进度，确保状态与预计剩余可立即显示。
+            if video_name not in self._video_progress:
+                now = time.monotonic()
+                self._video_progress[video_name] = 0.0
+                self._video_eta_state[video_name] = (0.0, now, None)
+
             if status:
                 self._video_status[video_name] = status
                 # 兼容状态文案：⚠️ 限流，等待 40s
@@ -315,7 +324,16 @@ class RichUI:
             else:
                 self._video_status.pop(video_name, None)
                 self._video_rate_limit_deadline.pop(video_name, None)
-            if self._video_progress_live is not None:
+
+            if self._video_progress_live is None:
+                self._video_progress_live = Live(
+                    self._render_video_progress_panel(),
+                    console=self.console,
+                    refresh_per_second=6,
+                    transient=True,
+                )
+                self._video_progress_live.start()
+            else:
                 self._video_progress_live.update(self._render_video_progress_panel())
 
     def _render_homework_progress_panel(self) -> Panel:
@@ -329,8 +347,10 @@ class RichUI:
         )
         table.add_column("作业任务")
         table.add_column("进度", justify="right")
+        table.add_column("预计剩余", justify="right")
         table.add_column("状态")
 
+        known_etas: list[float] = []
         for name, (done, total) in sorted(
             self._homework_progress.items(),
             key=lambda item: (item[1][1] and (item[1][0] / item[1][1]), item[1][0]),
@@ -338,13 +358,67 @@ class RichUI:
         ):
             percent = 0.0 if total <= 0 else done / total
             status = self._homework_status.get(name, "答题中")
-            table.add_row(name, f"{done}/{total} ({percent * 100:.1f}%)", status)
+            eta_seconds = self._estimate_homework_eta_seconds(name, done, total)
+            if eta_seconds is not None:
+                known_etas.append(eta_seconds)
+            table.add_row(name, f"{done}/{total} ({percent * 100:.1f}%)", self._format_eta(eta_seconds), status)
 
-        return Panel(table, border_style="green", title=None, expand=True, box=HEAVY)
+        total_eta = self._sum_eta_seconds(known_etas)
+        subtitle = f"总预计剩余: {self._format_eta(total_eta)}"
+        return Panel(
+            table,
+            border_style="green",
+            title=None,
+            subtitle=subtitle,
+            subtitle_align="right",
+            expand=True,
+            box=HEAVY,
+        )
+
+    def _estimate_homework_eta_seconds(self, homework_name: str, done: int, total: int) -> float | None:
+        """估算作业剩余秒数：理论剩余 + 限流剩余。"""
+        if total <= 0 or done >= total:
+            return 0.0 if total > 0 else None
+
+        state = self._homework_eta_state.get(homework_name)
+        speed: float | None = None
+        if state:
+            _, _, speed = state
+
+        # 作业冷启动兜底：默认每题约 3 秒
+        fallback_speed = 1.0 / 3.0
+        eff_speed = speed if (speed is not None and speed > 0) else fallback_speed
+        if eff_speed <= 0:
+            return None
+
+        remain_count = max(0, total - done)
+        base_eta = remain_count / eff_speed
+        return base_eta + self._get_homework_rate_limit_remaining(homework_name)
+
+    def _get_homework_rate_limit_remaining(self, homework_name: str) -> float:
+        """获取当前作业剩余限流等待时间（秒）。"""
+        deadline = self._homework_rate_limit_deadline.get(homework_name)
+        if deadline is None:
+            return 0.0
+        return max(0.0, deadline - time.monotonic())
 
     def update_homework_progress(self, homework_name: str, done: int, total: int) -> None:
         """更新作业题目进度面板。"""
         with self._homework_progress_lock:
+            now = time.monotonic()
+            prev = self._homework_eta_state.get(homework_name)
+            if prev is None:
+                self._homework_eta_state[homework_name] = (done, now, None)
+            else:
+                prev_done, prev_ts, prev_speed = prev
+                dt = now - prev_ts
+                dd = done - prev_done
+                speed = prev_speed
+                if dt > 0 and dd > 0:
+                    instant_speed = dd / dt
+                    speed = instant_speed if prev_speed is None else (prev_speed * 0.7 + instant_speed * 0.3)
+                self._homework_eta_state[homework_name] = (done, now, speed)
+
             self._homework_progress[homework_name] = (done, total)
             if self._homework_progress_live is None:
                 self._homework_progress_live = Live(
@@ -362,6 +436,8 @@ class RichUI:
         with self._homework_progress_lock:
             self._homework_progress.pop(homework_name, None)
             self._homework_status.pop(homework_name, None)
+            self._homework_eta_state.pop(homework_name, None)
+            self._homework_rate_limit_deadline.pop(homework_name, None)
             if self._homework_progress_live is None:
                 return
             if self._homework_progress:
@@ -373,9 +449,29 @@ class RichUI:
     def update_homework_status(self, homework_name: str, status: str | None) -> None:
         """更新作业状态展示；None/空字符串表示清空状态。"""
         with self._homework_progress_lock:
+            # 状态可能先于题目进度到达（例如一上来就限流），
+            # 先创建占位条目，确保状态和 ETA 可见。
+            if homework_name not in self._homework_progress:
+                now = time.monotonic()
+                self._homework_progress[homework_name] = (0, 0)
+                self._homework_eta_state[homework_name] = (0, now, None)
+
             if status:
                 self._homework_status[homework_name] = status
+                match = re.search(r"限流，等待\s+(\d+)s", status)
+                if match:
+                    self._homework_rate_limit_deadline[homework_name] = time.monotonic() + float(match.group(1))
             else:
                 self._homework_status.pop(homework_name, None)
-            if self._homework_progress_live is not None:
+                self._homework_rate_limit_deadline.pop(homework_name, None)
+
+            if self._homework_progress_live is None:
+                self._homework_progress_live = Live(
+                    self._render_homework_progress_panel(),
+                    console=self.console,
+                    refresh_per_second=6,
+                    transient=True,
+                )
+                self._homework_progress_live.start()
+            else:
                 self._homework_progress_live.update(self._render_homework_progress_panel())
