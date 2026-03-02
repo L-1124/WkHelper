@@ -135,7 +135,7 @@ class Runner:
         logger.info(f"👤 登录成功：{self.platform.user.name if self.platform.user else '未知'}")
 
         logger.info("📚 正在获取课程列表...")
-        courses = await self.platform.get_courses()
+        courses = {course.id: course for course in await self.platform.get_courses()}.values()
 
         if not courses:
             logger.warning("⚠️ 未找到任何课程")
