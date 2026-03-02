@@ -17,7 +17,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "nuitka>=4.0.1",
   "pre-commit>=4.5.1",
   "pyrefly>=0.1.0",
   "pytest>=8.4.0",
