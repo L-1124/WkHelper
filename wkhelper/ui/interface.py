@@ -2,6 +2,8 @@
 
 from typing import Any, Protocol
 
+type TableRows = list[list[str]]
+
 
 class UserInterface(Protocol):
     """用户交互协议。"""
@@ -24,7 +26,7 @@ class UserInterface(Protocol):
         """确认操作。"""
         ...
 
-    def show_table(self, title: str, columns: list[str], rows: list[list[str]]) -> None:
+    def show_table(self, title: str, columns: list[str], rows: TableRows) -> None:
         """显示表格。"""
         ...
 

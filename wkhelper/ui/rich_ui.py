@@ -24,6 +24,7 @@ from rich.progress import (
 from rich.table import Table
 
 from wkhelper.core.config import HEARTBEAT_INTERVAL, LEARNING_RATE, VIDEO_THRESHOLD
+from wkhelper.ui.interface import TableRows
 
 
 class RichUI:
@@ -77,7 +78,7 @@ class RichUI:
             logging.CRITICAL: "bold red",
         }
 
-        def __init__(self, ui: RichUI):
+        def __init__(self, ui: "RichUI"):
             super().__init__()
             self.ui = ui
 
@@ -135,7 +136,7 @@ class RichUI:
             ).ask_async()
         )
 
-    def show_table(self, title: str, columns: list[str], rows: list[list[str]]) -> None:
+    def show_table(self, title: str, columns: list[str], rows: TableRows) -> None:
         """显示数据表格。"""
         table = Table(title=title, header_style="bold magenta")
         for col in columns:

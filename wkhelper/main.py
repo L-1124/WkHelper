@@ -10,7 +10,7 @@ from wkhelper.platform.yuketang import YuketangPlatform
 from wkhelper.ui.rich_ui import RichUI
 
 
-async def async_main():
+async def async_main() -> None:
     """异步主入口。"""
     ui = RichUI()
     choice = await ui.select_one(
@@ -23,12 +23,13 @@ async def async_main():
 
     async with httpx.AsyncClient(timeout=30, verify=False) as client:
         try:
-            if choice == "雨课堂 (yuketang.cn)":
-                platform = YuketangPlatform(client, ui)
-            elif choice == "学堂在线 (xuetangx.com)":
-                platform = XuetangXPlatform(client, ui)
-            else:
-                return
+            match choice:
+                case "雨课堂 (yuketang.cn)":
+                    platform = YuketangPlatform(client, ui)
+                case "学堂在线 (xuetangx.com)":
+                    platform = XuetangXPlatform(client, ui)
+                case _:
+                    return
 
             # 初始化平台（登录）
             await platform.login()
@@ -48,7 +49,7 @@ async def async_main():
             sys.exit(1)
 
 
-def main():
+def main() -> None:
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:

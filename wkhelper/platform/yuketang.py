@@ -5,7 +5,7 @@ import logging
 import math
 import random
 import re
-from typing import Any
+from typing import Any, override
 
 import httpx
 from httpx_ws import aconnect_ws
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class YuketangPlatform(BasePlatform):
     """雨课堂平台。"""
 
+    @override
     async def login(self) -> UserInfo:
         """登录雨课堂。
 
@@ -127,6 +128,7 @@ class YuketangPlatform(BasePlatform):
         self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
         return self.user
 
+    @override
     async def get_courses(self) -> list[Course]:
         url = "https://www.yuketang.cn/v2/api/web/courses/list?identity=2"
         resp_obj = await self.client.get(url)
@@ -215,10 +217,11 @@ class YuketangPlatform(BasePlatform):
         for leaf_id, progress in raw.items():
             try:
                 schedules[int(leaf_id)] = float(progress)
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 continue
         return schedules
 
+    @override
     async def get_videos(self, course: Course) -> dict[int, str]:
         chapters = await self._get_chapter_info(course)
         schedules = await self._get_leaf_schedules(course)
@@ -242,6 +245,7 @@ class YuketangPlatform(BasePlatform):
         course.metadata["completed_video_ids"] = completed_video_ids
         return videos
 
+    @override
     async def get_homeworks(self, course: Course) -> list[Homework]:
         chapters = await self._get_chapter_info(course)
         schedules = await self._get_leaf_schedules(course)
@@ -283,6 +287,7 @@ class YuketangPlatform(BasePlatform):
             )
         return homeworks
 
+    @override
     async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
         # 1. 获取叶子节点信息以找到 leaf_type_id
         cid = course.metadata["classroom_id"]
@@ -298,6 +303,7 @@ class YuketangPlatform(BasePlatform):
         q_resp = q_resp_obj.json()
         return q_resp["data"]["problems"]
 
+    @override
     async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
         if not self.user:
             await self.login()
@@ -367,6 +373,7 @@ class YuketangPlatform(BasePlatform):
             on_status=self.ui.update_video_status,
         )
 
+    @override
     async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
         self.ui.update_homework_status(homework.name, "🧠 答题中")
         try:

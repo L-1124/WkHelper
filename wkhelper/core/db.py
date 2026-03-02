@@ -3,7 +3,7 @@ import os
 import sqlite3
 from collections.abc import Iterable
 from threading import Lock
-from typing import Any
+from typing import Any, Self
 
 
 class DB:
@@ -13,7 +13,7 @@ class DB:
     cursor: sqlite3.Cursor
     lock: Lock
 
-    def __new__(cls):
+    def __new__(cls) -> Self:
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)

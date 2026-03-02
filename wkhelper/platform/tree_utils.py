@@ -1,6 +1,9 @@
 """平台章节树通用工具。"""
 
+from collections.abc import Iterator
 from typing import Any
+
+type LeafContext = tuple[dict[str, Any], str, str | None]
 
 
 def format_leaf_label(
@@ -20,7 +23,7 @@ def format_leaf_label(
     return f"{' › '.join(parts)} (ID:{leaf.get('id')})"
 
 
-def iter_leaves_with_context(chapter_data: list[dict[str, Any]]):
+def iter_leaves_with_context(chapter_data: list[dict[str, Any]]) -> Iterator[LeafContext]:
     """遍历课件叶子节点并保留章节上下文。"""
     for chapter in chapter_data:
         chapter_name = str(chapter.get("name") or "未命名章节")
