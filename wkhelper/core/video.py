@@ -15,6 +15,10 @@ from wkhelper.core.config import HEARTBEAT_INTERVAL, LEARNING_RATE, VIDEO_THRESH
 
 logger = logging.getLogger(__name__)
 
+type VideoProgressCallback = Callable[[str, float], None | Awaitable[None]]
+type VideoStatusCallback = Callable[[str, str | None], None | Awaitable[None]]
+type VideoCompleteCallback = Callable[[str], None | Awaitable[None]]
+
 
 class PayloadGenerator(Protocol):
     """生成心跳载荷的协议。"""
@@ -44,10 +48,10 @@ async def generic_watch_video(
     heartbeat_url: str,
     payload_gen: PayloadGenerator,
     request_kwargs: dict[str, Any] | None = None,
-    on_progress: Callable[[str, float], None | Awaitable[None]] | None = None,
-    on_complete: Callable[[str], None | Awaitable[None]] | None = None,
-    on_status: Callable[[str, str | None], None | Awaitable[None]] | None = None,
-):
+    on_progress: VideoProgressCallback | None = None,
+    on_complete: VideoCompleteCallback | None = None,
+    on_status: VideoStatusCallback | None = None,
+) -> None:
     """通用视频观看循环。"""
 
     async def _maybe_call(result: None | Awaitable[None]) -> None:

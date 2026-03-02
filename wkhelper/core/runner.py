@@ -14,6 +14,8 @@ from wkhelper.platform.base import BasePlatform
 
 logger = logging.getLogger(__name__)
 
+type AsyncTaskFactory = Callable[[], Coroutine[Any, Any, None]]
+
 
 class Runner:
     """所有平台的通用命令行运行器。"""
@@ -75,7 +77,7 @@ class Runner:
             return
 
         logger.info(f"🧩 已匹配到 {len(matched_hws)} 份对应作业，自动答题中...")
-        tasks: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = []
+        tasks: list[tuple[str, AsyncTaskFactory]] = []
         for hw in matched_hws:
 
             def create_task(h=hw, c=course):
@@ -88,7 +90,7 @@ class Runner:
     async def _run_parallel_tasks(
         self,
         title: str,
-        items: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]],
+        items: list[tuple[str, AsyncTaskFactory]],
         max_workers: int,
     ) -> None:
         """并发执行异步任务并输出摘要。"""
@@ -99,7 +101,7 @@ class Runner:
         success = 0
         semaphore = asyncio.Semaphore(max_workers)
 
-        async def worker(name: str, task_coro_factory: Callable[[], Coroutine[Any, Any, None]]):
+        async def worker(name: str, task_coro_factory: AsyncTaskFactory):
             nonlocal success
             try:
                 async with semaphore:
@@ -128,7 +130,7 @@ class Runner:
                 [[name, str(exc)] for name, exc in failed],
             )
 
-    async def run_main_menu(self):
+    async def run_main_menu(self) -> None:
         """顶级功能菜单。"""
         logger.info(f"👤 登录成功：{self.platform.user.name if self.platform.user else '未知'}")
 
@@ -155,12 +157,13 @@ class Runner:
 
             target_courses = [c for c in courses if c.name in selected_names]
 
-            if mode == "学习课程视频":
-                await self.batch_learn_videos(target_courses)
-            elif mode == "完成课程作业":
-                await self.batch_do_homework(target_courses)
-            elif mode == "下载课程答案":
-                await self.batch_save_answers(target_courses)
+            match mode:
+                case "学习课程视频":
+                    await self.batch_learn_videos(target_courses)
+                case "完成课程作业":
+                    await self.batch_do_homework(target_courses)
+                case "下载课程答案":
+                    await self.batch_save_answers(target_courses)
 
             logger.info("✅ 流程结束！\n")
 

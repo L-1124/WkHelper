@@ -3,7 +3,7 @@ name = "wkhelper"
 version = "0.1.0"
 description = "网课学习助手"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 scripts = { wkhelper = "wkhelper.main:main" }
 dependencies = [
   "httpx>=0.28.1",
@@ -31,18 +31,19 @@ build-backend = "uv_build"
 [tool.commitizen]
 name = "cz_gitmoji"
 
+[tool.pyright]
+pythonVersion = "3.12"
+
 [tool.pyrefly]
-venvPath = "."
-venv = ".venv"
-pythonVersion = "3.14"
-typeCheckingMode = "standard"
+project-includes = ["wkhelper","tests"]
+python-version = "3.12"
 
 [tool.pytest]
 pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py312"
 line-length = 140
 
 [tool.ruff.lint]

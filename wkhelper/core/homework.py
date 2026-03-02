@@ -14,6 +14,8 @@ from wkhelper.core.utils import get_random_sleep
 
 logger = logging.getLogger(__name__)
 
+type ProgressCallback = Callable[[int, int], None | Awaitable[None]]
+
 
 class SubmitFunc(Protocol):
     """提交函数协议。"""
@@ -158,8 +160,8 @@ async def generic_process_homework(
     chapter_id: int = 0,
     leaf_type_id: int = 0,
     headers: dict[str, Any] | None = None,
-    on_progress: Callable[[int, int], None | Awaitable[None]] | None = None,
-):
+    on_progress: ProgressCallback | None = None,
+) -> None:
     """异步并发处理作业题目列表"""
 
     async def _maybe_call(result: None | Awaitable[None]) -> None:
@@ -217,8 +219,8 @@ async def generic_random_answer(
     course_info: Any,
     client: httpx.AsyncClient,
     headers: dict[str, Any] | None = None,
-    on_progress: Callable[[int, int], None | Awaitable[None]] | None = None,
-):
+    on_progress: ProgressCallback | None = None,
+) -> None:
     """处理题目的随机答题（由于随机答题通常需要模拟人的行为，此处按序执行并带随机等待）"""
 
     async def _maybe_call(result: None | Awaitable[None]) -> None:

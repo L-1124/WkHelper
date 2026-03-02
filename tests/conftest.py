@@ -1,6 +1,6 @@
 """测试全局配置与 Fixtures。"""
 
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -72,25 +72,32 @@ class FakeAsyncPlatform(BasePlatform):
     def __init__(self, client: httpx.AsyncClient, ui: Any):
         super().__init__(client, ui)
 
+    @override
     async def login(self) -> UserInfo:
         self.user = UserInfo(id=1, name="tester")
         return self.user
 
+    @override
     async def get_courses(self) -> list[Course]:
         return [Course(id=1, name="课程1", platform_id="test")]
 
+    @override
     async def get_videos(self, course: Course) -> dict[int, str]:
         return {}
 
+    @override
     async def get_homeworks(self, course: Course) -> list[Homework]:
         return []
 
+    @override
     async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
         return []
 
+    @override
     async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
         pass
 
+    @override
     async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
         pass
 
