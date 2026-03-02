@@ -13,6 +13,15 @@
 - 自动完成作业(需要题库)
 - 随机答题以获取答案
 
+## 使用
+
+```bash
+git clone https://github.com/L-1124/WkHelper
+cd WkHelper
+uv sync
+uv run wkhelper
+```
+
 ## 开发与测试
 
 ### 环境要求
