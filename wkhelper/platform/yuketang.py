@@ -9,6 +9,7 @@ from typing import Any, override
 
 import httpx
 from httpx_ws import aconnect_ws
+from terminal_qrcode import generate
 
 from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.exceptions import APIError, AuthError
@@ -36,7 +37,6 @@ class YuketangPlatform(BasePlatform):
         Raises:
             AuthError: 当 WebSocket 连接失败或最终未获取到完整登录信息时抛出。
         """
-        import qrcode
 
         logger.info("🔐 正在获取雨课堂 Cookie...")
         login_data = {}
@@ -67,9 +67,7 @@ class YuketangPlatform(BasePlatform):
                         #     timeout_seconds = float(message["expire_seconds"])
 
                         if "qrcode" in message and message["qrcode"]:
-                            qr = qrcode.QRCode()
-                            qr.add_data(message["qrcode"])
-                            qr.print_ascii(invert=True)
+                            print(generate(message["qrcode"]))
                             logger.info(f"请使用雨课堂扫码登录 (判定有效时间: {int(timeout_seconds)}秒)...")
 
                         if message.get("op") == "loginsuccess":
