@@ -8,17 +8,15 @@ scripts = { wkhelper = "wkhelper.main:main" }
 dependencies = [
   "httpx>=0.28.1",
   "httpx-ws>=0.7.1",
-  "pillow>=12.1.1",
-  "pyzbar>=0.1.9",
-  "qrcode>=8.2",
   "questionary>=2.1.1",
   "rich>=14.3.3",
+  "terminal-qrcode[qr]>=0.1.1",
 ]
 
 [dependency-groups]
 dev = [
   "pre-commit>=4.5.1",
-  "pyrefly>=0.1.0",
+  "pyrefly>=0.55.0",
   "pytest>=8.4.0",
   "pytest-asyncio>=0.24.0",
   "ruff>=0.0.241",
@@ -62,4 +60,5 @@ pydocstyle = { convention = "google" }
 package = true
 
 [tool.uv.build-backend]
+module-name = "wkhelper"
 module-root = ""

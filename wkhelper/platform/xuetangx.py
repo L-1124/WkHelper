@@ -5,11 +5,11 @@ import logging
 import math
 import random
 import re
-from io import BytesIO
 from typing import Any, override
 
 import httpx
 from httpx_ws import aconnect_ws
+from terminal_qrcode import draw
 
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import generic_process_homework, generic_random_answer
@@ -36,9 +36,6 @@ class XuetangXPlatform(BasePlatform):
         Raises:
             AuthError: WebSocket 连接异常或最终未获取到 token 时抛出。
         """
-        import qrcode
-        from PIL import Image
-        from pyzbar.pyzbar import decode
 
         logger.info("🔐 正在获取学堂在线 Cookie...")
         login_data = {}
@@ -73,14 +70,8 @@ class XuetangXPlatform(BasePlatform):
                         if "ticket" in message and message["ticket"]:
                             # 下载并解析二维码
                             resp = await self.client.get(message["ticket"])
-                            img = Image.open(BytesIO(resp.content))
-                            decoded_objs = decode(img)
-                            if decoded_objs:
-                                url = decoded_objs[0].data.decode("utf-8")
-                                qr = qrcode.QRCode()
-                                qr.add_data(url)
-                                qr.print_ascii(invert=True)
-                                logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
+                            print(draw(resp.content))
+                            logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
 
                         if message.get("op") == "loginsuccess":
                             login_data.update(message)
