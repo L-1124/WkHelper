@@ -15,6 +15,7 @@ from wkhelper.platform.base import BasePlatform
 logger = logging.getLogger(__name__)
 
 type AsyncTaskFactory = Callable[[], Coroutine[Any, Any, None]]
+type TaskItem = tuple[str, AsyncTaskFactory]
 
 
 class Runner:
@@ -77,7 +78,7 @@ class Runner:
             return
 
         logger.info(f"🧩 已匹配到 {len(matched_hws)} 份对应作业，自动答题中...")
-        tasks: list[tuple[str, AsyncTaskFactory]] = []
+        tasks: list[TaskItem] = []
         for hw in matched_hws:
 
             def create_task(h=hw, c=course):
@@ -90,7 +91,7 @@ class Runner:
     async def _run_parallel_tasks(
         self,
         title: str,
-        items: list[tuple[str, AsyncTaskFactory]],
+        items: list[TaskItem],
         max_workers: int,
     ) -> None:
         """并发执行异步任务并输出摘要。"""
@@ -191,7 +192,7 @@ class Runner:
             )
 
             # 构造任务
-            tasks: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = []
+            tasks: list[TaskItem] = []
             for vid, vname in video_list:
                 if vname in selected_vnames:
                     # 使用闭包绑定变量
@@ -235,7 +236,7 @@ class Runner:
             is_random = False
             logger.info(f"🧠 模式：自动，共 {len(target_hws)} 份作业")
 
-            tasks: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = []
+            tasks: list[TaskItem] = []
             for hw in target_hws:
                 # 使用闭包绑定变量
                 def create_task(h=hw, c=course, r=is_random):

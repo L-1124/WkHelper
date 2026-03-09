@@ -5,6 +5,8 @@ from collections.abc import Iterable
 from threading import Lock
 from typing import Any, Self
 
+type AnswerPayload = list[Any] | str
+
 
 class DB:
     _instance = None
@@ -67,7 +69,7 @@ class DB:
             except Exception as e:
                 print(f"迁移表 {table} 时出错: {e}")
 
-    def save_answer(self, library_id: str, version: str, answer: list[Any] | str):
+    def save_answer(self, library_id: str, version: str, answer: AnswerPayload):
         with self.lock:
             try:
                 normalized = self.normalize_answer(answer)
@@ -107,7 +109,7 @@ class DB:
                 return None
             return None
 
-    def normalize_answer(self, answer: list[Any] | str) -> list[str]:
+    def normalize_answer(self, answer: AnswerPayload) -> list[str]:
         """标准化答案格式为去重且去空的 list[str]。"""
         raw: Iterable[Any] = [answer] if isinstance(answer, str) else answer
         result: list[str] = []

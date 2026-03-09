@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 type VideoProgressCallback = Callable[[str, float], None | Awaitable[None]]
 type VideoStatusCallback = Callable[[str, str | None], None | Awaitable[None]]
 type VideoCompleteCallback = Callable[[str], None | Awaitable[None]]
+type RequestOptions = dict[str, Any]
 
 
 class PayloadGenerator(Protocol):
@@ -33,7 +34,7 @@ class PayloadGenerator(Protocol):
         video_frame: int,
         i: int,
         timestamp: int,
-    ) -> dict[str, Any]: ...
+    ) -> RequestOptions: ...
 
 
 async def generic_watch_video(
@@ -47,7 +48,7 @@ async def generic_watch_video(
     progress_url: str,
     heartbeat_url: str,
     payload_gen: PayloadGenerator,
-    request_kwargs: dict[str, Any] | None = None,
+    request_kwargs: RequestOptions | None = None,
     on_progress: VideoProgressCallback | None = None,
     on_complete: VideoCompleteCallback | None = None,
     on_status: VideoStatusCallback | None = None,

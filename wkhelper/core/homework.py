@@ -15,6 +15,9 @@ from wkhelper.core.utils import get_random_sleep
 logger = logging.getLogger(__name__)
 
 type ProgressCallback = Callable[[int, int], None | Awaitable[None]]
+type QuestionPayload = dict[str, Any]
+type HeaderMap = dict[str, Any]
+type AnswerStore = dict[str, dict[str, Any]]
 
 
 class SubmitFunc(Protocol):
@@ -26,11 +29,11 @@ class SubmitFunc(Protocol):
         answer: list[str],
         course_info: Any,
         client: httpx.AsyncClient,
-        kwargs: dict[str, Any] | None,
-    ) -> dict[str, Any]: ...
+        kwargs: HeaderMap | None,
+    ) -> QuestionPayload: ...
 
 
-def extract_answers(questions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def extract_answers(questions: list[QuestionPayload]) -> AnswerStore:
     """从题目列表中提取答案。"""
     hw_answers = {}
     for q in questions:
@@ -96,13 +99,13 @@ async def save_platform_answers(platform: Any, course: Any):
 
 async def process_question(
     idx: int,
-    q: dict[str, Any],
+    q: QuestionPayload,
     chapter_id: int,
     leaf_type_id: int,
     course_info: Any,
     client: httpx.AsyncClient,
     submit_func: SubmitFunc,
-    headers: dict[str, Any] | None = None,
+    headers: HeaderMap | None = None,
 ) -> tuple[bool, bool]:
     """处理单个题目：查找答案 -> 提交"""
 
@@ -159,7 +162,7 @@ async def generic_process_homework(
     client: httpx.AsyncClient,
     chapter_id: int = 0,
     leaf_type_id: int = 0,
-    headers: dict[str, Any] | None = None,
+    headers: HeaderMap | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> None:
     """异步并发处理作业题目列表"""
@@ -180,7 +183,7 @@ async def generic_process_homework(
     semaphore = asyncio.Semaphore(MAX_WORKERS_HOMEWORK)
     progress_lock = asyncio.Lock()
 
-    async def worker(idx: int, q: dict[str, Any]):
+    async def worker(idx: int, q: QuestionPayload):
         nonlocal success_count, correct_count, processed_count
         try:
             async with semaphore:
@@ -214,11 +217,11 @@ async def generic_process_homework(
 
 
 async def generic_random_answer(
-    questions: list[Any],
+    questions: list[QuestionPayload],
     submit_func: SubmitFunc,
     course_info: Any,
     client: httpx.AsyncClient,
-    headers: dict[str, Any] | None = None,
+    headers: HeaderMap | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> None:
     """处理题目的随机答题（由于随机答题通常需要模拟人的行为，此处按序执行并带随机等待）"""
