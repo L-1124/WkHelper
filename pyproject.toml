@@ -9,8 +9,9 @@ dependencies = [
   "httpx>=0.28.1",
   "httpx-ws>=0.7.1",
   "questionary>=2.1.1",
+  "qrcode>=8.2",
   "rich>=14.3.3",
-  "terminal-qrcode[qr]>=0.1.1",
+  "terminal-qrcode>=0.2.0",
 ]
 
 [dependency-groups]

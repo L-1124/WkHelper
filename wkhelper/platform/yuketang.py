@@ -8,8 +8,9 @@ import re
 from typing import Any, override
 
 import httpx
+import qrcode
 from httpx_ws import aconnect_ws
-from terminal_qrcode import generate
+from terminal_qrcode import draw
 
 from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.exceptions import APIError, AuthError
@@ -20,6 +21,14 @@ from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.tree_utils import format_leaf_label, iter_leaves_with_context
 
 logger = logging.getLogger(__name__)
+
+
+def render_login_qrcode(payload: str, *, renderer: str = "auto") -> str:
+    """将登录字符串渲染为终端二维码。"""
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(payload)
+    qr.make(fit=True)
+    return str(draw(qr.get_matrix(), renderer=renderer))
 
 
 class YuketangPlatform(BasePlatform):
@@ -67,7 +76,7 @@ class YuketangPlatform(BasePlatform):
                         #     timeout_seconds = float(message["expire_seconds"])
 
                         if "qrcode" in message and message["qrcode"]:
-                            print(generate(message["qrcode"]))
+                            print(render_login_qrcode(message["qrcode"]))
                             logger.info(f"请使用雨课堂扫码登录 (判定有效时间: {int(timeout_seconds)}秒)...")
 
                         if message.get("op") == "loginsuccess":

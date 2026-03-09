@@ -2,7 +2,7 @@
 
 ---
 
-![Python Version](https://img.shields.io/badge/Python-3.14%2B-blue)
+![Python Version](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![Package Manager](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)
 
 网课平台命令行学习助手，支持雨课堂与学堂在线
@@ -26,7 +26,7 @@ uv run wkhelper
 
 ### 环境要求
 
-- Python `>= 3.14`
+- Python `>= 3.12`
 - `uv`（依赖管理与运行）
 
 ```bash
