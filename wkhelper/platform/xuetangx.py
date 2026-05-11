@@ -87,36 +87,37 @@ class XuetangXPlatform(BasePlatform):
         }
 
         try:
-            async with aconnect_ws("wss://www.xuetangx.com/wsapp/", self.client) as ws:
-                # 首次请求二维码
-                await ws.send_json(request_payload)
+            async with httpx.AsyncClient(timeout=10, http2=False) as ws_client:
+                async with aconnect_ws("wss://www.xuetangx.com/wsapp/", ws_client) as ws:
+                    # 首次请求二维码
+                    await ws.send_json(request_payload)
 
-                # 设置默认超时变量，可被服务端的实际 expire_seconds 覆盖
-                timeout_seconds = 60.0
+                    # 设置默认超时变量，可被服务端的实际 expire_seconds 覆盖
+                    timeout_seconds = 60.0
 
-                while True:
-                    try:
-                        # 2. 引入超时机制阻断无限期等待
-                        message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_seconds)
+                    while True:
+                        try:
+                            # 2. 引入超时机制阻断无限期等待
+                            message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_seconds)
 
-                        # 动态更新过期时间
-                        if "expire_seconds" in message:
-                            timeout_seconds = float(message["expire_seconds"])
+                            # 动态更新过期时间
+                            if "expire_seconds" in message:
+                                timeout_seconds = float(message["expire_seconds"])
 
-                        if "ticket" in message and message["ticket"]:
-                            # 下载并解析二维码
-                            resp = await self.client.get(message["ticket"])
-                            print(draw(resp.content))
-                            logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
+                            if "ticket" in message and message["ticket"]:
+                                # 下载并解析二维码
+                                resp = await self.client.get(message["ticket"])
+                                print(draw(resp.content))
+                                logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
 
-                        if message.get("op") == "loginsuccess":
-                            login_data.update(message)
-                            break
+                            if message.get("op") == "loginsuccess":
+                                login_data.update(message)
+                                break
 
-                    except TimeoutError:
-                        # 3. 触发变量 A：过期后主动向服务端重新发送请求
-                        logger.warning("⏳ 二维码已过期，正在重新请求...")
-                        await ws.send_json(request_payload)
+                        except TimeoutError:
+                            # 3. 触发变量 A：过期后主动向服务端重新发送请求
+                            logger.warning("⏳ 二维码已过期，正在重新请求...")
+                            await ws.send_json(request_payload)
 
         except Exception as e:
             logger.error(f"❌ WebSocket 连接失败: {e}")
