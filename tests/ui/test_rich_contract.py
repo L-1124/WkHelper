@@ -31,6 +31,18 @@ async def test_select_many_returns_values(monkeypatch):
     assert await ui.select_many("提示", ["选项A", "选项B"]) == ["选项A", "选项B"]
 
 
+@pytest.mark.asyncio
+async def test_select_many_all_disabled_returns_empty_without_prompt(monkeypatch):
+    """验证全部禁用时不调用 questionary，避免 pointed_at 初始化错误。"""
+
+    def _fail_checkbox(*args, **kwargs):
+        raise AssertionError("不应在全部禁用时创建 checkbox prompt")
+
+    monkeypatch.setattr("questionary.checkbox", _fail_checkbox)
+    ui = RichUI()
+    assert await ui.select_many("提示", ["选项A"], disabled_choices={"选项A"}) == []
+
+
 def test_eta_format():
     """验证 ETA 格式化输出。"""
     assert RichUI._format_eta(None) == "--"

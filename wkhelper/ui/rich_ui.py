@@ -118,6 +118,15 @@ class RichUI:
         """多项多选。"""
         default_selected = default_selected or set()
         disabled_choices = disabled_choices or set()
+        if not choices:
+            self.console.print("[yellow]没有可选择的项目[/yellow]")
+            return []
+
+        selectable_choices = [item for item in choices if item not in disabled_choices]
+        if not selectable_choices:
+            self.console.print("[yellow]所有项目均已完成，无需选择[/yellow]")
+            return []
+
         q_choices = [
             Choice(
                 title=item,
