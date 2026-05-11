@@ -22,7 +22,7 @@ async def async_main() -> None:
     if choice == "退出":
         return
 
-    async with httpx.AsyncClient(timeout=10, verify=False, http2=True) as client:
+    async with httpx.AsyncClient(timeout=10, http2=True) as client:
         try:
             match choice:
                 case "雨课堂 (yuketang.cn)":
