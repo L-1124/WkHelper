@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 scripts = { wkhelper = "wkhelper.main:main" }
 dependencies = [
-  "httpx>=0.28.1",
+  "httpx[http2]>=0.28.1",
   "httpx-ws>=0.7.1",
   "questionary>=2.1.1",
   "qrcode>=8.2",
