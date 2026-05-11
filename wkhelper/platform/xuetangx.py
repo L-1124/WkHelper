@@ -25,22 +25,58 @@ class XuetangXPlatform(BasePlatform):
     """学堂在线平台。"""
 
     @override
-    async def login(self) -> UserInfo:
-        """扫码登录获取 Cookie。
+    async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
+        """登录学堂在线。
 
-        通过 WebSocket 获取登录二维码。若二维码过期，主动重新发送请求获取新码。
+        支持两种方式：
+        - 提供 cookies 参数时直接注入 cookie 并验证
+        - 否则通过 WebSocket 获取二维码扫码登录
 
         Returns:
             UserInfo: 用户登录信息对象。
 
         Raises:
-            AuthError: WebSocket 连接异常或最终未获取到 token 时抛出。
+            AuthError: 登录失败时抛出。
         """
+        if cookies is not None:
+            return await self._login_with_cookies(cookies)
+        return await self._login_with_qrcode()
 
+    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+        """通过已获取的 cookie 直接登录。"""
+        csrftoken = cookies.get("csrftoken", "")
+        sessionid = cookies.get("sessionid", "")
+        if not csrftoken or not sessionid:
+            raise AuthError("Cookie 缺少 csrftoken 或 sessionid")
+
+        logger.info("🔐 正在验证 Cookie...")
+
+        self.client.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrftoken,
+                "Xtbz": "xt",
+            }
+        )
+        self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
+
+        resp_obj = await self.client.get("https://www.xuetangx.com/api/v1/u/user/basic_profile/")
+        resp = resp_obj.json()
+        if not resp["success"]:
+            logger.error("❌ Cookie 验证失败，可能已过期")
+            raise AuthError("Cookie 验证失败，请重新获取有效 Cookie")
+
+        info = resp["data"]
+        self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
+        logger.info("✅ Cookie 登录成功！")
+        return self.user
+
+    async def _login_with_qrcode(self) -> UserInfo:
+        """通过 WebSocket 获取二维码扫码登录。"""
         logger.info("🔐 正在获取学堂在线 Cookie...")
         login_data = {}
 
-        # 1. 提取请求参数，支持超时后复用发送
         request_payload = {
             "op": "requestlogin",
             "role": "web",
@@ -126,26 +162,7 @@ class XuetangXPlatform(BasePlatform):
             raise AuthError("Cookie 获取失败")
 
         logger.info("✅ Cookie 获取成功！")
-
-        self.client.headers.update(
-            {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Content-Type": "application/json",
-                "X-CSRFToken": cookies["csrftoken"],
-                "Xtbz": "xt",
-            }
-        )
-        self.client.cookies.update(cookies)
-
-        # 获取基础信息
-        resp_obj = await self.client.get("https://www.xuetangx.com/api/v1/u/user/basic_profile/")
-        resp = resp_obj.json()
-        if not resp["success"]:
-            raise APIError("获取用户信息失败")
-
-        info = resp["data"]
-        self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
-        return self.user
+        return await self._login_with_cookies(cookies)
 
     @override
     async def get_courses(self) -> list[Course]:
@@ -230,19 +247,8 @@ class XuetangXPlatform(BasePlatform):
         data = await self._get_chapter_data(course)
         schedules = await self._get_leaf_schedules(course)
         homeworks = []
-        chapter_has_completed_video: dict[int, bool] = {}
         for leaf, chapter_name, section_name in iter_leaves_with_context(data):
-            chapter_id_raw = leaf.get("chapter_id")
-            chapter_id = int(chapter_id_raw) if chapter_id_raw is not None else -1
-            if leaf.get("leaf_type") == 0:
-                leaf_id = leaf.get("id")
-                if leaf_id is not None and schedules.get(int(leaf_id), 0.0) >= 1.0:
-                    chapter_has_completed_video[chapter_id] = True
-                continue
-
             if leaf.get("leaf_type") != 6 or not leaf.get("is_show", True):
-                continue
-            if not chapter_has_completed_video.get(chapter_id, False):
                 continue
             leaf_id = int(leaf["id"])
             is_completed = schedules.get(leaf_id, 0.0) >= 1.0
@@ -418,7 +424,6 @@ class XuetangXPlatform(BasePlatform):
                     data = response.json()
                     if data.get("success") is True:
                         result_data = data.get("data", {})
-                        await asyncio.sleep(random.uniform(3, 4))
                         return {
                             "success": True,
                             "is_correct": result_data.get("is_right", result_data.get("is_correct", False)),

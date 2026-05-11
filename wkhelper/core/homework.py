@@ -224,7 +224,7 @@ async def generic_random_answer(
     headers: HeaderMap | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> None:
-    """处理题目的随机答题（由于随机答题通常需要模拟人的行为，此处按序执行并带随机等待）"""
+    """处理题目的随机答题，异步并发执行。"""
 
     async def _maybe_call(result: None | Awaitable[None]) -> None:
         if result is not None:
@@ -237,49 +237,61 @@ async def generic_random_answer(
     logger.debug(f"  📋 共 {len(questions)} 道题目")
 
     processed_count = 0
-    for i, q in enumerate(questions, 1):
-        if q.get("user", {}).get("is_right", False):
-            logger.debug(f"  ✅ 第{i}题 已正确，跳过")
-            processed_count += 1
-            if on_progress:
-                await _maybe_call(on_progress(processed_count, len(questions)))
-            continue
+    semaphore = asyncio.Semaphore(MAX_WORKERS_HOMEWORK)
+    progress_lock = asyncio.Lock()
 
-        if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 999):
-            logger.debug(f"  ⏭️ 第{i}题 次数耗尽，跳过")
-            processed_count += 1
-            if on_progress:
-                await _maybe_call(on_progress(processed_count, len(questions)))
-            continue
+    async def worker(idx: int, q: dict[str, Any]):
+        nonlocal processed_count
+        try:
+            if q.get("user", {}).get("is_right", False):
+                logger.debug(f"  ✅ 第{idx}题 已正确，跳过")
+                return
+            if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 999):
+                logger.debug(f"  ⏭️ 第{idx}题 次数耗尽，跳过")
+                return
 
-        problem_id = q.get("problem_id") or q.get("id")
+            problem_id_raw = q.get("problem_id") or q.get("id")
+            if problem_id_raw is None:
+                logger.error(f"  ❌ 第{idx}题 缺少有效题目 ID，跳过")
+                return
+            try:
+                problem_id = int(problem_id_raw)
+            except (TypeError, ValueError):
+                logger.error(f"  ❌ 第{idx}题 缺少有效题目 ID，跳过")
+                return
 
-        # 获取选项
-        options = []
-        if "content" in q and "Options" in q["content"]:
-            options = [opt["key"] for opt in q["content"]["Options"]]
+            options = []
+            if "content" in q and "Options" in q["content"]:
+                options = [opt["key"] for opt in q["content"]["Options"]]
+            if not options:
+                options = ["A", "B", "C", "D"]
 
-        if not options:
-            options = ["A", "B", "C", "D"]
+            answer = [random.choice(options)]
 
-        answer = [random.choice(options)]
+            async with semaphore:
+                result = await submit_func(problem_id, answer, course_info, client, headers)
+                await asyncio.sleep(get_random_sleep(1, 2))
 
-        result = await submit_func(problem_id, answer, course_info, client, headers)
+            if result.get("success"):
+                status = "正确" if result.get("is_correct") else "错误"
+                correct_ans = result.get("correct_answer")
+                logger.debug(f"  🎲 第{idx}题 随机提交 {answer} -> {status}")
+                if correct_ans:
+                    logger.debug(f"     正确答案: {correct_ans}")
+                    library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
+                    version = q["content"].get("Version")
+                    if library_id and version:
+                        db.save_answer(str(library_id), str(version), correct_ans)
+            else:
+                logger.error(f"  ❌ 第{idx}题 提交失败")
+        finally:
+            async with progress_lock:
+                processed_count += 1
+                if on_progress:
+                    await _maybe_call(on_progress(processed_count, len(questions)))
 
-        if result.get("success"):
-            status = "正确" if result.get("is_correct") else "错误"
-            correct_ans = result.get("correct_answer")
-            logger.debug(f"  🎲 第{i}题 随机提交 {answer} -> {status}")
-            if correct_ans:
-                logger.debug(f"     正确答案: {correct_ans}")
-                library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
-                version = q["content"].get("Version")
-                if library_id and version:
-                    db.save_answer(str(library_id), str(version), correct_ans)
-        else:
-            logger.error(f"  ❌ 第{i}题 提交失败")
+    async with asyncio.TaskGroup() as tg:
+        for i, q in enumerate(questions, 1):
+            tg.create_task(worker(i, q))
 
-        processed_count += 1
-        if on_progress:
-            await _maybe_call(on_progress(processed_count, len(questions)))
-        await asyncio.sleep(get_random_sleep(2, 3))
+    logger.debug(f"  📊 随机答题完成，共处理 {processed_count}/{len(questions)} 道")

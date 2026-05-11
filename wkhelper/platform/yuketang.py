@@ -5,7 +5,7 @@ import logging
 import math
 import random
 import re
-from typing import Any, override
+from typing import Any, Literal, cast, override
 
 import httpx
 import qrcode
@@ -23,34 +23,75 @@ from wkhelper.platform.tree_utils import format_leaf_label, iter_leaves_with_con
 logger = logging.getLogger(__name__)
 
 
-def render_login_qrcode(payload: str, *, renderer: str = "auto") -> str:
+def render_login_qrcode(
+    payload: str,
+    *,
+    renderer: Literal["auto", "halfblock", "iterm2", "kitty", "sixel", "wezterm"] = "auto",
+) -> str:
     """将登录字符串渲染为终端二维码。"""
     qr = qrcode.QRCode(border=1)
     qr.add_data(payload)
     qr.make(fit=True)
-    return str(draw(qr.get_matrix(), renderer=renderer))
+    return str(draw(cast(Any, qr.get_matrix()), renderer=renderer))
 
 
 class YuketangPlatform(BasePlatform):
     """雨课堂平台。"""
 
     @override
-    async def login(self) -> UserInfo:
+    async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
         """登录雨课堂。
 
-        通过 WebSocket 请求登录二维码，并在本地判定超时后主动重新请求。
+        支持两种方式：
+        - 提供 cookies 参数时直接注入 cookie 并验证
+        - 否则通过 WebSocket 请求登录二维码扫码登录
 
         Returns:
             UserInfo: 包含 Auth 和 UserID 的登录信息。
 
         Raises:
-            AuthError: 当 WebSocket 连接失败或最终未获取到完整登录信息时抛出。
+            AuthError: 当登录失败时抛出。
         """
+        if cookies is not None:
+            return await self._login_with_cookies(cookies)
+        return await self._login_with_qrcode()
 
+    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+        """通过已获取的 cookie 直接登录。"""
+        csrftoken = cookies.get("csrftoken", "")
+        sessionid = cookies.get("sessionid", "")
+        if not csrftoken or not sessionid:
+            raise AuthError("Cookie 缺少 csrftoken 或 sessionid")
+
+        logger.info("🔐 正在验证 Cookie...")
+
+        self.client.headers.update(
+            {
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Content-Type": "application/json",
+                "Referer": "https://www.yuketang.cn/",
+                "X-CSRFToken": csrftoken,
+                "Xtbz": "ykt",
+            }
+        )
+        self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
+
+        resp = await self.client.get("https://www.yuketang.cn/api/v3/user/basic-info")
+        data = resp.json()
+        if data["code"] != 0:
+            logger.error("❌ Cookie 验证失败，可能已过期")
+            raise AuthError("Cookie 验证失败，请重新获取有效 Cookie")
+
+        info = data["data"]
+        self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
+        logger.info("✅ Cookie 登录成功！")
+        return self.user
+
+    async def _login_with_qrcode(self) -> UserInfo:
+        """通过 WebSocket 扫码登录。"""
         logger.info("🔐 正在获取雨课堂 Cookie...")
         login_data = {}
 
-        # 1. 提取特定的请求负载
         request_payload = {
             "op": "requestlogin",
             "role": "web",
@@ -60,23 +101,16 @@ class YuketangPlatform(BasePlatform):
 
         try:
             async with aconnect_ws("wss://www.yuketang.cn/wsapp/", self.client) as ws:
-                # 首次请求
                 await ws.send_json(request_payload)
 
-                # 设定默认超时变量 (需确认服务端实际的过期策略)
                 timeout_seconds = 60.0
 
                 while True:
                     try:
-                        # 2. 引入带时效控制的读取
                         message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_seconds)
 
-                        # 补充点：如果雨课堂的 message 中也存在类似 expire_seconds 的字段，应在此处动态更新 timeout_seconds
-                        # if "expire_seconds" in message:
-                        #     timeout_seconds = float(message["expire_seconds"])
-
                         if "qrcode" in message and message["qrcode"]:
-                            print(render_login_qrcode(message["qrcode"]))
+                            print(render_login_qrcode(message["qrcode"], renderer="halfblock"))
                             logger.info(f"请使用雨课堂扫码登录 (判定有效时间: {int(timeout_seconds)}秒)...")
 
                         if message.get("op") == "loginsuccess":
@@ -84,7 +118,6 @@ class YuketangPlatform(BasePlatform):
                             break
 
                     except TimeoutError:
-                        # 3. 超时异常触发主动重新请求
                         logger.warning("⏳ 二维码可能已过期，正在重新请求...")
                         await ws.send_json(request_payload)
 
@@ -96,7 +129,6 @@ class YuketangPlatform(BasePlatform):
             logger.error("❌ 登录失败，未获取到登录信息")
             raise AuthError("登录失败")
 
-        # 1. 换取 Web Login Cookie
         response = await self.client.post(
             "https://www.yuketang.cn/pc/web_login",
             json={"Auth": login_data["Auth"], "UserID": str(login_data["UserID"])},
@@ -113,27 +145,7 @@ class YuketangPlatform(BasePlatform):
             raise AuthError("Cookie 获取失败")
 
         logger.info("✅ Cookie 获取成功！")
-
-        self.client.headers.update(
-            {
-                "User-Agent": DEFAULT_HEADERS["User-Agent"],
-                "Content-Type": "application/json",
-                "Referer": "https://www.yuketang.cn/",
-                "X-CSRFToken": cookies["csrftoken"],
-                "Xtbz": "ykt",
-            }
-        )
-        self.client.cookies.update(cookies)
-
-        # 2. 获取用户信息
-        resp = await self.client.get("https://www.yuketang.cn/api/v3/user/basic-info")
-        data = resp.json()
-        if data["code"] != 0:
-            raise APIError("获取用户信息失败")
-
-        info = data["data"]
-        self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
-        return self.user
+        return await self._login_with_cookies(cookies)
 
     @override
     async def get_courses(self) -> list[Course]:
@@ -257,19 +269,8 @@ class YuketangPlatform(BasePlatform):
         chapters = await self._get_chapter_info(course)
         schedules = await self._get_leaf_schedules(course)
         homeworks = []
-        chapter_has_completed_video: dict[int, bool] = {}
         for leaf, chapter_name, section_name in iter_leaves_with_context(chapters):
-            chapter_id_raw = leaf.get("chapter_id")
-            chapter_id = int(chapter_id_raw) if chapter_id_raw is not None else -1
-            if leaf.get("leaf_type") == 0:
-                leaf_id = leaf.get("id")
-                if leaf_id is not None and schedules.get(int(leaf_id), 0.0) >= 1.0:
-                    chapter_has_completed_video[chapter_id] = True
-                continue
-
             if leaf.get("leaf_type") != 6 or not leaf.get("is_show", True):
-                continue
-            if not chapter_has_completed_video.get(chapter_id, False):
                 continue
             leaf_id = int(leaf["id"])
             is_completed = schedules.get(leaf_id, 0.0) >= 1.0

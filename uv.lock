@@ -511,7 +511,7 @@ dev = [
     { name = "pyrefly", specifier = ">=0.55.0" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "ruff", specifier = ">=0.0.241" },
+    { name = "ruff", specifier = ">=0.15.5" },
 ]
 
 [[package]]

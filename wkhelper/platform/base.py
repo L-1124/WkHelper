@@ -17,9 +17,31 @@ class BasePlatform(ABC):
         self.ui = ui
         self.user: UserInfo | None = None
 
+    @staticmethod
+    def parse_cookie_string(raw: str) -> dict[str, str]:
+        """解析浏览器 cookie 字符串为字典。
+
+        Args:
+            raw: 浏览器复制的 cookie 字符串 (e.g. "csrftoken=xxx; sessionid=yyy")
+
+        Returns:
+            dict: 解析后的 cookie 键值对。
+        """
+        result: dict[str, str] = {}
+        for part in raw.split(";"):
+            part = part.strip()
+            if "=" in part:
+                key, value = part.split("=", 1)
+                result[key.strip()] = value.strip()
+        return result
+
     @abstractmethod
-    async def login(self) -> UserInfo:
-        """执行登录并返回用户信息。"""
+    async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
+        """执行登录并返回用户信息。
+
+        Args:
+            cookies: 可选 cookie 字典。若提供则直接注入 cookie 登录，否则走扫码流程。
+        """
         ...
 
     @abstractmethod

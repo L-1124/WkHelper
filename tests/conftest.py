@@ -73,7 +73,7 @@ class FakeAsyncPlatform(BasePlatform):
         super().__init__(client, ui)
 
     @override
-    async def login(self) -> UserInfo:
+    async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
         self.user = UserInfo(id=1, name="tester")
         return self.user
 

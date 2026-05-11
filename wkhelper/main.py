@@ -3,8 +3,9 @@ import sys
 
 import httpx
 
-from wkhelper.core.exceptions import WKError
+from wkhelper.core.exceptions import AuthError, WKError
 from wkhelper.core.runner import Runner
+from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 from wkhelper.ui.rich_ui import RichUI
@@ -31,8 +32,19 @@ async def async_main() -> None:
                 case _:
                     return
 
-            # 初始化平台（登录）
-            await platform.login()
+            # 选择登录方式
+            login_method = await ui.select_one(
+                "请选择登录方式",
+                ["扫码登录", "Cookie 登录", "退出"],
+            )
+
+            if login_method == "退出":
+                return
+
+            if login_method == "扫码登录":
+                await platform.login()
+            else:
+                await _login_with_cookie_input(platform, ui)
 
             # 运行程序
             runner = Runner(platform)
@@ -47,6 +59,21 @@ async def async_main() -> None:
 
             traceback.print_exc()
             sys.exit(1)
+
+
+async def _login_with_cookie_input(platform: BasePlatform, ui: RichUI) -> None:
+    """提示用户输入 Cookie 字符串并登录。"""
+    cookie_raw = await ui.input_text("请粘贴浏览器 Cookie 字符串（csrftoken=xxx; sessionid=yyy; ...）：")
+    if not cookie_raw:
+        print("❌ 未输入 Cookie，返回")
+        sys.exit(1)
+
+    cookies = BasePlatform.parse_cookie_string(cookie_raw)
+    try:
+        await platform.login(cookies=cookies)
+    except AuthError as e:
+        print(f"\n❌ Cookie 登录失败: {e}")
+        sys.exit(1)
 
 
 def main() -> None:
