@@ -1,5 +1,6 @@
 """基于 Rich 的终端交互实现。"""
 
+import asyncio
 import logging
 import math
 import re
@@ -62,7 +63,7 @@ class RichUI:
     def _setup_logging(self):
         """配置并安装标准 logging 处理器。"""
         logger = logging.getLogger("wkhelper")
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.DEBUG)
         # 避免重复添加 Handler
         if not logger.handlers:
             logger.addHandler(self.StandardRichHandler(self))
@@ -89,6 +90,13 @@ class RichUI:
                 self.ui.console.print(f"[{style}]{msg}[/{style}]")
             except Exception:
                 self.handleError(record)
+
+    async def input_text(self, message: str, default: str = "") -> str | None:
+        """文本输入。"""
+        self.console.print(f"[bold blue]{message}[/bold blue]")
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, input, "> ")
+        return result.strip() or default
 
     async def select_one(self, message: str, choices: list[str]) -> str | None:
         """单项选择。"""

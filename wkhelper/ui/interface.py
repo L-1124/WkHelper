@@ -8,6 +8,10 @@ type TableRows = list[list[str]]
 class UserInterface(Protocol):
     """用户交互协议。"""
 
+    async def input_text(self, message: str, default: str = "") -> str | None:
+        """文本输入。"""
+        ...
+
     async def select_one(self, message: str, choices: list[str]) -> str | None:
         """单项选择。"""
         ...
