@@ -100,26 +100,27 @@ class YuketangPlatform(BasePlatform):
         }
 
         try:
-            async with aconnect_ws("wss://www.yuketang.cn/wsapp/", self.client) as ws:
-                await ws.send_json(request_payload)
+            async with httpx.AsyncClient(timeout=10, http2=False) as ws_client:
+                async with aconnect_ws("wss://www.yuketang.cn/wsapp/", ws_client) as ws:
+                    await ws.send_json(request_payload)
 
-                timeout_seconds = 60.0
+                    timeout_seconds = 60.0
 
-                while True:
-                    try:
-                        message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_seconds)
+                    while True:
+                        try:
+                            message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_seconds)
 
-                        if "qrcode" in message and message["qrcode"]:
-                            print(render_login_qrcode(message["qrcode"], renderer="halfblock"))
-                            logger.info(f"请使用雨课堂扫码登录 (判定有效时间: {int(timeout_seconds)}秒)...")
+                            if "qrcode" in message and message["qrcode"]:
+                                print(render_login_qrcode(message["qrcode"], renderer="halfblock"))
+                                logger.info(f"请使用雨课堂扫码登录 (判定有效时间: {int(timeout_seconds)}秒)...")
 
-                        if message.get("op") == "loginsuccess":
-                            login_data.update(message)
-                            break
+                            if message.get("op") == "loginsuccess":
+                                login_data.update(message)
+                                break
 
-                    except TimeoutError:
-                        logger.warning("⏳ 二维码可能已过期，正在重新请求...")
-                        await ws.send_json(request_payload)
+                        except TimeoutError:
+                            logger.warning("⏳ 二维码可能已过期，正在重新请求...")
+                            await ws.send_json(request_payload)
 
         except Exception as e:
             logger.error(f"❌ WebSocket 连接失败: {e}")
