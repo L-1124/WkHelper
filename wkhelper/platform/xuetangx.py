@@ -1,14 +1,12 @@
 """学堂在线平台实现。"""
 
 import asyncio
+import json
 import logging
-import math
 import random
-import re
 from typing import Any, override
 
-import httpx
-from httpx_ws import aconnect_ws
+import niquests
 from terminal_qrcode import draw
 
 from wkhelper.core.exceptions import APIError, AuthError
@@ -16,7 +14,6 @@ from wkhelper.core.homework import generic_process_homework, generic_random_answ
 from wkhelper.core.models import Course, Homework, UserInfo
 from wkhelper.core.video import generic_watch_video
 from wkhelper.platform.base import BasePlatform
-from wkhelper.platform.tree_utils import format_leaf_label, iter_leaves_with_context
 
 logger = logging.getLogger(__name__)
 
@@ -26,24 +23,11 @@ class XuetangXPlatform(BasePlatform):
 
     @override
     async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
-        """登录学堂在线。
-
-        支持两种方式：
-        - 提供 cookies 参数时直接注入 cookie 并验证
-        - 否则通过 WebSocket 获取二维码扫码登录
-
-        Returns:
-            UserInfo: 用户登录信息对象。
-
-        Raises:
-            AuthError: 登录失败时抛出。
-        """
         if cookies is not None:
             return await self._login_with_cookies(cookies)
         return await self._login_with_qrcode()
 
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
-        """通过已获取的 cookie 直接登录。"""
         csrftoken = cookies.get("csrftoken", "")
         sessionid = cookies.get("sessionid", "")
         if not csrftoken or not sessionid:
@@ -73,9 +57,8 @@ class XuetangXPlatform(BasePlatform):
         return self.user
 
     async def _login_with_qrcode(self) -> UserInfo:
-        """通过 WebSocket 获取二维码扫码登录。"""
         logger.info("🔐 正在获取学堂在线 Cookie...")
-        login_data = {}
+        login_data: dict[str, Any] = {}
 
         request_payload = {
             "op": "requestlogin",
@@ -87,37 +70,37 @@ class XuetangXPlatform(BasePlatform):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10, http2=False) as ws_client:
-                async with aconnect_ws("wss://www.xuetangx.com/wsapp/", ws_client) as ws:
-                    # 首次请求二维码
-                    await ws.send_json(request_payload)
+            async with niquests.AsyncSession(timeout=10, verify=False) as ws_sess:
+                resp = await ws_sess.get("wss://www.xuetangx.com/wsapp/")
+                if resp.extension is None:
+                    raise AuthError("WebSocket 升级失败")
+                await resp.extension.send_payload(json.dumps(request_payload))
+                timeout_seconds = 60.0
 
-                    # 设置默认超时变量，可被服务端的实际 expire_seconds 覆盖
-                    timeout_seconds = 60.0
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=timeout_seconds)
+                        if raw is None:
+                            raise AuthError("WebSocket 连接已关闭")
+                        message = json.loads(raw)
 
-                    while True:
-                        try:
-                            # 2. 引入超时机制阻断无限期等待
-                            message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_seconds)
+                        if "expire_seconds" in message:
+                            timeout_seconds = float(message["expire_seconds"])
 
-                            # 动态更新过期时间
-                            if "expire_seconds" in message:
-                                timeout_seconds = float(message["expire_seconds"])
+                        if "ticket" in message and message["ticket"]:
+                            ticket_resp = await self.client.get(message["ticket"])
+                            print(draw(ticket_resp.content))
+                            logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
 
-                            if "ticket" in message and message["ticket"]:
-                                # 下载并解析二维码
-                                resp = await self.client.get(message["ticket"])
-                                print(draw(resp.content))
-                                logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
+                        if message.get("op") == "loginsuccess":
+                            login_data.update(message)
+                            break
 
-                            if message.get("op") == "loginsuccess":
-                                login_data.update(message)
-                                break
+                    except TimeoutError:
+                        logger.warning("⏳ 二维码已过期，正在重新请求...")
+                        await resp.extension.send_payload(json.dumps(request_payload))
 
-                        except TimeoutError:
-                            # 3. 触发变量 A：过期后主动向服务端重新发送请求
-                            logger.warning("⏳ 二维码已过期，正在重新请求...")
-                            await ws.send_json(request_payload)
+                await resp.extension.close()
 
         except Exception as e:
             logger.error(f"❌ WebSocket 连接失败: {e}")
@@ -127,7 +110,6 @@ class XuetangXPlatform(BasePlatform):
             logger.error("❌ 登录失败，未获取到登录信息")
             raise AuthError("登录失败")
 
-        # 换取登录信息
         response = await self.client.post(
             "https://www.xuetangx.com/api/v1/u/login/wx/",
             json={
@@ -167,8 +149,8 @@ class XuetangXPlatform(BasePlatform):
 
     @override
     async def get_courses(self) -> list[Course]:
-        url = "https://www.xuetangx.com/api/v1/lms/user/user-courses/?status=1&page=1"
-        resp_obj = await self.client.get(url)
+        url = "https://www.xuetangx.com/api/v1/lms/user/user-courses/"
+        resp_obj = await self.client.get(url, params={"status": "1", "page": "1"})
         resp = resp_obj.json()
         if not resp["success"]:
             raise APIError("获取课程列表失败")
@@ -188,22 +170,25 @@ class XuetangXPlatform(BasePlatform):
             for course in resp["data"]["product_list"]
         ]
 
+    # ── 抽象方法实现 ──
+
+    @override
     async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         cid = course.metadata["classroom_id"]
         sign = course.metadata["sign"]
-        url = f"https://www.xuetangx.com/api/v1/lms/learn/course/chapter?cid={cid}&sign={sign}"
-        resp_obj = await self.client.get(url)
+        url = "https://www.xuetangx.com/api/v1/lms/learn/course/chapter"
+        resp_obj = await self.client.get(url, params={"cid": cid, "sign": sign})
         resp = resp_obj.json()
         if not resp["success"]:
             raise APIError("获取章节信息失败")
         return resp["data"]["course_chapter"]
 
+    @override
     async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
-        """获取课程叶子节点进度。"""
         cid = course.metadata["classroom_id"]
         sign = course.metadata["sign"]
-        url = f"https://www.xuetangx.com/api/v1/lms/learn/course/schedule?cid={cid}&sign={sign}"
-        resp_obj = await self.client.get(url)
+        url = "https://www.xuetangx.com/api/v1/lms/learn/course/schedule"
+        resp_obj = await self.client.get(url, params={"cid": cid, "sign": sign})
         resp = resp_obj.json()
         if not resp.get("success"):
             logger.warning("⚠️ 获取课程进度失败，默认按未完成处理")
@@ -219,84 +204,45 @@ class XuetangXPlatform(BasePlatform):
         return schedules
 
     @override
-    async def get_videos(self, course: Course) -> dict[int, str]:
-        data = await self._get_chapter_data(course)
-        schedules = await self._get_leaf_schedules(course)
-        videos: dict[int, str] = {}
-        completed_video_ids: set[int] = set()
-        for leaf, chapter_name, section_name in iter_leaves_with_context(data):
-            if leaf.get("leaf_type") != 0 or not leaf.get("is_show", True):
-                continue
-            leaf_id = leaf.get("id")
-            if leaf_id is None:
-                continue
-            video_id = int(leaf_id)
-            is_completed = schedules.get(video_id, 0.0) >= 1.0
-            if is_completed:
-                completed_video_ids.add(video_id)
-
-            label = format_leaf_label(leaf, chapter_name, section_name)
-            if is_completed:
-                label = f"{label} [已完成]"
-            videos[video_id] = label
-
-        course.metadata["completed_video_ids"] = completed_video_ids
-        return videos
-
-    @override
-    async def get_homeworks(self, course: Course) -> list[Homework]:
-        data = await self._get_chapter_data(course)
-        schedules = await self._get_leaf_schedules(course)
-        homeworks = []
-        for leaf, chapter_name, section_name in iter_leaves_with_context(data):
-            if leaf.get("leaf_type") != 6 or not leaf.get("is_show", True):
-                continue
-            leaf_id = int(leaf["id"])
-            is_completed = schedules.get(leaf_id, 0.0) >= 1.0
-            label = format_leaf_label(leaf, chapter_name, section_name)
-            if is_completed:
-                label = f"{label} [已完成]"
-            homeworks.append(
-                Homework(
-                    id=leaf["id"],
-                    name=label,
-                    deadline=leaf.get("score_deadline"),
-                    metadata={
-                        "chapter_id": leaf.get("chapter_id"),
-                        "chapter_name": chapter_name,
-                        "section_name": section_name,
-                        "is_score": leaf.get("is_score"),
-                        "is_assessed": leaf.get("is_assessed"),
-                        "is_completed": is_completed,
-                        "start_time": leaf.get("start_time"),
-                    },
-                )
-            )
-        return homeworks
-
-    @override
-    async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
-        # 1. 获取叶子节点信息以找到 leaf_type_id
+    def _build_leaf_info_url(self, leaf_id: str | int, course: Course) -> str:
         cid = course.metadata["classroom_id"]
-        sign = course.metadata["sign"]
-        url = f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/?sign={sign}"
-        resp_obj = await self.client.get(url)
-        resp = resp_obj.json()
-        leaf_type_id = resp["data"]["content_info"]["leaf_type_id"]
+        return f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/"
 
-        # 2. 获取题目列表
-        q_url = f"https://www.xuetangx.com/api/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
-        q_resp_obj = await self.client.get(q_url)
-        q_resp = q_resp_obj.json()
-        return q_resp["data"]["problems"]
+    @override
+    def _get_leaf_info_params(self, leaf_id: str | int, course: Course) -> dict[str, Any] | None:
+        return {"sign": course.metadata["sign"]}
+
+    @override
+    def _build_exercise_list_url(self, leaf_type_id: int | str) -> str:
+        return f"https://www.xuetangx.com/api/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
+
+    @override
+    def _build_submit_url(self) -> str:
+        return "https://www.xuetangx.com/api/v1/lms/exercise/problem_apply/"
+
+    @override
+    def _build_submit_payload(self, problem_id: int, answer: list[str]) -> dict[str, Any]:
+        ctx = self._submit_ctx
+        return {
+            "classroom_id": ctx["classroom_id"],
+            "problem_id": problem_id,
+            "leaf_id": ctx["leaf_id"],
+            "exercise_id": ctx["exercise_id"],
+            "sign": ctx["sign"],
+            "answer": answer,
+        }
+
+    # ── 视频 ──
 
     @override
     async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
         cid = course.metadata["classroom_id"]
         sign = course.metadata["sign"]
 
-        # 获取视频详情
-        resp_obj = await self.client.get(f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{video_id}/?sign={sign}")
+        resp_obj = await self.client.get(
+            f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{video_id}/",
+            params={"sign": sign},
+        )
         resp = resp_obj.json()
         data = resp["data"]
 
@@ -304,21 +250,20 @@ class XuetangXPlatform(BasePlatform):
         sku_id = data["sku_id"]
         course_id = data["course_id"]
 
-        progress_url = f"https://www.xuetangx.com/video-log/get_video_watch_progress/?cid={course_id}&user_id={user_id}&classroom_id={cid}&video_type=video&vtype=rate&video_id={video_id}"
+        progress_url = "https://www.xuetangx.com/video-log/get_video_watch_progress/"
+        progress_params = {
+            "cid": course_id,
+            "user_id": user_id,
+            "classroom_id": cid,
+            "video_type": "video",
+            "vtype": "rate",
+            "video_id": video_id,
+        }
         heartbeat_url = "https://www.xuetangx.com/video-log/heartbeat/"
 
-        def payload_gen(
-            video_id,
-            classroom_id,
-            user_id,
-            course_id,
-            sku_id,
-            video_frame,
-            i,
-            timestamp,
-        ):
+        def payload_gen(video_id, classroom_id, user_id, course_id, sku_id, video_frame, i, timestamp):
             return {
-                "i": 5,
+                "i": i,
                 "et": "heartbeat",
                 "p": "web",
                 "n": "ali-cdn.xuetangx.com",
@@ -352,102 +297,48 @@ class XuetangXPlatform(BasePlatform):
             progress_url,
             heartbeat_url,
             payload_gen,
+            request_kwargs={"params": progress_params},
             on_progress=self.ui.update_video_progress,
             on_complete=self.ui.finish_video_progress,
             on_status=self.ui.update_video_status,
         )
 
+    # ── 作业 ──
+
     @override
     async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
         self.ui.update_homework_status(homework.name, "🧠 答题中")
         try:
-            # 1. 获取叶子节点信息以找到 leaf_type_id
+            questions = await self.get_leaf_questions(homework.id, course)
             cid = course.metadata["classroom_id"]
             sign = course.metadata["sign"]
-            url = f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{homework.id}/?sign={sign}"
-            resp_obj = await self.client.get(url)
-            resp = resp_obj.json()
-            leaf_type_id = resp["data"]["content_info"]["leaf_type_id"]
 
-            # 2. 获取题目列表
-            q_url = f"https://www.xuetangx.com/api/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
-            q_resp_obj = await self.client.get(q_url)
-            q_resp = q_resp_obj.json()
-            questions = q_resp["data"]["problems"]
-            total_questions = len(questions)
-            self.ui.update_homework_progress(homework.name, 0, total_questions)
+            # 需要单独获取 leaf_type_id 用于提交上下文
+            url = self._build_leaf_info_url(homework.id, course)
+            params = self._get_leaf_info_params(homework.id, course)
+            resp_obj = await self.client.get(url, params=params)
+            leaf_type_id = resp_obj.json()["data"]["content_info"]["leaf_type_id"]
 
-            # 3. 提交时的上下文信息
-            ctx = {
+            self._submit_ctx = {
                 "leaf_id": homework.id,
                 "exercise_id": leaf_type_id,
                 "sign": sign,
                 "classroom_id": cid,
             }
 
+            total = len(questions)
+            self.ui.update_homework_progress(homework.name, 0, total)
+
             def _on_progress(done: int, total: int) -> None:
                 self.ui.update_homework_progress(homework.name, done, total)
 
-            async def submit_wrapper(
-                problem_id: int,
-                answer: list[str],
-                course_info: Any,
-                client: httpx.AsyncClient,
-                kwargs: dict[str, Any] | None,
-            ) -> dict[str, Any]:
-                url_apply = "https://www.xuetangx.com/api/v1/lms/exercise/problem_apply/"
-                if isinstance(answer, str):
-                    answer = [answer]
-
-                payload = {
-                    "classroom_id": course_info["classroom_id"],
-                    "problem_id": problem_id,
-                    "leaf_id": course_info["leaf_id"],
-                    "exercise_id": course_info["exercise_id"],
-                    "sign": course_info["sign"],
-                    "answer": answer,
-                }
-
-                while True:
-                    response = await client.post(url_apply, json=payload)
-                    match = re.search(r"Expected available in(.+?)second.", response.text)
-                    if match:
-                        delay_time = float(match.group(1).strip())
-                        remain = max(1, math.ceil(delay_time))
-                        while remain > 0:
-                            self.ui.update_homework_status(homework.name, f"⚠️ 限流，等待 {remain}s")
-                            await asyncio.sleep(1)
-                            remain -= 1
-                        self.ui.update_homework_status(homework.name, "🔄 重试中...")
-                        self.ui.update_homework_status(homework.name, "🧠 答题中")
-                        continue
-
-                    data = response.json()
-                    if data.get("success") is True:
-                        result_data = data.get("data", {})
-                        return {
-                            "success": True,
-                            "is_correct": result_data.get("is_right", result_data.get("is_correct", False)),
-                            "correct_answer": result_data.get("answer", []),
-                        }
-                    return {"success": False, "is_correct": False, "correct_answer": []}
+            async def submit_func(problem_id, answer, course_info, client, kwargs):
+                return await self._submit_answer(homework.name, problem_id, answer, client, kwargs)
 
             if is_random:
-                await generic_random_answer(
-                    questions,
-                    submit_wrapper,
-                    ctx,
-                    self.client,
-                    on_progress=_on_progress,
-                )
+                await generic_random_answer(questions, submit_func, None, self.client, on_progress=_on_progress)
             else:
-                await generic_process_homework(
-                    questions,
-                    submit_wrapper,
-                    ctx,
-                    self.client,
-                    on_progress=_on_progress,
-                )
+                await generic_process_homework(questions, submit_func, None, self.client, on_progress=_on_progress)
 
             self.ui.update_homework_status(homework.name, "✅ 完成")
         except Exception:

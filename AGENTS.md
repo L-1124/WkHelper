@@ -8,7 +8,7 @@
 `wkhelper` 是一个网课自动化工具，支持雨课堂与学堂在线。
 
 - 平台：`yuketang.cn` / `xuetangx.com`
-- 架构：异步（`asyncio` + `httpx` + `TaskGroup`）
+- 架构：异步（`asyncio` + `niquests` + `TaskGroup`）
 - 交互：`rich`（展示）+ `questionary`（选择）
 
 核心思路是把通用流程放在 `wkhelper/core`，平台差异放在 `wkhelper/platform`。
