@@ -1,6 +1,6 @@
 """Core 域综合测试：作业处理与视频流程。"""
 
-import httpx
+import niquests
 import pytest
 
 from wkhelper.core.homework import generic_random_answer, process_question
@@ -28,7 +28,7 @@ async def test_process_question_submits_list_answer(monkeypatch):
         "max_retry": 3,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         ok, correct = await process_question(1, q, 0, 0, {}, client, fake_submit)
 
     assert ok is True and correct is True
@@ -62,7 +62,7 @@ async def test_random_answer_persists_correct_result(monkeypatch):
         }
     ]
 
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         await generic_random_answer(questions, fake_submit, None, client)
 
     assert saved == [("lib-1", "v1", ["B"])]

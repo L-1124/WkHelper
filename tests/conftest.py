@@ -2,7 +2,7 @@
 
 from typing import Any, override
 
-import httpx
+import niquests
 import pytest
 import pytest_asyncio
 
@@ -69,7 +69,7 @@ class FakeUI:
 class FakeAsyncPlatform(BasePlatform):
     """通用的异步平台假实现。"""
 
-    def __init__(self, client: httpx.AsyncClient, ui: Any):
+    def __init__(self, client: niquests.AsyncSession, ui: Any):
         super().__init__(client, ui)
 
     @override
@@ -82,16 +82,28 @@ class FakeAsyncPlatform(BasePlatform):
         return [Course(id=1, name="课程1", platform_id="test")]
 
     @override
-    async def get_videos(self, course: Course) -> dict[int, str]:
+    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+        return []
+
+    @override
+    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
         return {}
 
     @override
-    async def get_homeworks(self, course: Course) -> list[Homework]:
-        return []
+    def _build_leaf_info_url(self, leaf_id: str | int, course: Course) -> str:
+        return ""
 
     @override
-    async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
-        return []
+    def _build_exercise_list_url(self, leaf_type_id: int | str) -> str:
+        return ""
+
+    @override
+    def _build_submit_url(self) -> str:
+        return ""
+
+    @override
+    def _build_submit_payload(self, problem_id: int, answer: list[str]) -> dict[str, Any]:
+        return {}
 
     @override
     async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
@@ -109,5 +121,5 @@ def fake_ui():
 
 @pytest_asyncio.fixture
 async def fake_platform(fake_ui):
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         yield FakeAsyncPlatform(client, fake_ui)

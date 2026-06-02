@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-import httpx
+import niquests
 
 from wkhelper.core.config import HEARTBEAT_INTERVAL, LEARNING_RATE, VIDEO_THRESHOLD
 
@@ -38,7 +38,7 @@ class PayloadGenerator(Protocol):
 
 
 async def generic_watch_video(
-    client: httpx.AsyncClient,
+    client: niquests.AsyncSession,
     video_id: str,
     video_name: str,
     classroom_id: str,
@@ -134,7 +134,7 @@ async def generic_watch_video(
                     timeout=20,
                 )
         except Exception:
-            pass  # 保持原有逻辑，静默失败
+            logger.debug("heartbeat failed", exc_info=True)
 
         # 等待
         await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -150,7 +150,7 @@ async def generic_watch_video(
             else:
                 logger.info(f"📊 {video_name} 进度: {rate * 100:.1f}%")
         except Exception:
-            pass
+            logger.debug("progress check failed", exc_info=True)
 
     logger.info(f"✅ {video_name} 完成！")
     if on_status:

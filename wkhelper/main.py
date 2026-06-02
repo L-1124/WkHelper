@@ -1,7 +1,7 @@
 import asyncio
 import sys
 
-import httpx
+import niquests
 
 from wkhelper.core.exceptions import AuthError, WKError
 from wkhelper.core.runner import Runner
@@ -22,7 +22,7 @@ async def async_main() -> None:
     if choice == "退出":
         return
 
-    async with httpx.AsyncClient(timeout=10, http2=True) as client:
+    async with niquests.AsyncSession(timeout=10) as client:
         try:
             match choice:
                 case "雨课堂 (yuketang.cn)":

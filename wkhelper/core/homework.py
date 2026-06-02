@@ -6,7 +6,7 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-import httpx
+import niquests
 
 from wkhelper.core.config import MAX_WORKERS_DOWNLOAD, MAX_WORKERS_HOMEWORK
 from wkhelper.core.db import db
@@ -28,7 +28,7 @@ class SubmitFunc(Protocol):
         problem_id: int,
         answer: list[str],
         course_info: Any,
-        client: httpx.AsyncClient,
+        client: niquests.AsyncSession,
         kwargs: HeaderMap | None,
     ) -> QuestionPayload: ...
 
@@ -36,26 +36,30 @@ class SubmitFunc(Protocol):
 def extract_answers(questions: list[QuestionPayload]) -> AnswerStore:
     """从题目列表中提取答案。"""
     hw_answers = {}
-    for q in questions:
-        # 提取 LibraryID
-        library_id = None
-        if "content" in q:
-            library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
-
-        version = q["content"].get("Version")
+    for idx, q in enumerate(questions, 1):
+        # 提取 LibraryID 和 Version
+        content = q.get("content", {})
+        library_id = content.get("LibraryID") or content.get("library_id")
+        version = content.get("Version")
 
         if not library_id or not version:
+            logger.debug(f"  ⏭️ 题目 {idx} 缺少 LibraryID 或 Version，跳过")
             continue
 
         ans = None
-        if "user" in q and q["user"].get("answer"):
-            ans = q["user"]["answer"]
+        user_info = q.get("user", {})
+        if user_info.get("answer"):
+            ans = user_info["answer"]
 
-        if library_id and ans:
-            lib_id_str = str(library_id)
-            if lib_id_str not in hw_answers:
-                hw_answers[lib_id_str] = {}
-            hw_answers[lib_id_str][version] = ans
+        if not ans:
+            logger.debug(f"  ⏭️ 题目 {idx} (LibID: {library_id}) 无答案，跳过")
+            continue
+
+        lib_id_str = str(library_id)
+        if lib_id_str not in hw_answers:
+            hw_answers[lib_id_str] = {}
+        hw_answers[lib_id_str][version] = ans
+        logger.debug(f"  ✅ 题目 {idx} 已提取答案 (LibID: {library_id}, Ans: {ans})")
 
     return hw_answers
 
@@ -69,6 +73,8 @@ async def save_platform_answers(platform: Any, course: Any):
         logger.warning("⚠️ 该课程暂无作业")
         return
 
+    logger.debug(f"📋 找到 {len(homeworks)} 个作业")
+
     count = 0
     semaphore = asyncio.Semaphore(MAX_WORKERS_DOWNLOAD)
 
@@ -77,12 +83,15 @@ async def save_platform_answers(platform: Any, course: Any):
         try:
             async with semaphore:
                 questions = await platform.get_leaf_questions(hw.id, course)
+            logger.debug(f"📝 作业 '{hw.name}' 获取了 {len(questions)} 道题目")
             answers = extract_answers(questions)
             inner_count = 0
             for lib_id, versions in answers.items():
                 for ver, ans in versions.items():
                     db.save_answer(lib_id, ver, ans)
                     inner_count += 1
+            if inner_count > 0:
+                logger.info(f"  ✅ 作业 '{hw.name}' 已保存 {inner_count} 条答案")
             count += inner_count
         except Exception as e:
             logger.error(f"  ❌ 获取作业 {hw.name} 答案失败: {e}")
@@ -94,7 +103,8 @@ async def save_platform_answers(platform: Any, course: Any):
     if count == 0:
         logger.warning("⚠️ 未找到任何可保存的答案")
     else:
-        logger.info(f"✅ 已保存 {count} 条答案到数据库")
+        logger.info(f"✅ 下载答案完成：{course.name}")
+        logger.info(f"💾 共保存 {count} 条答案到数据库")
 
 
 async def process_question(
@@ -103,7 +113,7 @@ async def process_question(
     chapter_id: int,
     leaf_type_id: int,
     course_info: Any,
-    client: httpx.AsyncClient,
+    client: niquests.AsyncSession,
     submit_func: SubmitFunc,
     headers: HeaderMap | None = None,
 ) -> tuple[bool, bool]:
@@ -159,7 +169,7 @@ async def generic_process_homework(
     questions: list[Any],
     submit_func: SubmitFunc,
     course_info: Any,
-    client: httpx.AsyncClient,
+    client: niquests.AsyncSession,
     chapter_id: int = 0,
     leaf_type_id: int = 0,
     headers: HeaderMap | None = None,
@@ -220,7 +230,7 @@ async def generic_random_answer(
     questions: list[QuestionPayload],
     submit_func: SubmitFunc,
     course_info: Any,
-    client: httpx.AsyncClient,
+    client: niquests.AsyncSession,
     headers: HeaderMap | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> None:

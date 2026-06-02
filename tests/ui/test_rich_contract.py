@@ -22,23 +22,22 @@ async def test_select_one_returns_value(monkeypatch):
 async def test_select_many_returns_values(monkeypatch):
     """验证多选返回选中项列表。"""
 
-    class _Prompt:
-        async def ask_async(self):
-            return ["选项A", "选项B"]
+    async def _fake_checkbox(self, message, choices, default_selected, disabled):
+        return ["选项A", "选项B"]
 
-    monkeypatch.setattr("questionary.checkbox", lambda *args, **kwargs: _Prompt())
+    monkeypatch.setattr("wkhelper.ui.rich_ui.RichUI._pt_checkbox", _fake_checkbox)
     ui = RichUI()
     assert await ui.select_many("提示", ["选项A", "选项B"]) == ["选项A", "选项B"]
 
 
 @pytest.mark.asyncio
 async def test_select_many_all_disabled_returns_empty_without_prompt(monkeypatch):
-    """验证全部禁用时不调用 questionary，避免 pointed_at 初始化错误。"""
+    """验证全部禁用时不调用 _pt_checkbox，避免 prompt_toolkit 初始化错误。"""
 
-    def _fail_checkbox(*args, **kwargs):
+    async def _fail_checkbox(self, message, choices, default_selected, disabled):
         raise AssertionError("不应在全部禁用时创建 checkbox prompt")
 
-    monkeypatch.setattr("questionary.checkbox", _fail_checkbox)
+    monkeypatch.setattr("wkhelper.ui.rich_ui.RichUI._pt_checkbox", _fail_checkbox)
     ui = RichUI()
     assert await ui.select_many("提示", ["选项A"], disabled_choices={"选项A"}) == []
 

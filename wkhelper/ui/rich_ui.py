@@ -9,7 +9,12 @@ from threading import Lock
 from typing import Any, ClassVar
 
 import questionary
-from questionary import Choice, Style
+from prompt_toolkit import Application
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.styles import Style as PTStyle
+from questionary import Style
 from rich.box import HEAVY
 from rich.console import Console
 from rich.live import Live
@@ -115,33 +120,111 @@ class RichUI:
         default_selected: set[str] | None = None,
         disabled_choices: set[str] | None = None,
     ) -> list[str] | None:
-        """多项多选。"""
+        """多项多选（支持 Ctrl+A 全选）。"""
         default_selected = default_selected or set()
-        disabled_choices = disabled_choices or set()
+        disabled = disabled_choices or set()
         if not choices:
             self.console.print("[yellow]没有可选择的项目[/yellow]")
             return []
 
-        selectable_choices = [item for item in choices if item not in disabled_choices]
+        selectable_choices = [item for item in choices if item not in disabled]
         if not selectable_choices:
             self.console.print("[yellow]所有项目均已完成，无需选择[/yellow]")
             return []
 
-        q_choices = [
-            Choice(
-                title=item,
-                checked=(item in default_selected and item not in disabled_choices),
-                disabled="已完成" if item in disabled_choices else None,
-            )
-            for item in choices
-        ]
-        self.console.print(f"[bold blue]{message}[/bold blue]")
-        return await questionary.checkbox(
-            "请选择",
-            choices=q_choices,
-            style=self._QUESTIONARY_STYLE,
-            instruction="（↑/↓ 移动，Space 勾选，Enter 确认）",
-        ).ask_async()
+        return await self._pt_checkbox(message, choices, default_selected, disabled)
+
+    async def _pt_checkbox(
+        self,
+        message: str,
+        choices: list[str],
+        default_selected: set[str],
+        disabled: set[str],
+    ) -> list[str] | None:
+        """基于 prompt_toolkit 的多选组件，支持 Ctrl+A 全选。"""
+        all_checked: set[str] = set(default_selected)
+        current = 0
+        count = len(choices)
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _(event):
+            nonlocal current
+            current = (current - 1) % count
+
+        @kb.add("down")
+        def _(event):
+            nonlocal current
+            current = (current + 1) % count
+
+        @kb.add("space")
+        def _(event):
+            item = choices[current]
+            if item not in disabled:
+                if item in all_checked:
+                    all_checked.discard(item)
+                else:
+                    all_checked.add(item)
+
+        @kb.add("c-a")
+        def _(event):
+            for item in choices:
+                if item not in disabled:
+                    all_checked.add(item)
+
+        @kb.add("enter")
+        def _(event):
+            event.app.exit(result=[c for c in choices if c in all_checked])
+
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _(event):
+            event.app.exit(result=None)
+
+        def _render():
+            lines: list[tuple[str, str]] = [("class:message", message + "\n")]
+            for i, item in enumerate(choices):
+                pointer = "›" if i == current else " "
+                is_current = i == current
+
+                if item in disabled:
+                    mark = "✗"
+                    style_class = "class:disabled"
+                elif item in all_checked:
+                    mark = "✓"
+                    style_class = "class:current" if is_current else "class:chosen"
+                else:
+                    mark = "○"
+                    style_class = "class:current" if is_current else ""
+
+                lines.append((style_class, f" {pointer}  {mark}  {item}\n"))
+
+            lines.append(("class:instruction", "\n ↑/↓ 移动  Space 勾选  Ctrl+A 全选  Enter 确认"))
+            return lines
+
+        control = FormattedTextControl(text=_render, show_cursor=False)
+        layout = Layout(HSplit([Window(control)]))
+
+        style = PTStyle.from_dict(
+            {
+                "message": "bold",
+                "current": "bold fg:#5fafff",
+                "chosen": "fg:#5fafff",
+                "disabled": "fg:#666666",
+                "instruction": "fg:#808080",
+            }
+        )
+
+        app = Application(
+            layout=layout,
+            key_bindings=kb,
+            style=style,
+            full_screen=False,
+            erase_when_done=True,
+        )
+
+        return await app.run_async()
 
     async def confirm(self, message: str, default: bool = True) -> bool:
         """确认操作。"""

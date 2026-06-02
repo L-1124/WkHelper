@@ -7,16 +7,18 @@ from typing import Any, Self
 
 type AnswerPayload = list[Any] | str
 
+_singleton_lock = Lock()
+
 
 class DB:
-    _instance = None
-    _lock = Lock()
+    _instance: "DB | None" = None
     conn: sqlite3.Connection
     cursor: sqlite3.Cursor
-    lock: Lock
 
     def __new__(cls) -> Self:
-        with cls._lock:
+        if cls._instance is not None:
+            return cls._instance
+        with _singleton_lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
                 cls._instance._init_db()
@@ -28,9 +30,9 @@ class DB:
         db_path = os.path.join(base_dir, "questions.db")
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.cursor = self.conn.cursor()
-        self.lock = Lock()
+        self._db_lock = Lock()
 
-        with self.lock:
+        with self._db_lock:
             # 创建统一的数据表
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS answers (
@@ -57,20 +59,21 @@ class DB:
         print(f"发现 {len(old_tables)} 个旧表，正在迁移数据...")
         for table in old_tables:
             try:
+                if not table.startswith("lib_") or not all(c.isalnum() or c in ("_", "-") for c in table.removeprefix("lib_")):
+                    print(f"跳过无效的表名: {table}")
+                    continue
                 # 从表名提取 library_id: lib_123_456 -> 123-456
-                # 注意：replace('_', '-') 是一种启发式方法，因为我们不知道确切的原始映射，
-                # 但大多数 ID 是数字或简单的字符串。
                 library_id = table[4:].replace("_", "-")
-                self.cursor.execute(
-                    f'INSERT OR REPLACE INTO answers (library_id, version, answer) SELECT ?, version, answer FROM "{table}"',
+                self.cursor.execute(  # noqa: S608
+                    'INSERT OR REPLACE INTO answers (library_id, version, answer) SELECT ?, version, answer FROM "' + table + '"',
                     (library_id,),
                 )
-                self.cursor.execute(f'DROP TABLE "{table}"')
+                self.cursor.execute('DROP TABLE "' + table + '"')  # noqa: S608
             except Exception as e:
                 print(f"迁移表 {table} 时出错: {e}")
 
     def save_answer(self, library_id: str, version: str, answer: AnswerPayload):
-        with self.lock:
+        with self._db_lock:
             try:
                 normalized = self.normalize_answer(answer)
                 answer_json = json.dumps(normalized, ensure_ascii=False)
@@ -86,7 +89,7 @@ class DB:
                 print(f"Error saving answer: {e}")
 
     def get_answer(self, library_id: str, version: str) -> list[str] | None:
-        with self.lock:
+        with self._db_lock:
             try:
                 self.cursor.execute(
                     """
