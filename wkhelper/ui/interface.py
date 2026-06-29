@@ -61,3 +61,15 @@ class UserInterface(Protocol):
     def update_homework_status(self, homework_name: str, status: str | None) -> None:
         """更新作业状态文本。"""
         ...
+
+    def print_message(self, message: str) -> None:
+        """打印消息。"""
+        ...
+
+    def stop_live_displays(self) -> None:
+        """暂停所有动态进度显示（如进度条），以便交互式对话框正常渲染。"""
+        ...
+
+    def start_live_displays(self) -> None:
+        """恢复之前暂停的动态进度显示。"""
+        ...

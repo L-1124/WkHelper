@@ -101,15 +101,18 @@ class Runner:
         failed: list[tuple[str, str]] = []
         success = 0
         semaphore = asyncio.Semaphore(max_workers)
+        result_lock = asyncio.Lock()
 
         async def worker(name: str, task_coro_factory: AsyncTaskFactory):
             nonlocal success
             try:
                 async with semaphore:
                     await task_coro_factory()
-                success += 1
+                async with result_lock:
+                    success += 1
             except Exception as exc:  # noqa: BLE001
-                failed.append((name, str(exc)))
+                async with result_lock:
+                    failed.append((name, str(exc)))
             finally:
                 tracker.update()
 
@@ -145,7 +148,7 @@ class Runner:
         while True:
             mode = await self.ui.select_one(
                 f"功能菜单 (共 {len(courses)} 门课程)",
-                ["学习课程视频", "完成课程作业", "下载课程答案", "退出"],
+                ["学习课程视频", "完成课程作业", "下载课程答案", "导出课程题目 (Markdown)", "退出"],
             )
             if mode in (None, "退出"):
                 break
@@ -165,6 +168,8 @@ class Runner:
                     await self.batch_do_homework(target_courses)
                 case "下载课程答案":
                     await self.batch_save_answers(target_courses)
+                case "导出课程题目 (Markdown)":
+                    await self.batch_export_questions(target_courses)
 
             logger.info("✅ 流程结束！\n")
 
@@ -268,3 +273,13 @@ class Runner:
                 logger.info(f"✅ 下载答案完成：{course.name}")
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"❌ 下载答案失败：{course.name}，原因：{exc}")
+
+    async def batch_export_questions(self, target_courses: list[Course]):
+        """导出所选课程题目到 Markdown 文件。"""
+        from wkhelper.core.exporter import export_questions_to_markdown
+
+        for course in target_courses:
+            try:
+                await export_questions_to_markdown(self.platform, course)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"❌ 导出课程题目失败：{course.name}，原因：{exc}")

@@ -2,4 +2,4 @@
 
 import logging
 
-logging.getLogger("wkhelper").setLevel(logging.DEBUG)
+logging.getLogger("wkhelper").setLevel(logging.INFO)
