@@ -33,6 +33,71 @@ from wkhelper.core.config import HEARTBEAT_INTERVAL, LEARNING_RATE, VIDEO_THRESH
 from wkhelper.ui.interface import TableRows
 
 
+class ProgressGroup:
+    """通用的进度追踪组（用于视频、作业等面板的底层复用）。"""
+
+    def __init__(self, on_update=None):
+        self.progress: dict[str, Any] = {}
+        self.status: dict[str, str] = {}
+        self.eta_state: dict[str, tuple[Any, float, float | None]] = {}
+        self.rate_limit_deadline: dict[str, float] = {}
+        self.lock = Lock()
+        self.on_update = on_update
+
+    def update_progress(self, name: str, progress_val: Any, progress_data: Any) -> None:
+        """
+        更新进度。
+        progress_val: 用于计算速度的值（如视频的 progress，作业的 done）
+        progress_data: 用于显示的值（如视频的 progress，作业的 (done, total)）
+        """
+        with self.lock:
+            now = time.monotonic()
+            prev = self.eta_state.get(name)
+            if prev is None:
+                self.eta_state[name] = (progress_val, now, None)
+            else:
+                prev_val, prev_ts, prev_speed = prev
+                dt = now - prev_ts
+                dp = progress_val - prev_val
+                speed = prev_speed
+                if dt > 0 and dp > 0:
+                    instant_speed = dp / dt
+                    speed = instant_speed if prev_speed is None else (prev_speed * 0.7 + instant_speed * 0.3)
+                self.eta_state[name] = (progress_val, now, speed)
+
+            self.progress[name] = progress_data
+            if self.on_update:
+                self.on_update()
+
+    def update_status(self, name: str, status: str | None, default_progress_val: Any, default_progress_data: Any) -> None:
+        with self.lock:
+            if name not in self.progress:
+                now = time.monotonic()
+                self.progress[name] = default_progress_data
+                self.eta_state[name] = (default_progress_val, now, None)
+
+            if status:
+                self.status[name] = status
+                match = re.search(r"限流，等待\s+(\d+)s", status)
+                if match:
+                    self.rate_limit_deadline[name] = time.monotonic() + float(match.group(1))
+            else:
+                self.status.pop(name, None)
+                self.rate_limit_deadline.pop(name, None)
+
+            if self.on_update:
+                self.on_update()
+
+    def finish(self, name: str) -> None:
+        with self.lock:
+            self.progress.pop(name, None)
+            self.status.pop(name, None)
+            self.eta_state.pop(name, None)
+            self.rate_limit_deadline.pop(name, None)
+            if self.on_update:
+                self.on_update()
+
+
 class RichUI:
     """基于 rich 的美化终端交互。"""
 
@@ -51,24 +116,17 @@ class RichUI:
 
     def __init__(self):
         self.console = Console()
-        self._video_progress: dict[str, float] = {}
-        self._video_status: dict[str, str] = {}
-        self._video_eta_state: dict[str, tuple[float, float, float | None]] = {}
-        self._video_rate_limit_deadline: dict[str, float] = {}
-        self._video_progress_live: Live | None = None
-        self._video_progress_lock = Lock()
-        self._homework_progress: dict[str, tuple[int, int]] = {}
-        self._homework_status: dict[str, str] = {}
-        self._homework_eta_state: dict[str, tuple[int, float, float | None]] = {}
-        self._homework_rate_limit_deadline: dict[str, float] = {}
-        self._homework_progress_live: Live | None = None
-        self._homework_progress_lock = Lock()
+        self._video_group = ProgressGroup(on_update=self._refresh_global_live)
+        self._homework_group = ProgressGroup(on_update=self._refresh_global_live)
+        self._tracker_progress = None
+        self._global_live = None
+        self._global_lock = Lock()
         self._setup_logging()
 
     def _setup_logging(self):
         """配置并安装标准 logging 处理器。"""
         logger = logging.getLogger("wkhelper")
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)
         # 避免重复添加 Handler
         if not logger.handlers:
             logger.addHandler(self.StandardRichHandler(self))
@@ -95,6 +153,56 @@ class RichUI:
                 self.ui.console.print(f"[{style}]{msg}[/{style}]")
             except Exception:
                 self.handleError(record)
+
+    def _get_global_renderable(self):
+        from rich.console import Group
+
+        renderables = []
+        if self._tracker_progress is not None:
+            renderables.append(self._tracker_progress)
+        if self._video_group.progress:
+            renderables.append(self._render_video_progress_panel())
+        if self._homework_group.progress:
+            renderables.append(self._render_homework_progress_panel())
+
+        if not renderables:
+            return None
+        return Group(*renderables)
+
+    def _refresh_global_live(self):
+        with self._global_lock:
+            renderable = self._get_global_renderable()
+            if renderable is None:
+                if self._global_live is not None:
+                    self._global_live.stop()
+                    self._global_live = None
+            else:
+                if self._global_live is None:
+                    self._global_live = Live(
+                        renderable,
+                        console=self.console,
+                        refresh_per_second=6,
+                        transient=True,
+                    )
+                    self._global_live.start()
+                else:
+                    self._global_live.update(renderable)
+
+    def stop_live_displays(self) -> None:
+        """暂停所有动态进度显示。"""
+        with self._global_lock:
+            if self._global_live is not None:
+                self._global_live.stop()
+
+    def start_live_displays(self) -> None:
+        """恢复动态进度显示。"""
+        with self._global_lock:
+            if self._global_live is not None:
+                self._global_live.start()
+
+    def print_message(self, message: str) -> None:
+        """打印消息。"""
+        self.console.print(message)
 
     async def input_text(self, message: str, default: str = "") -> str | None:
         """文本输入。"""
@@ -289,11 +397,11 @@ class RichUI:
         table.add_column("状态")
         known_etas: list[float] = []
         for name, progress in sorted(
-            self._video_progress.items(),
+            self._video_group.progress.items(),
             key=lambda item: item[1],
             reverse=True,
         ):
-            status = self._video_status.get(name, "观看中")
+            status = self._video_group.status.get(name, "观看中")
             eta_seconds = self._estimate_eta_seconds(name, progress)
             if eta_seconds is not None:
                 known_etas.append(eta_seconds)
@@ -312,7 +420,7 @@ class RichUI:
 
     def _estimate_eta_seconds(self, video_name: str, progress: float) -> float | None:
         """估算剩余秒数：理论剩余 + 限流剩余。"""
-        state = self._video_eta_state.get(video_name)
+        state = self._video_group.eta_state.get(video_name)
         speed: float | None = None
         if state:
             _, _, speed = state
@@ -331,7 +439,7 @@ class RichUI:
         # 按心跳粒度离散化（每 HEARTBEAT_INTERVAL 才会推进一轮）
         ticks = max(1, math.ceil(raw_eta / HEARTBEAT_INTERVAL))
         base_eta = ticks * HEARTBEAT_INTERVAL
-        return base_eta + self._get_rate_limit_remaining(video_name)
+        return base_eta + self._get_video_rate_limit_remaining(video_name)
 
     @staticmethod
     def _format_eta(eta_seconds: float | None) -> str:
@@ -356,86 +464,24 @@ class RichUI:
             return None
         return sum(etas)
 
-    def _get_rate_limit_remaining(self, video_name: str) -> float:
+    def _get_video_rate_limit_remaining(self, video_name: str) -> float:
         """获取当前视频剩余限流等待时间（秒）。"""
-        deadline = self._video_rate_limit_deadline.get(video_name)
+        deadline = self._video_group.rate_limit_deadline.get(video_name)
         if deadline is None:
             return 0.0
         return max(0.0, deadline - time.monotonic())
 
     def update_video_progress(self, video_name: str, progress: float) -> None:
         """更新视频进度面板。"""
-        with self._video_progress_lock:
-            now = time.monotonic()
-            prev = self._video_eta_state.get(video_name)
-            if prev is None:
-                self._video_eta_state[video_name] = (progress, now, None)
-            else:
-                prev_progress, prev_ts, prev_speed = prev
-                dt = now - prev_ts
-                dp = progress - prev_progress
-                speed = prev_speed
-                if dt > 0 and dp > 0:
-                    instant_speed = dp / dt
-                    speed = instant_speed if prev_speed is None else (prev_speed * 0.7 + instant_speed * 0.3)
-                self._video_eta_state[video_name] = (progress, now, speed)
-            self._video_progress[video_name] = progress
-            if self._video_progress_live is None:
-                self._video_progress_live = Live(
-                    self._render_video_progress_panel(),
-                    console=self.console,
-                    refresh_per_second=6,
-                    transient=True,
-                )
-                self._video_progress_live.start()
-            else:
-                self._video_progress_live.update(self._render_video_progress_panel())
+        self._video_group.update_progress(video_name, progress, progress)
 
     def finish_video_progress(self, video_name: str) -> None:
         """结束单个视频进度展示。"""
-        with self._video_progress_lock:
-            self._video_progress.pop(video_name, None)
-            self._video_status.pop(video_name, None)
-            self._video_eta_state.pop(video_name, None)
-            self._video_rate_limit_deadline.pop(video_name, None)
-            if self._video_progress_live is None:
-                return
-            if self._video_progress:
-                self._video_progress_live.update(self._render_video_progress_panel())
-            else:
-                self._video_progress_live.stop()
-                self._video_progress_live = None
+        self._video_group.finish(video_name)
 
     def update_video_status(self, video_name: str, status: str | None) -> None:
         """更新视频状态展示；None/空字符串表示清空状态。"""
-        with self._video_progress_lock:
-            # 状态可能先于首次进度到达（例如一上来就被限流），
-            # 先创建占位进度，确保状态与预计剩余可立即显示。
-            if video_name not in self._video_progress:
-                now = time.monotonic()
-                self._video_progress[video_name] = 0.0
-                self._video_eta_state[video_name] = (0.0, now, None)
-
-            if status:
-                self._video_status[video_name] = status
-                # 兼容状态文案：⚠️ 限流，等待 40s
-                match = re.search(r"限流，等待\s+(\d+)s", status)
-                if match:
-                    self._video_rate_limit_deadline[video_name] = time.monotonic() + float(match.group(1))
-            else:
-                self._video_status.pop(video_name, None)
-                self._video_rate_limit_deadline.pop(video_name, None)
-
-            if self._video_progress_live is None:
-                self._video_progress_live = Live(
-                    self._render_video_progress_panel(),
-                    console=self.console,
-                    refresh_per_second=6,
-                    transient=True,
-                )
-                self._video_progress_live.start()
-            else:
-                self._video_progress_live.update(self._render_video_progress_panel())
+        self._video_group.update_status(video_name, status, 0.0, 0.0)
 
     def _render_homework_progress_panel(self) -> Panel:
         table = Table(
@@ -453,12 +499,12 @@ class RichUI:
 
         known_etas: list[float] = []
         for name, (done, total) in sorted(
-            self._homework_progress.items(),
+            self._homework_group.progress.items(),
             key=lambda item: (item[1][1] and (item[1][0] / item[1][1]), item[1][0]),
             reverse=True,
         ):
             percent = 0.0 if total <= 0 else done / total
-            status = self._homework_status.get(name, "答题中")
+            status = self._homework_group.status.get(name, "答题中")
             eta_seconds = self._estimate_homework_eta_seconds(name, done, total)
             if eta_seconds is not None:
                 known_etas.append(eta_seconds)
@@ -481,7 +527,7 @@ class RichUI:
         if total <= 0 or done >= total:
             return 0.0 if total > 0 else None
 
-        state = self._homework_eta_state.get(homework_name)
+        state = self._homework_group.eta_state.get(homework_name)
         speed: float | None = None
         if state:
             _, _, speed = state
@@ -498,81 +544,19 @@ class RichUI:
 
     def _get_homework_rate_limit_remaining(self, homework_name: str) -> float:
         """获取当前作业剩余限流等待时间（秒）。"""
-        deadline = self._homework_rate_limit_deadline.get(homework_name)
+        deadline = self._homework_group.rate_limit_deadline.get(homework_name)
         if deadline is None:
             return 0.0
         return max(0.0, deadline - time.monotonic())
 
     def update_homework_progress(self, homework_name: str, done: int, total: int) -> None:
         """更新作业题目进度面板。"""
-        with self._homework_progress_lock:
-            now = time.monotonic()
-            prev = self._homework_eta_state.get(homework_name)
-            if prev is None:
-                self._homework_eta_state[homework_name] = (done, now, None)
-            else:
-                prev_done, prev_ts, prev_speed = prev
-                dt = now - prev_ts
-                dd = done - prev_done
-                speed = prev_speed
-                if dt > 0 and dd > 0:
-                    instant_speed = dd / dt
-                    speed = instant_speed if prev_speed is None else (prev_speed * 0.7 + instant_speed * 0.3)
-                self._homework_eta_state[homework_name] = (done, now, speed)
-
-            self._homework_progress[homework_name] = (done, total)
-            if self._homework_progress_live is None:
-                self._homework_progress_live = Live(
-                    self._render_homework_progress_panel(),
-                    console=self.console,
-                    refresh_per_second=6,
-                    transient=True,
-                )
-                self._homework_progress_live.start()
-            else:
-                self._homework_progress_live.update(self._render_homework_progress_panel())
+        self._homework_group.update_progress(homework_name, done, (done, total))
 
     def finish_homework_progress(self, homework_name: str) -> None:
         """结束单个作业进度展示。"""
-        with self._homework_progress_lock:
-            self._homework_progress.pop(homework_name, None)
-            self._homework_status.pop(homework_name, None)
-            self._homework_eta_state.pop(homework_name, None)
-            self._homework_rate_limit_deadline.pop(homework_name, None)
-            if self._homework_progress_live is None:
-                return
-            if self._homework_progress:
-                self._homework_progress_live.update(self._render_homework_progress_panel())
-            else:
-                self._homework_progress_live.stop()
-                self._homework_progress_live = None
+        self._homework_group.finish(homework_name)
 
     def update_homework_status(self, homework_name: str, status: str | None) -> None:
         """更新作业状态展示；None/空字符串表示清空状态。"""
-        with self._homework_progress_lock:
-            # 状态可能先于题目进度到达（例如一上来就限流），
-            # 先创建占位条目，确保状态和 ETA 可见。
-            if homework_name not in self._homework_progress:
-                now = time.monotonic()
-                self._homework_progress[homework_name] = (0, 0)
-                self._homework_eta_state[homework_name] = (0, now, None)
-
-            if status:
-                self._homework_status[homework_name] = status
-                match = re.search(r"限流，等待\s+(\d+)s", status)
-                if match:
-                    self._homework_rate_limit_deadline[homework_name] = time.monotonic() + float(match.group(1))
-            else:
-                self._homework_status.pop(homework_name, None)
-                self._homework_rate_limit_deadline.pop(homework_name, None)
-
-            if self._homework_progress_live is None:
-                self._homework_progress_live = Live(
-                    self._render_homework_progress_panel(),
-                    console=self.console,
-                    refresh_per_second=6,
-                    transient=True,
-                )
-                self._homework_progress_live.start()
-            else:
-                self._homework_progress_live.update(self._render_homework_progress_panel())
+        self._homework_group.update_status(homework_name, status, 0, (0, 0))
