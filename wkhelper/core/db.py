@@ -33,118 +33,92 @@ class DB:
         self._db_lock = Lock()
 
         with self._db_lock:
-            # 创建统一的数据表
-            self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTS answers (
-                    library_id TEXT,
-                    version TEXT,
-                    answer TEXT,
-                    PRIMARY KEY (library_id, version)
-                )
-            """)
-            # 如果存在旧表，则进行数据迁移
-            self._migrate_old_tables()
-            # 统一答案存储格式
-            self._migrate_answer_payloads()
+            self.cursor.execute(
+                "CREATE TABLE IF NOT EXISTS answers (library_id TEXT, version TEXT, answer TEXT, PRIMARY KEY (library_id, version))"
+            )
             self.conn.commit()
 
-    def _migrate_old_tables(self):
-        """从旧的 lib_xxx 表迁移数据到统一的 answers 表。"""
-        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'lib_%'")
-        old_tables = [row[0] for row in self.cursor.fetchall()]
+    def save_answer(self, library_id: str, version: str | int, answer: AnswerPayload):
+        if isinstance(answer, list):
+            answer = json.dumps(answer, ensure_ascii=False)
+        with self._db_lock:
+            self.cursor.execute(
+                "INSERT OR REPLACE INTO answers (library_id, version, answer) VALUES (?, ?, ?)",
+                (library_id, str(version), answer),
+            )
+            self.conn.commit()
 
-        if not old_tables:
+    def get_answer(self, library_id: str, version: str | int) -> list[str] | None:
+        with self._db_lock:
+            self.cursor.execute(
+                "SELECT answer FROM answers WHERE library_id = ? AND version = ?",
+                (library_id, str(version)),
+            )
+            row = self.cursor.fetchone()
+        if row:
+            try:
+                parsed = json.loads(row[0])
+                if isinstance(parsed, list):
+                    return parsed
+                return [parsed]
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def batch_save(self, records: Iterable[tuple[str, str | int, AnswerPayload]]):
+        data = []
+        for lib_id, ver, ans in records:
+            if isinstance(ans, list):
+                ans = json.dumps(ans, ensure_ascii=False)
+            data.append((lib_id, str(ver), ans))
+        if not data:
             return
 
-        print(f"发现 {len(old_tables)} 个旧表，正在迁移数据...")
-        for table in old_tables:
-            try:
-                if not table.startswith("lib_") or not all(c.isalnum() or c in ("_", "-") for c in table.removeprefix("lib_")):
-                    print(f"跳过无效的表名: {table}")
-                    continue
-                # 从表名提取 library_id: lib_123_456 -> 123-456
-                library_id = table[4:].replace("_", "-")
-                self.cursor.execute(  # noqa: S608
-                    'INSERT OR REPLACE INTO answers (library_id, version, answer) SELECT ?, version, answer FROM "' + table + '"',
-                    (library_id,),
-                )
-                self.cursor.execute('DROP TABLE "' + table + '"')  # noqa: S608
-            except Exception as e:
-                print(f"迁移表 {table} 时出错: {e}")
-
-    def save_answer(self, library_id: str, version: str, answer: AnswerPayload):
         with self._db_lock:
-            try:
-                normalized = self.normalize_answer(answer)
-                answer_json = json.dumps(normalized, ensure_ascii=False)
-                self.cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO answers (library_id, version, answer)
-                    VALUES (?, ?, ?)
-                """,
-                    (str(library_id), str(version), answer_json),
-                )
-                self.conn.commit()
-            except Exception as e:
-                print(f"Error saving answer: {e}")
+            self.cursor.executemany(
+                "INSERT OR REPLACE INTO answers (library_id, version, answer) VALUES (?, ?, ?)",
+                data,
+            )
+            self.conn.commit()
 
-    def get_answer(self, library_id: str, version: str) -> list[str] | None:
+    def get_all_answers(self, library_id: str) -> list[tuple[str, list[str]]]:
         with self._db_lock:
-            try:
-                self.cursor.execute(
-                    """
-                    SELECT answer FROM answers 
-                    WHERE library_id = ? AND version = ?
-                """,
-                    (str(library_id), str(version)),
-                )
-                row = self.cursor.fetchone()
-                if row:
-                    try:
-                        parsed = json.loads(row[0])
-                        if isinstance(parsed, list):
-                            return self.normalize_answer(parsed)
-                        return self.normalize_answer(str(parsed))
-                    except Exception:
-                        return self.normalize_answer(str(row[0]))
-            except Exception as e:
-                print(f"Error getting answer: {e}")
-                return None
-            return None
+            self.cursor.execute(
+                "SELECT version, answer FROM answers WHERE library_id = ?",
+                (library_id,),
+            )
+            rows = self.cursor.fetchall()
 
-    def normalize_answer(self, answer: AnswerPayload) -> list[str]:
-        """标准化答案格式为去重且去空的 list[str]。"""
-        raw: Iterable[Any] = [answer] if isinstance(answer, str) else answer
-        result: list[str] = []
-        for item in raw:
-            val = str(item).strip()
-            if not val:
-                continue
-            if val not in result:
-                result.append(val)
+        result = []
+        for version, answer in rows:
+            try:
+                parsed = json.loads(answer)
+                if isinstance(parsed, list):
+                    result.append((str(version), parsed))
+                else:
+                    result.append((str(version), [parsed]))
+            except json.JSONDecodeError:
+                pass
         return result
 
-    def _normalize_payload_text(self, text: str) -> list[str]:
-        """尝试从存储文本中解析并标准化答案。"""
-        try:
-            data = json.loads(text)
-            return self.normalize_answer(data)
-        except Exception:
-            return self.normalize_answer(text)
+    def remove_answer(self, library_id: str, version: str | int):
+        with self._db_lock:
+            self.cursor.execute(
+                "DELETE FROM answers WHERE library_id = ? AND version = ?",
+                (library_id, str(version)),
+            )
+            self.conn.commit()
 
-    def _migrate_answer_payloads(self) -> None:
-        """迁移旧的答案存储格式为统一的 JSON 数组。"""
-        self.cursor.execute("SELECT library_id, version, answer FROM answers")
-        rows = self.cursor.fetchall()
-        for library_id, version, raw in rows:
-            normalized = self._normalize_payload_text(raw)
-            fixed_json = json.dumps(normalized, ensure_ascii=False)
-            if fixed_json != raw:
-                self.cursor.execute(
-                    "UPDATE answers SET answer=? WHERE library_id=? AND version=?",
-                    (fixed_json, library_id, version),
-                )
-        self.conn.commit()
+    def clear_all(self):
+        with self._db_lock:
+            self.cursor.execute("DELETE FROM answers")
+            self.conn.commit()
+
+    @property
+    def total_count(self) -> int:
+        with self._db_lock:
+            self.cursor.execute("SELECT COUNT(*) FROM answers")
+            return self.cursor.fetchone()[0]
 
 
 db = DB()
