@@ -146,20 +146,24 @@ class XuetangXPlatform(BasePlatform):
         if not resp["success"]:
             raise APIError("获取课程列表失败")
 
-        return [
-            Course(
-                id=course["classroom_id"],
-                name=course["name"],
-                platform_id="xtzx",
-                metadata={
-                    "classroom_id": course["classroom_id"],
-                    "sign": course["sign"],
-                    "product_id": course["product_id"],
-                    "sku_id": course["sku_id"],
-                },
+        courses = []
+        for course in resp["data"]["product_list"]:
+            teacher_name = course.get("teacher", {}).get("name") or course.get("teacherName") or course.get("teacher_name")
+            display_name = f"{course['name']} ({teacher_name})" if teacher_name else course["name"]
+            courses.append(
+                Course(
+                    id=course["classroom_id"],
+                    name=display_name,
+                    platform_id="xtzx",
+                    metadata={
+                        "classroom_id": course["classroom_id"],
+                        "sign": course["sign"],
+                        "product_id": course["product_id"],
+                        "sku_id": course["sku_id"],
+                    },
+                )
             )
-            for course in resp["data"]["product_list"]
-        ]
+        return courses
 
     # ── 抽象方法实现 ──
 
