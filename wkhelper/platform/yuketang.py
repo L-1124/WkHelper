@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import random
 from typing import Any, Literal, cast, override
 
 import niquests
@@ -12,9 +11,7 @@ from terminal_qrcode import draw
 
 from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.homework import generic_process_homework, generic_random_answer
-from wkhelper.core.models import Course, Homework, UserInfo
-from wkhelper.core.video import generic_watch_video
+from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
 from wkhelper.platform.base import BasePlatform
 
 logger = logging.getLogger(__name__)
@@ -35,12 +32,6 @@ def render_login_qrcode(
 class YuketangPlatform(BasePlatform):
     """雨课堂平台。"""
 
-    @override
-    async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
-        if cookies is not None:
-            return await self._login_with_cookies(cookies)
-        return await self._login_with_qrcode()
-
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         csrftoken = cookies.get("csrftoken", "")
         sessionid = cookies.get("sessionid", "")
@@ -60,14 +51,14 @@ class YuketangPlatform(BasePlatform):
         )
         self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
 
-        resp = await self.client.get("https://www.yuketang.cn/api/v3/user/basic-info")
-        data = resp.json()
+        data = await self._request_json("GET", "https://www.yuketang.cn/api/v3/user/basic-info")
         if data["code"] != 0:
             logger.error("❌ Cookie 验证失败，可能已过期")
             raise AuthError("Cookie 验证失败，请重新获取有效 Cookie")
 
         info = data["data"]
         self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
+        self.current_cookies = cookies
         logger.info("✅ Cookie 登录成功！")
         return self.user
 
@@ -140,8 +131,7 @@ class YuketangPlatform(BasePlatform):
     @override
     async def get_courses(self) -> list[Course]:
         url = "https://www.yuketang.cn/v2/api/web/courses/list"
-        resp_obj = await self.client.get(url, params={"identity": "2"})
-        resp = resp_obj.json()
+        resp = await self._request_json("GET", url, params={"identity": "2"})
         if resp["errcode"] != 0:
             raise APIError("获取课程列表失败")
 
@@ -181,8 +171,7 @@ class YuketangPlatform(BasePlatform):
         cid = course.metadata["classroom_id"]
         url = f"https://www.yuketang.cn/v2/api/web/classrooms/{cid}"
         kwargs = self._get_course_kwargs(course)
-        resp_obj = await self.client.get(url, params={"role": "5"}, **kwargs)
-        resp = resp_obj.json()
+        resp = await self._request_json("GET", url, params={"role": "5"}, **kwargs)
         if resp["errcode"] != 0:
             raise APIError("获取课堂信息失败")
         return resp["data"]
@@ -203,7 +192,8 @@ class YuketangPlatform(BasePlatform):
 
         url = "https://www.yuketang.cn/mooc-api/v1/lms/learn/course/chapter"
         kwargs = self._get_course_kwargs(course)
-        resp_obj = await self.client.get(
+        resp = await self._request_json(
+            "GET",
             url,
             params={
                 "cid": cid,
@@ -214,7 +204,6 @@ class YuketangPlatform(BasePlatform):
             },
             **kwargs,
         )
-        resp = resp_obj.json()
         return resp["data"]["course_chapter"]
 
     @override
@@ -224,7 +213,8 @@ class YuketangPlatform(BasePlatform):
         sign = course.metadata.get("sign", "")
         kwargs = self._get_course_kwargs(course)
         url = "https://www.yuketang.cn/mooc-api/v1/lms/learn/course/schedule"
-        resp_obj = await self.client.get(
+        resp = await self._request_json(
+            "GET",
             url,
             params={
                 "cid": cid,
@@ -235,7 +225,6 @@ class YuketangPlatform(BasePlatform):
             },
             **kwargs,
         )
-        resp = resp_obj.json()
         if not resp.get("success"):
             logger.warning("⚠️ 获取课程进度失败，默认按未完成处理")
             return {}
@@ -277,7 +266,7 @@ class YuketangPlatform(BasePlatform):
     # ── 视频 ──
 
     @override
-    async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
+    async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
         if not self.user:
             await self.login()
 
@@ -292,7 +281,6 @@ class YuketangPlatform(BasePlatform):
         sku_id = course.metadata["free_sku_id"]
 
         vid_str = str(video_id)
-        progress_url = "https://www.yuketang.cn/video-log/get_video_watch_progress/"
         progress_params = {
             "cid": course_id,
             "user_id": user_id,
@@ -302,83 +290,25 @@ class YuketangPlatform(BasePlatform):
             "video_id": vid_str,
             "snapshot": "1",
         }
-        heartbeat_url = "https://www.yuketang.cn/video-log/heartbeat/"
-
-        def payload_gen(video_id, classroom_id, user_id, course_id, sku_id, video_frame, i, timestamp):
-            return {
-                "i": i,
-                "et": "heartbeat",
-                "p": "web",
-                "n": "ali-cdn.xuetangx.com",
-                "lob": "ykt",
-                "cp": video_frame,
-                "fp": 0,
-                "tp": 0,
-                "sp": 2,
-                "ts": str(timestamp),
-                "u": int(user_id),
-                "uip": "",
-                "c": int(course_id),
-                "v": int(video_id),
-                "skuid": int(sku_id),
-                "classroomid": str(classroom_id),
-                "cc": video_id,
-                "d": 4976.5,
-                "pg": f"{video_id}_{''.join(random.sample('abcdefghijklmnopqrstuvwxyz0123456789', 4))}",
-                "sq": i,
-                "t": "video",
-            }
-
         kwargs = self._get_course_kwargs(course)
         kwargs.setdefault("params", {}).update(progress_params)
 
-        await generic_watch_video(
-            self.client,
-            vid_str,
-            video_name,
-            cid,
-            user_id,
-            course_id,
-            sku_id,
-            progress_url,
-            heartbeat_url,
-            payload_gen,
+        return VideoContext(
+            video_id=vid_str,
+            classroom_id=cid,
+            user_id=user_id,
+            course_id=course_id,
+            sku_id=sku_id,
+            progress_url="https://www.yuketang.cn/video-log/get_video_watch_progress/",
+            heartbeat_url="https://www.yuketang.cn/video-log/heartbeat/",
+            progress_params=progress_params,
             request_kwargs=kwargs,
-            on_progress=self.ui.update_video_progress,
-            on_complete=self.ui.finish_video_progress,
-            on_status=self.ui.update_video_status,
         )
 
     # ── 作业 ──
 
     @override
-    async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
-        self.ui.update_homework_status(homework.name, "🧠 答题中")
-        try:
-            questions = await self.get_leaf_questions(homework.id, course)
-            kwargs = self._get_course_kwargs(course)
-
-            self._submit_ctx = {
-                "classroom_id": course.metadata["classroom_id"],
-            }
-
-            total = len(questions)
-            self.ui.update_homework_progress(homework.name, 0, total)
-
-            def _on_progress(done: int, total: int) -> None:
-                self.ui.update_homework_progress(homework.name, done, total)
-
-            async def submit_func(problem_id, answer, course_info, client, kwargs):
-                return await self._submit_answer(homework.name, problem_id, answer, client, kwargs)
-
-            if is_random:
-                await generic_random_answer(questions, submit_func, None, self.client, headers=kwargs, on_progress=_on_progress)
-            else:
-                await generic_process_homework(questions, submit_func, None, self.client, headers=kwargs, on_progress=_on_progress)
-
-            self.ui.update_homework_status(homework.name, "✅ 完成")
-        except Exception:
-            self.ui.update_homework_status(homework.name, "❌ 失败")
-            raise
-        finally:
-            self.ui.finish_homework_progress(homework.name)
+    async def _prepare_submit_context(self, homework: Homework, course: Course) -> None:
+        self._submit_ctx = {
+            "classroom_id": course.metadata["classroom_id"],
+        }

@@ -3,13 +3,16 @@
 import asyncio
 import logging
 import math
+import random
 import re
 from abc import ABC, abstractmethod
 from typing import Any
 
 import niquests
 
-from wkhelper.core.models import Course, Homework, UserInfo
+from wkhelper.core.homework import generic_random_answer, generic_submit_homework
+from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
+from wkhelper.core.video import generic_watch_video
 from wkhelper.platform.tree_utils import format_leaf_label, iter_leaves_with_context
 from wkhelper.ui.interface import UserInterface
 
@@ -23,6 +26,14 @@ class BasePlatform(ABC):
         self.client = client
         self.ui = ui
         self.user: UserInfo | None = None
+        self.current_cookies: dict[str, str] | None = None
+        self._submit_ctx: dict[str, Any] = {}
+
+    async def _request_json(self, method: str, url: str, **kwargs) -> dict[str, Any]:
+        """通用的发起 HTTP 请求并解析 JSON 的方法，包含状态码检查。"""
+        resp = await self.client.request(method, url, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
 
     @staticmethod
     def parse_cookie_string(raw: str) -> dict[str, str]:
@@ -58,7 +69,7 @@ class BasePlatform(ABC):
         data = q_resp.get("data", q_resp)
         logger.debug(f"  📡 data 类型: {type(data).__name__}")
         if isinstance(data, dict):
-            logger.debug(f"  📡 data 键: {list(data.keys())[:10]}")
+            logger.debug(f"  📡 data 键: {list(data.keys())}")
             if "problems" in data:
                 problems = data["problems"]
                 logger.debug(f"  📡 从 data.problems 获取 {len(problems)} 道题目")
@@ -71,9 +82,20 @@ class BasePlatform(ABC):
 
     # ── 子类必须实现的抽象方法 ──
 
-    @abstractmethod
     async def login(self, cookies: dict[str, str] | None = None) -> UserInfo:
         """执行登录并返回用户信息。"""
+        if cookies is not None:
+            return await self._login_with_cookies(cookies)
+        return await self._login_with_qrcode()
+
+    @abstractmethod
+    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+        """使用 Cookie 登录。"""
+        ...
+
+    @abstractmethod
+    async def _login_with_qrcode(self) -> UserInfo:
+        """使用扫码登录。"""
         ...
 
     @abstractmethod
@@ -197,13 +219,23 @@ class BasePlatform(ABC):
         params = self._get_leaf_info_params(leaf_id, course)
         if params:
             kwargs.setdefault("params", {}).update(params)
-        resp_obj = await self.client.get(url, **kwargs)
-        resp = resp_obj.json()
+        resp = await self._request_json("GET", url, **kwargs)
         leaf_type_id = resp["data"]["content_info"]["leaf_type_id"]
 
         q_url = self._build_exercise_list_url(leaf_type_id)
-        q_resp_obj = await self.client.get(q_url, **kwargs)
-        return self._parse_exercise_response(q_resp_obj.json())
+        resp_json = await self._request_json("GET", q_url, **kwargs)
+        problems = self._parse_exercise_response(resp_json)
+
+        # 反混淆处理
+        data = resp_json.get("data")
+        if isinstance(data, dict):
+            font_url = data.get("font")
+            if font_url:
+                from wkhelper.core.deobfuscator import deobfuscate_questions
+
+                await deobfuscate_questions(problems, font_url, self.client)
+
+        return problems
 
     async def get_videos(self, course: Course) -> dict[int, str]:
         """获取课程视频列表。"""
@@ -229,9 +261,13 @@ class BasePlatform(ABC):
             answer = [answer]
         payload = self._build_submit_payload(problem_id, answer)
 
-        while True:
+        max_retries = 10
+        for _ in range(max_retries):
             response = await client.post(url, json=payload, **(kwargs or {}))
-            match = re.search(r"Expected available in(.+?)second.", response.text)
+            if response.text:
+                match = re.search(r"Expected available in(.+?)second.", response.text)
+            else:
+                match = None
             if match:
                 delay_time = float(match.group(1).strip())
                 remain = max(1, math.ceil(delay_time))
@@ -242,14 +278,139 @@ class BasePlatform(ABC):
                 self.ui.update_homework_status(homework_name, "🔄 重试中...")
                 self.ui.update_homework_status(homework_name, "🧠 答题中")
                 continue
+            response.raise_for_status()
             return self._parse_submit_response(response.json())
 
-    @abstractmethod
-    async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
-        """观看单个视频。"""
-        ...
+        raise RuntimeError(f"题目 {problem_id} 提交重试次数过多，可能遭遇持续限流")
 
     @abstractmethod
-    async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
-        """完成单个作业。"""
+    async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
+        """准备视频观看所需的平台上下文信息。"""
         ...
+
+    def _build_heartbeat_payload(
+        self,
+        video_id: str,
+        classroom_id: str,
+        user_id: int,
+        course_id: int,
+        sku_id: int,
+        video_frame: int,
+        i: int,
+        timestamp: int,
+    ) -> dict[str, Any]:
+        """构建心跳请求载荷。默认实现适用于两个平台。"""
+        return {
+            "i": i,
+            "et": "heartbeat",
+            "p": "web",
+            "n": "ali-cdn.xuetangx.com",
+            "lob": "ykt",
+            "cp": video_frame,
+            "fp": 0,
+            "tp": 0,
+            "sp": 2,
+            "ts": str(timestamp),
+            "u": int(user_id),
+            "uip": "",
+            "c": int(course_id),
+            "v": int(video_id),
+            "skuid": int(sku_id),
+            "classroomid": str(classroom_id),
+            "cc": str(video_id),
+            "d": 4976.5,
+            "pg": f"{video_id}_{''.join(random.sample('abcdefghijklmnopqrstuvwxyz0123456789', 4))}",
+            "sq": i,
+            "t": "video",
+        }
+
+    async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
+        """观看单个视频（模板方法）。"""
+        ctx = await self._prepare_video_context(video_id, course)
+
+        await generic_watch_video(
+            self.client,
+            ctx.video_id,
+            video_name,
+            ctx.classroom_id,
+            ctx.user_id,
+            ctx.course_id,
+            ctx.sku_id,
+            ctx.progress_url,
+            ctx.heartbeat_url,
+            self._build_heartbeat_payload,
+            request_kwargs=ctx.request_kwargs,
+            on_progress=self.ui.update_video_progress,
+            on_complete=self.ui.finish_video_progress,
+            on_status=self.ui.update_video_status,
+        )
+
+    @abstractmethod
+    async def _prepare_submit_context(self, homework: Homework, course: Course) -> None:
+        """准备提交上下文（设置 self._submit_ctx）。
+
+        子类在这里设置平台特有的提交字段，例如 classroom_id、leaf_id、sign 等。
+        """
+        ...
+
+    async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
+        """完成单个作业（模板方法）。
+
+        编排流程：获取题目 → 准备提交上下文 → 提交已知答案 → AI 兜底 → 更新状态。
+        子类通过 _prepare_submit_context() 注入平台差异。
+        """
+        self.ui.update_homework_status(homework.name, "🧠 答题中")
+        try:
+            questions = await self.get_leaf_questions(homework.id, course)
+            await self._prepare_submit_context(homework, course)
+            kwargs = self._get_request_kwargs(course)
+
+            total = len(questions)
+            self.ui.update_homework_progress(homework.name, 0, total)
+
+            def _on_progress(done: int, total: int) -> None:
+                self.ui.update_homework_progress(homework.name, done, total)
+
+            async def submit_func(problem_id, answer, course_info, client, kwargs):
+                return await self._submit_answer(homework.name, problem_id, answer, client, kwargs)
+
+            if is_random:
+                await generic_random_answer(questions, submit_func, None, self.client, headers=kwargs, on_progress=_on_progress)
+            else:
+                from wkhelper.solver import LocalDbSolver
+
+                solvers = [LocalDbSolver()]
+                resolved_pairs = []
+                unresolved = questions.copy()
+
+                for solver in solvers:
+                    if not unresolved:
+                        break
+                    if solver is None:
+                        continue
+
+                    resolved_for_solver = await solver.batch_solve(unresolved, self.ui)
+
+                    for q, ans in resolved_for_solver:
+                        if ans.selected_options:
+                            resolved_pairs.append((q, ans.selected_options))
+                            # 安全地从 unresolved 列表中移除已解答的题目
+                            # q 需要用对应的 key 或者直接尝试 remove
+                            try:
+                                unresolved.remove(q)
+                            except ValueError:
+                                pass
+
+                if unresolved:
+                    self.ui.print_message(f"[yellow]⚠️ 还有 {len(unresolved)} 道题目无法解答，将跳过。[/]")
+
+                if resolved_pairs:
+                    self.ui.update_homework_status(homework.name, "🧠 提交答案")
+                    await generic_submit_homework(resolved_pairs, submit_func, None, self.client, headers=kwargs, on_progress=_on_progress)
+
+            self.ui.update_homework_status(homework.name, "✅ 完成")
+        except Exception:
+            self.ui.update_homework_status(homework.name, "❌ 失败")
+            raise
+        finally:
+            self.ui.finish_homework_progress(homework.name)
