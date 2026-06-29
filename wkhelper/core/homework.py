@@ -77,6 +77,7 @@ async def save_platform_answers(platform: Any, course: Any):
 
     count = 0
     semaphore = asyncio.Semaphore(MAX_WORKERS_DOWNLOAD)
+    progress_lock = asyncio.Lock()
 
     async def _fetch_and_save(hw):
         nonlocal count
@@ -92,7 +93,8 @@ async def save_platform_answers(platform: Any, course: Any):
                     inner_count += 1
             if inner_count > 0:
                 logger.info(f"  ✅ 作业 '{hw.name}' 已保存 {inner_count} 条答案")
-            count += inner_count
+            async with progress_lock:
+                count += inner_count
         except Exception as e:
             logger.error(f"  ❌ 获取作业 {hw.name} 答案失败: {e}")
 
@@ -107,66 +109,8 @@ async def save_platform_answers(platform: Any, course: Any):
         logger.info(f"💾 共保存 {count} 条答案到数据库")
 
 
-async def process_question(
-    idx: int,
-    q: QuestionPayload,
-    chapter_id: int,
-    leaf_type_id: int,
-    course_info: Any,
-    client: niquests.AsyncSession,
-    submit_func: SubmitFunc,
-    headers: HeaderMap | None = None,
-) -> tuple[bool, bool]:
-    """处理单个题目：查找答案 -> 提交"""
-
-    # 1. 提取 LibID/Version
-    library_id = None
-    version = None
-    if "content" in q:
-        library_id = q["content"].get("LibraryID") or q["content"].get("library_id")
-        version = q["content"].get("Version")
-
-    if not library_id or not version:
-        logger.warning(f"  ⚠️ 第{idx}题 无法获取 LibraryID 或 Version，跳过")
-        return False, False
-
-    library_id = str(library_id)
-
-    # 2. 查找数据库
-    answer = db.get_answer(library_id, version)
-    if not answer:
-        logger.debug(f"  ⏭️ 第{idx}题 无答案 (LibID: {library_id}, Ver: {version})，跳过")
-        return False, False
-
-    # 3. 验证
-    problem_id = q.get("problem_id") or q.get("id")
-    if problem_id is None:
-        logger.warning(f"  ⚠️ 第{idx}题 无法获取题目ID，跳过")
-        return False, False
-
-    if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 1):
-        logger.debug(f"  ⏭️ 第{idx}题 达到最大回答次数，跳过")
-        return False, False
-
-    # 4. 提交
-    final_answer: list[str] = answer
-    result = await submit_func(int(problem_id), final_answer, course_info, client, headers)
-
-    if result.get("success"):
-        if result.get("is_correct"):
-            logger.debug(f"  ✅ 第{idx}题 提交成功 - 回答正确")
-            return True, True
-        else:
-            correct_ans = ", ".join(result.get("correct_answer", []))
-            logger.warning(f"  ⚠️ 第{idx}题 提交成功 - 回答错误，正确答案: {correct_ans}")
-            return True, False
-    else:
-        logger.error(f"  ❌ 第{idx}题 提交失败")
-        return False, False
-
-
-async def generic_process_homework(
-    questions: list[Any],
+async def generic_submit_homework(
+    resolved_pairs: list[tuple[QuestionPayload, list[str]]],
     submit_func: SubmitFunc,
     course_info: Any,
     client: niquests.AsyncSession,
@@ -175,17 +119,17 @@ async def generic_process_homework(
     headers: HeaderMap | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> None:
-    """异步并发处理作业题目列表"""
+    """异步并发提交题目答案。"""
 
     async def _maybe_call(result: None | Awaitable[None]) -> None:
         if result is not None:
             await result
 
-    if not questions:
-        logger.warning("  ⚠️ 未获取到题目")
+    if not resolved_pairs:
+        logger.warning("  ⚠️ 无需提交任何题目")
         return
 
-    logger.debug(f"  📋 共 {len(questions)} 道题目")
+    logger.debug(f"  📋 共 {len(resolved_pairs)} 道题目准备提交")
 
     success_count = 0
     correct_count = 0
@@ -193,37 +137,47 @@ async def generic_process_homework(
     semaphore = asyncio.Semaphore(MAX_WORKERS_HOMEWORK)
     progress_lock = asyncio.Lock()
 
-    async def worker(idx: int, q: QuestionPayload):
+    async def worker(idx: int, q: QuestionPayload, answer: list[str]):
         nonlocal success_count, correct_count, processed_count
         try:
+            problem_id = q.get("problem_id") or q.get("id")
+            if problem_id is None:
+                logger.warning(f"  ⚠️ 第{idx}题 无法获取题目ID，跳过")
+                return
+
+            if q.get("user", {}).get("my_count", 0) >= q.get("max_retry", 1):
+                logger.debug(f"  ⏭️ 第{idx}题 达到最大回答次数，跳过")
+                return
+
             async with semaphore:
-                s, c = await process_question(
-                    idx,
-                    q,
-                    chapter_id,
-                    leaf_type_id,
-                    course_info,
-                    client,
-                    submit_func,
-                    headers,
-                )
-            if s:
-                success_count += 1
-            if c:
-                correct_count += 1
+                result = await submit_func(int(problem_id), answer, course_info, client, headers)
+
+            if result.get("success"):
+                async with progress_lock:
+                    success_count += 1
+                if result.get("is_correct"):
+                    logger.debug(f"  ✅ 第{idx}题 提交成功 - 回答正确")
+                    async with progress_lock:
+                        correct_count += 1
+                else:
+                    correct_ans = ", ".join(result.get("correct_answer", []))
+                    logger.warning(f"  ⚠️ 第{idx}题 提交成功 - 回答错误，正确答案: {correct_ans}")
+            else:
+                logger.error(f"  ❌ 第{idx}题 提交失败")
+
         except Exception as e:
-            logger.error(f"  ❌ 处理题目 {idx} 失败: {e}")
+            logger.error(f"  ❌ 提交题目 {idx} 失败: {e}")
         finally:
             async with progress_lock:
                 processed_count += 1
                 if on_progress:
-                    await _maybe_call(on_progress(processed_count, len(questions)))
+                    await _maybe_call(on_progress(processed_count, len(resolved_pairs)))
 
     async with asyncio.TaskGroup() as tg:
-        for i, q in enumerate(questions, 1):
-            tg.create_task(worker(i, q))
+        for i, (q, answer) in enumerate(resolved_pairs, 1):
+            tg.create_task(worker(i, q, answer))
 
-    logger.debug(f"  📊 提交 {success_count}/{len(questions)} 道，正确 {correct_count}/{success_count} 道")
+    logger.debug(f"  📊 提交 {success_count}/{len(resolved_pairs)} 道，正确 {correct_count}/{success_count} 道")
 
 
 async def generic_random_answer(

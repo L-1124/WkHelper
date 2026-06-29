@@ -56,3 +56,18 @@ class Question:
     answer: list[str] | str | None = None
     library_id: str | None = None
     version: str | None = None
+
+
+@dataclass
+class VideoContext:
+    """视频观看所需的平台上下文。"""
+
+    video_id: str
+    classroom_id: str
+    user_id: int
+    course_id: int
+    sku_id: int
+    progress_url: str
+    heartbeat_url: str
+    progress_params: dict[str, Any]
+    request_kwargs: dict[str, Any] | None = None

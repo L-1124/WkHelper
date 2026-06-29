@@ -63,7 +63,7 @@ async def generic_watch_video(
     response = None
     try:
         response = await client.get(progress_url, **(request_kwargs or {}))
-        if '"completed":1' in response.text:
+        if response.text and '"completed":1' in response.text:
             logger.info(f"⏭️  {video_name} 已完成，跳过")
             if on_complete:
                 await _maybe_call(on_complete(video_name))
@@ -76,7 +76,7 @@ async def generic_watch_video(
     # 初始化状态
     video_frame = 0
     rate = 0.0
-    if response:
+    if response and response.text:
         try:
             data = json.loads(response.text)["data"][video_id]
             rate = float(data.get("rate", 0) or 0)
@@ -110,29 +110,30 @@ async def generic_watch_video(
             r = await client.post(heartbeat_url, json={"heart_data": heart_data}, **(request_kwargs or {}))
 
             # 处理限流
-            match = re.search(r"Expected available in(.+?)second.", r.text)
-            if match:
-                delay_time = float(match.group(1).strip())
-                if on_status:
-                    remain = max(1, math.ceil(delay_time))
-                    while remain > 0:
-                        await _maybe_call(on_status(video_name, f"⚠️ 限流，等待 {remain}s"))
-                        await asyncio.sleep(1)
-                        remain -= 1
-                else:
-                    logger.warning(f"⚠️  服务器限流，需等待 {delay_time} 秒")
-                    await asyncio.sleep(delay_time + 0.5)
-                # 重试一次
-                if on_status:
-                    await _maybe_call(on_status(video_name, "🔄 重试中..."))
-                else:
-                    logger.info("🔄 重新发送请求...")
-                await client.post(
-                    heartbeat_url,
-                    json={"heart_data": heart_data},
-                    **(request_kwargs or {}),
-                    timeout=20,
-                )
+            if r.text:
+                match = re.search(r"Expected available in(.+?)second.", r.text)
+                if match:
+                    delay_time = float(match.group(1).strip())
+                    if on_status:
+                        remain = max(1, math.ceil(delay_time))
+                        while remain > 0:
+                            await _maybe_call(on_status(video_name, f"⚠️ 限流，等待 {remain}s"))
+                            await asyncio.sleep(1)
+                            remain -= 1
+                    else:
+                        logger.warning(f"⚠️  服务器限流，需等待 {delay_time} 秒")
+                        await asyncio.sleep(delay_time + 0.5)
+                    # 重试一次
+                    if on_status:
+                        await _maybe_call(on_status(video_name, "🔄 重试中..."))
+                    else:
+                        logger.info("🔄 重新发送请求...")
+                    await client.post(
+                        heartbeat_url,
+                        json={"heart_data": heart_data},
+                        **(request_kwargs or {}),
+                        timeout=20,
+                    )
         except Exception:
             logger.debug("heartbeat failed", exc_info=True)
 
@@ -142,7 +143,8 @@ async def generic_watch_video(
         # 检查进度
         try:
             response = await client.get(progress_url, **(request_kwargs or {}))
-            rate = float(json.loads(response.text)["data"][video_id].get("rate", 0) or 0)
+            if response.text:
+                rate = float(json.loads(response.text)["data"][video_id].get("rate", 0) or 0)
             if on_progress:
                 await _maybe_call(on_progress(video_name, rate))
                 if on_status:
