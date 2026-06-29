@@ -135,18 +135,27 @@ class YuketangPlatform(BasePlatform):
         if resp["errcode"] != 0:
             raise APIError("获取课程列表失败")
 
-        return [
-            Course(
-                id=c["course"]["id"],
-                name=c["course"]["name"],
-                platform_id="ykt",
-                metadata={
-                    "classroom_id": c["classroom_id"],
-                    "university_id": c["course"]["university_id"],
-                },
+        courses = []
+        for c in resp["data"]["list"]:
+            teacher_name = c.get("teacher", {}).get("name")
+            class_name = c.get("name")
+            display_name = c["course"]["name"]
+            if teacher_name:
+                display_name += f" ({teacher_name})"
+            if class_name:
+                display_name += f" - {class_name}"
+            courses.append(
+                Course(
+                    id=c["course"]["id"],
+                    name=display_name,
+                    platform_id="ykt",
+                    metadata={
+                        "classroom_id": c["classroom_id"],
+                        "university_id": c["course"]["university_id"],
+                    },
+                )
             )
-            for c in resp["data"]["list"]
-        ]
+        return courses
 
     def _get_course_kwargs(self, course: Course) -> dict[str, Any]:
         cid = str(course.metadata["classroom_id"])
