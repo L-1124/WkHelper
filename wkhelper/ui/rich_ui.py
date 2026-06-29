@@ -212,14 +212,58 @@ class RichUI:
         return result.strip() or default
 
     async def select_one(self, message: str, choices: list[str]) -> str | None:
-        """单项选择。"""
-        self.console.print(f"[bold blue]{message}[/bold blue]")
-        return await questionary.select(
-            "请选择",
-            choices=choices,
-            style=self._QUESTIONARY_STYLE,
-            instruction="（↑/↓ 选择，Enter 确认）",
-        ).ask_async()
+        """单项选择（支持 Esc 返回）。"""
+        if not choices:
+            return None
+        return await self._pt_select(message, choices)
+
+    async def _pt_select(self, message: str, choices: list[str]) -> str | None:
+        """基于 prompt_toolkit 的单选组件，支持 Esc 返回。"""
+        current = 0
+        count = len(choices)
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _(event):
+            nonlocal current
+            current = (current - 1) % count
+
+        @kb.add("down")
+        def _(event):
+            nonlocal current
+            current = (current + 1) % count
+
+        @kb.add("enter")
+        def _(event):
+            event.app.exit(result=choices[current])
+
+        @kb.add("escape")
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _(event):
+            event.app.exit(result=None)
+
+        def _render():
+            lines: list[tuple[str, str]] = [("class:message", message + "\n")]
+            for i, item in enumerate(choices):
+                pointer = "›" if i == current else " "
+                is_current = i == current
+                style_class = "class:current" if is_current else ""
+                lines.append((style_class, f" {pointer}  {item}\n"))
+            lines.append(("class:instruction", "\n ↑/↓ 移动  Enter 确认  Esc 返回"))
+            return lines
+
+        control = FormattedTextControl(text=_render, show_cursor=False)
+        layout = Layout(HSplit([Window(control)]))
+        style = PTStyle.from_dict(
+            {
+                "message": "bold",
+                "current": "bold fg:#5fafff",
+                "instruction": "fg:#808080",
+            }
+        )
+        app = Application(layout=layout, key_bindings=kb, style=style, full_screen=False, erase_when_done=True)
+        return await app.run_async()
 
     async def select_many(
         self,
@@ -285,6 +329,7 @@ class RichUI:
         def _(event):
             event.app.exit(result=[c for c in choices if c in all_checked])
 
+        @kb.add("escape")
         @kb.add("c-c")
         @kb.add("c-d")
         def _(event):
@@ -308,7 +353,7 @@ class RichUI:
 
                 lines.append((style_class, f" {pointer}  {mark}  {item}\n"))
 
-            lines.append(("class:instruction", "\n ↑/↓ 移动  Space 勾选  Ctrl+A 全选  Enter 确认"))
+            lines.append(("class:instruction", "\n ↑/↓ 移动  Space 勾选  Ctrl+A 全选  Enter 确认  Esc 返回"))
             return lines
 
         control = FormattedTextControl(text=_render, show_cursor=False)
