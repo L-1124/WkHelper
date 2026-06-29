@@ -3,22 +3,17 @@
 import niquests
 import pytest
 
-from wkhelper.core.homework import generic_random_answer, process_question
+from wkhelper.core.homework import generic_random_answer, generic_submit_homework
 
 
 @pytest.mark.asyncio
-async def test_process_question_submits_list_answer(monkeypatch):
+async def test_generic_submit_homework_submits_list_answer():
     """验证题目处理时提交的答案格式为列表。"""
     captured = {"answer": None}
-
-    def fake_get_answer(library_id, version):
-        return ["A"]
 
     async def fake_submit(problem_id, answer, course_info, client, kwargs):
         captured["answer"] = answer
         return {"success": True, "is_correct": True, "correct_answer": []}
-
-    monkeypatch.setattr("wkhelper.core.homework.db.get_answer", fake_get_answer)
 
     q = {
         "id": 1,
@@ -28,10 +23,11 @@ async def test_process_question_submits_list_answer(monkeypatch):
         "max_retry": 3,
     }
 
-    async with niquests.AsyncSession() as client:
-        ok, correct = await process_question(1, q, 0, 0, {}, client, fake_submit)
+    resolved_pairs = [(q, ["A"])]
 
-    assert ok is True and correct is True
+    async with niquests.AsyncSession() as client:
+        await generic_submit_homework(resolved_pairs, fake_submit, {}, client)
+
     assert captured["answer"] == ["A"]
 
 

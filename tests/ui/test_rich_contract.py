@@ -60,8 +60,8 @@ def test_eta_uses_video_threshold_and_rate_limit():
     """验证 ETA 会计入阈值与限流剩余时间。"""
     ui = RichUI()
     name = "视频A"
-    ui._video_eta_state[name] = (0.0, 0.0, 0.02)  # 2%/s
-    ui._video_rate_limit_deadline[name] = 1005.0
+    ui._video_group.eta_state[name] = (0.0, 0.0, 0.02)  # 2%/s
+    ui._video_group.rate_limit_deadline[name] = 1005.0
 
     # 固定当前时间，确保测试稳定
     import time

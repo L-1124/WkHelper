@@ -49,6 +49,15 @@ class FakeUI:
     def update_homework_status(self, homework_name: str, status: str | None) -> None:
         pass
 
+    def print_message(self, message: str) -> None:
+        pass
+
+    def stop_live_displays(self) -> None:
+        pass
+
+    def start_live_displays(self) -> None:
+        pass
+
     def track_progress(self, title: str, total: int):
         class FakeTracker:
             def update(self, advance=1):
@@ -106,12 +115,31 @@ class FakeAsyncPlatform(BasePlatform):
         return {}
 
     @override
-    async def do_video(self, video_id: str, video_name: str, course: Course) -> None:
-        pass
+    async def _prepare_video_context(self, video_id: str, course: Course) -> Any:
+        from wkhelper.core.models import VideoContext
+
+        return VideoContext(
+            video_id=video_id,
+            classroom_id="0",
+            user_id=0,
+            course_id=0,
+            sku_id=0,
+            progress_url="",
+            heartbeat_url="",
+            progress_params={},
+        )
 
     @override
-    async def do_homework(self, homework: Homework, course: Course, is_random: bool = False) -> None:
-        pass
+    async def _prepare_submit_context(self, homework: Homework, course: Course) -> None:
+        self._submit_ctx = {}
+
+    @override
+    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+        return UserInfo(id=1, name="test")
+
+    @override
+    async def _login_with_qrcode(self) -> UserInfo:
+        return UserInfo(id=1, name="test")
 
 
 @pytest.fixture
