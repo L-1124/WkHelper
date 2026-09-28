@@ -1,5 +1,5 @@
 """UI 域综合测试：RichUI 关键交互契约。"""
-
+# 此测试在WSL下通不过. 原因未知
 import pytest
 
 from wkhelper.ui.rich_ui import RichUI

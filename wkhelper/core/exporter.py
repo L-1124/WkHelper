@@ -89,13 +89,14 @@ async def export_questions_to_markdown(platform: Any, course: Course) -> None:
                     # 获取题干
                     body = content.get("Body") or content.get("body") or "未知题干"
                     body = html_to_md(body)
+                    # 存储为有结构的markdown, 方便通过markdown解析库反序列化
                     f.write(f"### 第 {idx} 题\n\n")
-                    f.write(f"**题目：**\n{body}\n\n")
+                    f.write(f"### 题目：\n{body}\n\n")
 
                     # 获取选项
                     options = content.get("Options") or []
                     if options:
-                        f.write("**选项：**\n")
+                        f.write("#### 选项：\n")
                         for opt in options:
                             key = opt.get("key", "")
                             value = html_to_md(opt.get("value", ""))
@@ -110,11 +111,11 @@ async def export_questions_to_markdown(platform: Any, course: Course) -> None:
                     if library_id and version:
                         answer = db.get_answer(str(library_id), str(version))
                         if answer:
-                            f.write(f"**正确答案：** `{', '.join(answer)}`\n\n")
+                            f.write(f"#### 正确答案：** `{', '.join(answer)}`\n\n")
                         else:
-                            f.write("**正确答案：** 暂无\n\n")
+                            f.write("#### 正确答案：** 暂无\n\n")
                     else:
-                        f.write("**正确答案：** 暂无 (无法获取题目 ID)\n\n")
+                        f.write("#### 正确答案：** 暂无 (无法获取题目 ID)\n\n")
 
                     f.write("---\n\n")
 

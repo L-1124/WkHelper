@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from argparse import ArgumentParser
 
 import niquests
 
@@ -10,10 +11,29 @@ from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 from wkhelper.ui.rich_ui import RichUI
 
+parser = ArgumentParser(
+    prog="wkhelper",
+    description="wkhelper - 雨课堂/学堂在线作业答案提取与导出工具",
+    )
+parser.add_argument("-h","--help", action="help", help="显示本帮助信息, 并退出")
+parser.add_argument("--debug", "--verbose", action="store_true", help="启用调试模式, 显示更多日志信息")
+# store_true: 默认是false, 如果有这个选项就设为true
+
 
 async def async_main() -> None:
     """异步主入口。"""
+
+    # 解析参数
+    args = parser.parse_args()
+
     ui = RichUI()
+    if args.debug:
+        import logging
+        logger = logging.getLogger("wkhelper")
+        logger.setLevel(logging.DEBUG)
+        logger.debug("调试模式已启用")
+        # 否则不设置, 因为其他地方已经设置过了.
+        # 不能放在更靠前面的位置, 因为那个时候UI没有启动. 
     choice = await ui.select_one(
         "请选择学习平台",
         ["雨课堂 (yuketang.cn)", "学堂在线 (xuetangx.com)", "退出"],

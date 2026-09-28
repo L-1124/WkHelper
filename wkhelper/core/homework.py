@@ -46,10 +46,8 @@ def extract_answers(questions: list[QuestionPayload]) -> AnswerStore:
             logger.debug(f"  ⏭️ 题目 {idx} 缺少 LibraryID 或 Version，跳过")
             continue
 
-        ans = None
         user_info = q.get("user", {})
-        if user_info.get("answer"):
-            ans = user_info["answer"]
+        ans = user_info.get("answer", None)
 
         if not ans:
             logger.debug(f"  ⏭️ 题目 {idx} (LibID: {library_id}) 无答案，跳过")
