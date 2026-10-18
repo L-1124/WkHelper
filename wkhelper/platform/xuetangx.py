@@ -6,11 +6,11 @@ import logging
 from typing import Any, override
 
 import niquests
-from terminal_qrcode import draw
 
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
 from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.login_helper import QrCodeSession
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +18,12 @@ logger = logging.getLogger(__name__)
 class XuetangXPlatform(BasePlatform):
     """学堂在线平台。"""
 
+    @override
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         csrftoken = cookies.get("csrftoken", "")
         sessionid = cookies.get("sessionid", "")
         if not csrftoken or not sessionid:
             raise AuthError("Cookie 缺少 csrftoken 或 sessionid")
-
-        logger.info("🔐 正在验证 Cookie...")
 
         self.client.headers.update(
             {
@@ -37,20 +36,22 @@ class XuetangXPlatform(BasePlatform):
         self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
 
         resp = await self._request_json("GET", "https://www.xuetangx.com/api/v1/u/user/basic_profile/")
-        if not resp["success"]:
-            logger.error("❌ Cookie 验证失败，可能已过期")
-            raise AuthError("Cookie 验证失败，请重新获取有效 Cookie")
+        if not resp.get("success"):
+            raise AuthError("Cookie 验证失败，可能已过期")
 
         info = resp["data"]
         self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
         self.current_cookies = cookies
-        logger.info("✅ Cookie 登录成功！")
         return self.user
 
-    async def _login_with_qrcode(self) -> UserInfo:
-        logger.info("🔐 正在获取学堂在线 Cookie...")
+    @override
+    async def _login_with_qrcode(
+        self,
+        display: str = "image",
+        open_browser: bool = False,
+        timeout: int = 120,
+    ) -> UserInfo:
         login_data: dict[str, Any] = {}
-
         request_payload = {
             "op": "requestlogin",
             "role": "web",
@@ -60,17 +61,24 @@ class XuetangXPlatform(BasePlatform):
             "x-client": "web",
         }
 
+        qr_session = QrCodeSession(display=display, open_browser=open_browser)
+        await qr_session.start()
+
         try:
-            async with niquests.AsyncSession(timeout=10, verify=False) as ws_sess:
+            async with niquests.AsyncSession(timeout=10, verify=True) as ws_sess:
                 resp = await ws_sess.get("wss://www.xuetangx.com/wsapp/")
                 if resp.extension is None:
                     raise AuthError("WebSocket 升级失败")
                 await resp.extension.send_payload(json.dumps(request_payload))
+
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + timeout
                 timeout_seconds = 60.0
 
-                while True:
+                while loop.time() < deadline:
+                    remain_time = max(1.0, deadline - loop.time())
                     try:
-                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=timeout_seconds)
+                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=min(timeout_seconds, remain_time))
                         if raw is None:
                             raise AuthError("WebSocket 连接已关闭")
                         message = json.loads(raw)
@@ -81,110 +89,80 @@ class XuetangXPlatform(BasePlatform):
                         if "ticket" in message and message["ticket"]:
                             ticket_resp = await self.client.get(message["ticket"])
                             if ticket_resp.content:
-                                print(draw(ticket_resp.content))
-                            logger.info(f"请使用微信扫码登录 (有效时间: {int(timeout_seconds)}秒)...")
+                                qr_session.create_image(ticket_resp.content)
+                                qr_session.emit_challenge(expires_in=remain_time)
 
                         if message.get("op") == "loginsuccess":
                             login_data.update(message)
+                            qr_session.mark_success()
                             break
-
                     except TimeoutError:
-                        logger.warning("⏳ 二维码已过期，正在重新请求...")
+                        if loop.time() >= deadline:
+                            break
                         await resp.extension.send_payload(json.dumps(request_payload))
 
                 await resp.extension.close()
 
+            if "token" not in login_data:
+                raise AuthError("扫码超时或未获得有效认证回执")
+
+            post_data = {"token": login_data["token"]}
+            response = await self.client.post("https://www.xuetangx.com/account/wx/login/miniapp", json=post_data)
+            cookies = {
+                "csrftoken": response.cookies.get("csrftoken") or "",
+                "sessionid": response.cookies.get("sessionid") or "",
+            }
+
+            if not cookies["csrftoken"] or not cookies["sessionid"]:
+                raise AuthError("登录凭据换取失败")
+
+            user = await self._login_with_cookies(cookies)
+            qr_session.mark_success(name=user.name)
+            if qr_session.display == "browser":
+                await asyncio.sleep(1.2)
+            return user
         except Exception as e:
-            logger.error(f"❌ WebSocket 连接失败: {e}")
-            raise AuthError("WebSocket 连接失败") from e
-
-        if "token" not in login_data:
-            logger.error("❌ 登录失败，未获取到登录信息")
-            raise AuthError("登录失败")
-
-        response = await self.client.post(
-            "https://www.xuetangx.com/api/v1/u/login/wx/",
-            json={
-                "s_s": login_data["token"],
-                "preset_properties": {
-                    "$timezone_offset": -480,
-                    "$screen_height": 1080,
-                    "$screen_width": 1920,
-                    "$lib": "js",
-                    "$lib_version": "1.19.14",
-                    "$latest_traffic_source_type": "直接流量",
-                    "$latest_search_keyword": "未取到值_直接打开",
-                    "$latest_referrer": "",
-                    "$is_first_day": False,
-                    "$referrer": "https://www.xuetangx.com/",
-                    "$referrer_host": "www.xuetangx.com",
-                    "$url": "https://www.xuetangx.com/",
-                    "$url_path": "/",
-                    "$title": "学堂在线 - 精品在线课程学习平台",
-                    "_distinct_id": "auto-generated",
-                },
-                "page_name": "首页",
-            },
-        )
-
-        cookies = {
-            "csrftoken": response.cookies.get("csrftoken") or "",
-            "sessionid": response.cookies.get("sessionid") or "",
-        }
-
-        if not cookies["csrftoken"] or not cookies["sessionid"]:
-            logger.error("❌ Cookie 获取失败！")
-            raise AuthError("Cookie 获取失败")
-
-        logger.info("✅ Cookie 获取成功！")
-        return await self._login_with_cookies(cookies)
+            if isinstance(e, AuthError):
+                raise
+            raise AuthError(f"扫码通信失败: {e}") from e
+        finally:
+            await qr_session.close()
 
     @override
     async def get_courses(self) -> list[Course]:
         url = "https://www.xuetangx.com/api/v1/lms/user/user-courses/"
         resp = await self._request_json("GET", url, params={"status": "1", "page": "1"})
-        if not resp["success"]:
+        if not resp.get("success"):
             raise APIError("获取课程列表失败")
 
-        courses = []
-        for course in resp["data"]["product_list"]:
-            teacher_name = course.get("teacher", {}).get("name") or course.get("teacherName") or course.get("teacher_name")
-            display_name = f"{course['name']} ({teacher_name})" if teacher_name else course["name"]
-            courses.append(
-                Course(
-                    id=course["classroom_id"],
-                    name=display_name,
-                    platform_id="xtzx",
-                    metadata={
-                        "classroom_id": course["classroom_id"],
-                        "sign": course["sign"],
-                        "product_id": course["product_id"],
-                        "sku_id": course["sku_id"],
-                    },
-                )
+        return [
+            Course(
+                id=str(c["course_id"]),
+                name=c["name"],
+                platform_id="xtzx",
+                metadata={
+                    "classroom_id": c["classroom_id"],
+                    "sign": c["sign"],
+                },
             )
-        return courses
-
-    # ── 抽象方法实现 ──
+            for c in resp["data"]["product_list"]
+        ]
 
     @override
     async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         cid = course.metadata["classroom_id"]
         sign = course.metadata["sign"]
-        url = "https://www.xuetangx.com/api/v1/lms/learn/course/chapter"
-        resp = await self._request_json("GET", url, params={"cid": cid, "sign": sign})
-        if not resp["success"]:
-            raise APIError("获取章节信息失败")
+        url = f"https://www.xuetangx.com/api/v1/lms/learn/course/chapter?cid={cid}&sign={sign}"
+        resp = await self._request_json("GET", url)
         return resp["data"]["course_chapter"]
 
     @override
     async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
         cid = course.metadata["classroom_id"]
         sign = course.metadata["sign"]
-        url = "https://www.xuetangx.com/api/v1/lms/learn/course/schedule"
-        resp = await self._request_json("GET", url, params={"cid": cid, "sign": sign})
+        url = f"https://www.xuetangx.com/api/v1/lms/learn/course/schedule?cid={cid}&sign={sign}"
+        resp = await self._request_json("GET", url)
         if not resp.get("success"):
-            logger.warning("⚠️ 获取课程进度失败，默认按未完成处理")
             return {}
 
         raw = resp.get("data", {}).get("leaf_schedules", {})
@@ -214,18 +192,16 @@ class XuetangXPlatform(BasePlatform):
         return "https://www.xuetangx.com/api/v1/lms/exercise/problem_apply/"
 
     @override
-    def _build_submit_payload(self, problem_id: int, answer: list[str]) -> dict[str, Any]:
-        ctx = self._submit_ctx
+    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+        ctx = submit_ctx or {}
         return {
-            "classroom_id": ctx["classroom_id"],
+            "classroom_id": ctx.get("classroom_id"),
             "problem_id": problem_id,
-            "leaf_id": ctx["leaf_id"],
-            "exercise_id": ctx["exercise_id"],
-            "sign": ctx["sign"],
             "answer": answer,
+            "exercise_id": ctx.get("exercise_id"),
+            "leaf_id": ctx.get("leaf_id"),
+            "sign": ctx.get("sign"),
         }
-
-    # ── 视频 ──
 
     @override
     async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
@@ -264,20 +240,17 @@ class XuetangXPlatform(BasePlatform):
             request_kwargs={"params": progress_params},
         )
 
-    # ── 作业 ──
-
     @override
-    async def _prepare_submit_context(self, homework: Homework, course: Course) -> None:
+    async def _prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
         cid = course.metadata["classroom_id"]
         sign = course.metadata["sign"]
 
-        # 需要单独获取 leaf_type_id 用于提交上下文
         url = self._build_leaf_info_url(homework.id, course)
         params = self._get_leaf_info_params(homework.id, course)
         resp = await self._request_json("GET", url, params=params)
         leaf_type_id = resp["data"]["content_info"]["leaf_type_id"]
 
-        self._submit_ctx = {
+        return {
             "leaf_id": homework.id,
             "exercise_id": leaf_type_id,
             "sign": sign,
