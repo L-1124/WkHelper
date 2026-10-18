@@ -18,6 +18,19 @@ type AsyncTaskFactory = Callable[[], Coroutine[Any, Any, None]]
 type TaskItem = tuple[str, AsyncTaskFactory]
 
 
+def dedupe_courses(courses: list[Course]) -> list[Course]:
+    """按「课堂」去重课程列表。
+
+    同一个慕课课程常同时挂在主班与子班两个课堂下（course.id 相同、classroom_id 不同），
+    而章节内容是按课堂区分的：子班往往没有章节。若按 course.id 去重，后出现的空课堂会
+    顶掉有视频的课堂，表现为该课程「暂无视频」。
+    """
+    seen: dict[Any, Course] = {}
+    for course in courses:
+        seen.setdefault(course.metadata.get("classroom_id", course.id), course)
+    return list(seen.values())
+
+
 class Runner:
     """所有平台的通用命令行运行器。"""
 
@@ -139,7 +152,7 @@ class Runner:
         logger.info(f"👤 登录成功：{self.platform.user.name if self.platform.user else '未知'}")
 
         logger.info("📚 正在获取课程列表...")
-        courses = {course.id: course for course in await self.platform.get_courses()}.values()
+        courses = dedupe_courses(await self.platform.get_courses())
 
         if not courses:
             logger.warning("⚠️ 未找到任何课程")
@@ -179,14 +192,24 @@ class Runner:
             logger.info(f"\n🎯 [{idx}/{len(target_courses)}] 处理课程: {course.name}")
             videos_dict = await self.platform.get_videos(course)
             if not videos_dict:
-                logger.warning("暂无视频")
+                logger.warning(
+                    "暂无视频：该课堂的章节树里没有可学习的视频节点，可能是内容只发布在课堂教学活动（回放/课件）里，或老师尚未发布"
+                )
                 continue
 
             video_list = list(videos_dict.items())
             video_names = [vname for _, vname in video_list]
             completed_video_ids = set(course.metadata.get("completed_video_ids", set()))
-            disabled_video_names = {vname for vid, vname in video_list if int(vid) in completed_video_ids}
-            selected_vnames = await self.ui.select_many(f"选择视频 - {course.name}", video_names, disabled_choices=disabled_video_names)
+            completed_video_names = {vname for vid, vname in video_list if int(vid) in completed_video_ids}
+            # 默认勾选未完成的视频：直接回车即学习全部待看视频，已完成的仍保持不可选。
+            pending_video_names = {vname for vname in video_names if vname not in completed_video_names}
+            logger.info(f"🎬 共 {len(video_names)} 个视频，其中待看 {len(pending_video_names)} 个（已默认勾选）")
+            selected_vnames = await self.ui.select_many(
+                f"选择视频 - {course.name}",
+                video_names,
+                default_selected=pending_video_names,
+                disabled_choices=completed_video_names,
+            )
 
             if not selected_vnames:
                 continue

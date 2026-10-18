@@ -9,7 +9,7 @@ import niquests
 import qrcode
 from terminal_qrcode import draw
 
-from wkhelper.core.config import DEFAULT_HEADERS
+from wkhelper.core.config import DEFAULT_HEADERS, VIDEO_THRESHOLD
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
 from wkhelper.platform.base import BasePlatform
@@ -251,6 +251,67 @@ class YuketangPlatform(BasePlatform):
     def _build_leaf_info_url(self, leaf_id: str | int, course: Course) -> str:
         cid = course.metadata["classroom_id"]
         return f"https://www.yuketang.cn/mooc-api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/"
+
+    @override
+    async def _get_completed_video_ids(self, course: Course) -> set[int] | None:
+        """用视频进度接口判断哪些视频已完成。
+
+        雨课堂的章节进度（leaf_schedules）只在部分课程里包含视频条目，视频的权威进度在
+        video-log/get_video_watched_record：{video_id: {rate, completed, watch_length, ...}}。
+        请求失败或返回结构异常时返回 None，由基类退回 leaf_schedules 判断。
+        """
+        if not self.user:
+            await self.login()
+
+        assert self.user is not None
+        user_id = int(self.user.id)
+
+        if "course_id" not in course.metadata:
+            await self._get_chapter_data(course)
+
+        cid = str(course.metadata["classroom_id"])
+        course_id = course.metadata["course_id"]
+        kwargs = self._get_course_kwargs(course)
+
+        try:
+            resp = await self._request_json(
+                "GET",
+                "https://www.yuketang.cn/video-log/get_video_watched_record/",
+                params={
+                    "cid": course_id,
+                    "user_id": user_id,
+                    "classroom_id": cid,
+                    "video_type": "video",
+                    "term": "latest",
+                    "uv_id": course.metadata["university_id"],
+                },
+                **kwargs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"⚠️ 获取视频完成记录失败，改按章节进度判断：{exc}")
+            return None
+
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(resp, dict) or resp.get("code") != 0 or not isinstance(data, dict):
+            logger.warning("⚠️ 获取视频完成记录异常，改按章节进度判断")
+            return None
+
+        completed: set[int] = set()
+        for video_id, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            try:
+                video_id_int = int(video_id)
+            except (TypeError, ValueError):
+                continue
+            try:
+                rate = float(info.get("rate") or 0.0)
+            except (TypeError, ValueError):
+                rate = 0.0
+            # 以服务端判定 completed 为准；个别视频时长缺失时 rate 到不了阈值但 completed=1。
+            if str(info.get("completed")) == "1" or rate >= VIDEO_THRESHOLD:
+                completed.add(video_id_int)
+        return completed
 
     @override
     def _build_exercise_list_url(self, leaf_type_id: int | str) -> str:

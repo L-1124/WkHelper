@@ -143,6 +143,13 @@ class BasePlatform(ABC):
         """返回请求平台 API 时附加的 kwargs（headers/cookies 等）。默认无附加。"""
         return None
 
+    async def _get_completed_video_ids(self, course: Course) -> set[int] | None:  # noqa: ARG002
+        """返回平台权威的「已完成视频 id」集合。
+
+        返回 None 表示平台没有更可靠的来源，基类退回用 _get_leaf_schedules 的进度值判断。
+        """
+        return None
+
     def _parse_submit_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """解析作业提交响应为统一的 {success, is_correct, correct_answer} 格式。"""
         if data.get("success") is True:
@@ -159,7 +166,9 @@ class BasePlatform(ABC):
     async def _build_videos(self, course: Course) -> dict[int, str]:
         """从章节数据构建视频字典（模板方法）。"""
         data = await self._get_chapter_data(course)
-        schedules = await self._get_leaf_schedules(course)
+        # 优先使用平台权威的「已完成视频集合」；没有时退回章节进度值。
+        authoritative_completed = await self._get_completed_video_ids(course)
+        schedules = {} if authoritative_completed is not None else await self._get_leaf_schedules(course)
         videos: dict[int, str] = {}
         completed_video_ids: set[int] = set()
         for leaf, chapter_name, section_name in iter_leaves_with_context(data):
@@ -169,7 +178,10 @@ class BasePlatform(ABC):
             if leaf_id is None:
                 continue
             video_id = int(leaf_id)
-            is_completed = schedules.get(video_id, 0.0) >= 1.0
+            if authoritative_completed is not None:
+                is_completed = video_id in authoritative_completed
+            else:
+                is_completed = schedules.get(video_id, 0.0) >= 1.0
             if is_completed:
                 completed_video_ids.add(video_id)
 
