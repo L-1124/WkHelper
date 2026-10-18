@@ -19,10 +19,10 @@ def _course() -> Course:
 
 
 @pytest.mark.asyncio
-async def test_completed_video_ids_reads_watched_record(monkeypatch, fake_ui):
-    """用 video-log/get_video_watched_record 判定完成：completed=1 或 rate 达标。"""
+async def test_completed_video_ids_reads_watched_record(monkeypatch) -> None:
+    """用 video-log/get_video_watched_record 判定完成：completed=1 或 rate 达到 100%。"""
     async with niquests.AsyncSession() as client:
-        platform = YuketangPlatform(client, fake_ui)
+        platform = YuketangPlatform(client)
         platform.user = UserInfo(id=108178260, name="tester")
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -34,37 +34,54 @@ async def test_completed_video_ids_reads_watched_record(monkeypatch, fake_ui):
                 "data": {
                     "91317672": {"completed": 1, "rate": 1.0},
                     "91317622": {"completed": 0, "rate": 0.2},
+                    # 未达 100% 且平台未判定完成，不因旧的 0.95 隐式阈值算作已完成
                     "91317623": {"completed": 0, "rate": 0.97},
                 },
             }
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        assert await platform._get_completed_video_ids(_course()) == {91317672, 91317623}
+        assert await platform._get_completed_video_ids(_course()) == {91317672}
 
 
 @pytest.mark.asyncio
-async def test_completed_video_ids_returns_none_on_error(monkeypatch, fake_ui):
-    """接口异常时返回 None，让基类退回 leaf_schedules 判断，而不是宣称全部未完成。"""
+async def test_completed_video_ids_returns_none_on_error(monkeypatch) -> None:
+    """接口异常时返回 None，让基类退回章节进度判断，而不是宣称全部未完成。"""
     async with niquests.AsyncSession() as client:
-        platform = YuketangPlatform(client, fake_ui)
+        platform = YuketangPlatform(client)
         platform.user = UserInfo(id=1, name="tester")
 
         async def boom(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
             raise RuntimeError("500 Server Error")
 
         monkeypatch.setattr(platform, "_request_json", boom)
+
         assert await platform._get_completed_video_ids(_course()) is None
 
 
 @pytest.mark.asyncio
-async def test_build_videos_marks_completed_from_platform(monkeypatch, fake_ui):
+async def test_completed_video_ids_returns_none_on_bad_payload(monkeypatch) -> None:
+    """返回结构异常时同样退回章节进度，不把异常当成「全部未完成」。"""
+    async with niquests.AsyncSession() as client:
+        platform = YuketangPlatform(client)
+        platform.user = UserInfo(id=1, name="tester")
+
+        async def bad_payload(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            return {"code": 1001, "data": None}
+
+        monkeypatch.setattr(platform, "_request_json", bad_payload)
+
+        assert await platform._get_completed_video_ids(_course()) is None
+
+
+@pytest.mark.asyncio
+async def test_build_videos_marks_completed_from_platform(monkeypatch) -> None:
     """有权威完成集合时，视频列表按它标记 [已完成]，且不再请求章节进度。"""
     async with niquests.AsyncSession() as client:
-        platform = YuketangPlatform(client, fake_ui)
+        platform = YuketangPlatform(client)
         course = _course()
 
-        async def fake_chapter_data(course: Course) -> list[dict[str, Any]]:
+        async def fake_chapter_data(current: Course) -> list[dict[str, Any]]:
             return [
                 {
                     "name": "第一章",
@@ -80,10 +97,10 @@ async def test_build_videos_marks_completed_from_platform(monkeypatch, fake_ui):
                 }
             ]
 
-        async def fake_completed(course: Course) -> set[int]:
+        async def fake_completed(current: Course) -> set[int]:
             return {11}
 
-        async def forbidden_schedules(course: Course) -> dict[int, float]:
+        async def forbidden_schedules(current: Course) -> dict[int, float]:
             raise AssertionError("有权威完成集合时不应再请求章节进度")
 
         monkeypatch.setattr(platform, "_get_chapter_data", fake_chapter_data)

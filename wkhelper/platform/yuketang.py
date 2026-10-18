@@ -3,42 +3,28 @@
 import asyncio
 import json
 import logging
-from typing import Any, Literal, cast, override
+from typing import Any, override
 
 import niquests
-import qrcode
-from terminal_qrcode import draw
 
-from wkhelper.core.config import DEFAULT_HEADERS, VIDEO_THRESHOLD
+from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
 from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.login_helper import QrCodeSession
 
 logger = logging.getLogger(__name__)
-
-
-def render_login_qrcode(
-    payload: str,
-    *,
-    renderer: Literal["auto", "halfblock", "iterm2", "kitty", "sixel", "wezterm"] = "auto",
-) -> str:
-    """将登录字符串渲染为终端二维码。"""
-    qr = qrcode.QRCode(border=1)
-    qr.add_data(payload)
-    qr.make(fit=True)
-    return str(draw(cast(Any, qr.get_matrix()), renderer=renderer))
 
 
 class YuketangPlatform(BasePlatform):
     """雨课堂平台。"""
 
+    @override
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         csrftoken = cookies.get("csrftoken", "")
         sessionid = cookies.get("sessionid", "")
         if not csrftoken or not sessionid:
             raise AuthError("Cookie 缺少 csrftoken 或 sessionid")
-
-        logger.info("🔐 正在验证 Cookie...")
 
         self.client.headers.update(
             {
@@ -53,19 +39,21 @@ class YuketangPlatform(BasePlatform):
 
         data = await self._request_json("GET", "https://www.yuketang.cn/api/v3/user/basic-info")
         if data["code"] != 0:
-            logger.error("❌ Cookie 验证失败，可能已过期")
-            raise AuthError("Cookie 验证失败，请重新获取有效 Cookie")
+            raise AuthError("Cookie 验证失败，可能已过期")
 
         info = data["data"]
         self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
         self.current_cookies = cookies
-        logger.info("✅ Cookie 登录成功！")
         return self.user
 
-    async def _login_with_qrcode(self) -> UserInfo:
-        logger.info("🔐 正在获取雨课堂 Cookie...")
+    @override
+    async def _login_with_qrcode(
+        self,
+        display: str = "image",
+        open_browser: bool = False,
+        timeout: int = 120,
+    ) -> UserInfo:
         login_data: dict[str, Any] = {}
-
         request_payload = {
             "op": "requestlogin",
             "role": "web",
@@ -73,60 +61,70 @@ class YuketangPlatform(BasePlatform):
             "type": "qrcode",
         }
 
+        qr_session = QrCodeSession(display=display, open_browser=open_browser)
+        await qr_session.start()
+
         try:
-            async with niquests.AsyncSession(timeout=10, verify=False) as ws_sess:
+            async with niquests.AsyncSession(timeout=10, verify=True) as ws_sess:
                 resp = await ws_sess.get("wss://www.yuketang.cn/wsapp/")
                 if resp.extension is None:
                     raise AuthError("WebSocket 升级失败")
                 await resp.extension.send_payload(json.dumps(request_payload))
-                timeout_seconds = 60.0
 
-                while True:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + timeout
+
+                while loop.time() < deadline:
+                    remain_time = max(1.0, deadline - loop.time())
                     try:
-                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=timeout_seconds)
+                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=min(60.0, remain_time))
                         if raw is None:
                             raise AuthError("WebSocket 连接已关闭")
                         message = json.loads(raw)
 
                         if "qrcode" in message and message["qrcode"]:
-                            print(render_login_qrcode(message["qrcode"], renderer="halfblock"))
-                            logger.info(f"请使用雨课堂扫码登录 (判定有效时间: {int(timeout_seconds)}秒)...")
+                            qr_session.create_image(message["qrcode"])
+                            qr_session.emit_challenge(expires_in=remain_time)
 
                         if message.get("op") == "loginsuccess":
                             login_data.update(message)
+                            qr_session.mark_success()
                             break
-
                     except TimeoutError:
-                        logger.warning("⏳ 二维码可能已过期，正在重新请求...")
+                        if loop.time() >= deadline:
+                            break
                         await resp.extension.send_payload(json.dumps(request_payload))
 
                 await resp.extension.close()
 
+            if "Auth" not in login_data or "UserID" not in login_data:
+                raise AuthError("扫码超时或未获得有效认证回执")
+
+            response = await self.client.post(
+                "https://www.yuketang.cn/pc/web_login",
+                json={"Auth": login_data["Auth"], "UserID": str(login_data["UserID"])},
+                headers=DEFAULT_HEADERS,
+            )
+
+            cookies = {
+                "csrftoken": response.cookies.get("csrftoken") or "",
+                "sessionid": response.cookies.get("sessionid") or "",
+            }
+
+            if not cookies["csrftoken"] or not cookies["sessionid"]:
+                raise AuthError("登录凭据换取失败")
+
+            user = await self._login_with_cookies(cookies)
+            qr_session.mark_success(name=user.name)
+            if qr_session.display == "browser":
+                await asyncio.sleep(1.2)
+            return user
         except Exception as e:
-            logger.error(f"❌ WebSocket 连接失败: {e}")
-            raise AuthError("WebSocket 连接失败") from e
-
-        if "Auth" not in login_data or "UserID" not in login_data:
-            logger.error("❌ 登录失败，未获取到登录信息")
-            raise AuthError("登录失败")
-
-        response = await self.client.post(
-            "https://www.yuketang.cn/pc/web_login",
-            json={"Auth": login_data["Auth"], "UserID": str(login_data["UserID"])},
-            headers=DEFAULT_HEADERS,
-        )
-
-        cookies = {
-            "csrftoken": response.cookies.get("csrftoken") or "",
-            "sessionid": response.cookies.get("sessionid") or "",
-        }
-
-        if not cookies["csrftoken"] or not cookies["sessionid"]:
-            logger.error("❌ Cookie 获取失败！")
-            raise AuthError("Cookie 获取失败")
-
-        logger.info("✅ Cookie 获取成功！")
-        return await self._login_with_cookies(cookies)
+            if isinstance(e, AuthError):
+                raise
+            raise AuthError(f"扫码通信失败: {e}") from e
+        finally:
+            await qr_session.close()
 
     @override
     async def get_courses(self) -> list[Course]:
@@ -146,7 +144,7 @@ class YuketangPlatform(BasePlatform):
                 display_name += f" - {class_name}"
             courses.append(
                 Course(
-                    id=c["course"]["id"],
+                    id=str(c["course"]["id"]),
                     name=display_name,
                     platform_id="ykt",
                     metadata={
@@ -185,11 +183,8 @@ class YuketangPlatform(BasePlatform):
             raise APIError("获取课堂信息失败")
         return resp["data"]
 
-    # ── 抽象方法实现 ──
-
     @override
     async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
-        """获取章节树数据（包含 side-effect: 设置 course.metadata 的 sign/sku/course_id）。"""
         info = await self._get_classroom_info(course)
         course.metadata["sign"] = info.get("course_sign", "")
         course.metadata["free_sku_id"] = info.get("free_sku_id")
@@ -235,7 +230,6 @@ class YuketangPlatform(BasePlatform):
             **kwargs,
         )
         if not resp.get("success"):
-            logger.warning("⚠️ 获取课程进度失败，默认按未完成处理")
             return {}
 
         raw = resp.get("data", {}).get("leaf_schedules", {})
@@ -254,46 +248,36 @@ class YuketangPlatform(BasePlatform):
 
     @override
     async def _get_completed_video_ids(self, course: Course) -> set[int] | None:
-        """用视频进度接口判断哪些视频已完成。
-
-        雨课堂的章节进度（leaf_schedules）只在部分课程里包含视频条目，视频的权威进度在
-        video-log/get_video_watched_record：{video_id: {rate, completed, watch_length, ...}}。
-        请求失败或返回结构异常时返回 None，由基类退回 leaf_schedules 判断。
-        """
+        """用视频进度接口判断哪些视频已完成。"""
         if not self.user:
-            await self.login()
-
-        assert self.user is not None
+            raise AuthError("未登录平台")
         user_id = int(self.user.id)
 
         if "course_id" not in course.metadata:
             await self._get_chapter_data(course)
 
-        cid = str(course.metadata["classroom_id"])
-        course_id = course.metadata["course_id"]
         kwargs = self._get_course_kwargs(course)
-
         try:
             resp = await self._request_json(
                 "GET",
                 "https://www.yuketang.cn/video-log/get_video_watched_record/",
                 params={
-                    "cid": course_id,
+                    "cid": course.metadata["course_id"],
                     "user_id": user_id,
-                    "classroom_id": cid,
+                    "classroom_id": str(course.metadata["classroom_id"]),
                     "video_type": "video",
                     "term": "latest",
                     "uv_id": course.metadata["university_id"],
                 },
                 **kwargs,
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"⚠️ 获取视频完成记录失败，改按章节进度判断：{exc}")
+        except Exception as exc:
+            logger.warning(f"获取视频完成记录失败，改按章节进度判断: {exc}")
             return None
 
-        data = resp.get("data") if isinstance(resp, dict) else None
-        if not isinstance(resp, dict) or resp.get("code") != 0 or not isinstance(data, dict):
-            logger.warning("⚠️ 获取视频完成记录异常，改按章节进度判断")
+        data = resp.get("data")
+        if resp.get("code") != 0 or not isinstance(data, dict):
+            logger.warning("获取视频完成记录异常，改按章节进度判断")
             return None
 
         completed: set[int] = set()
@@ -308,8 +292,8 @@ class YuketangPlatform(BasePlatform):
                 rate = float(info.get("rate") or 0.0)
             except (TypeError, ValueError):
                 rate = 0.0
-            # 以服务端判定 completed 为准；个别视频时长缺失时 rate 到不了阈值但 completed=1。
-            if str(info.get("completed")) == "1" or rate >= VIDEO_THRESHOLD:
+            # 以服务端判定 completed 为准；个别视频时长缺失时 rate 到不了 1.0，但 completed=1。
+            if str(info.get("completed")) == "1" or rate >= 1.0:
                 completed.add(video_id_int)
         return completed
 
@@ -326,23 +310,20 @@ class YuketangPlatform(BasePlatform):
         return "https://www.yuketang.cn/mooc-api/v1/lms/exercise/problem_apply/"
 
     @override
-    def _build_submit_payload(self, problem_id: int, answer: list[str]) -> dict[str, Any]:
+    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+        cid = submit_ctx.get("classroom_id") if submit_ctx else None
         return {
-            "classroom_id": self._submit_ctx["classroom_id"],
+            "classroom_id": cid,
             "problem_id": problem_id,
             "answer": answer,
         }
 
-    # ── 视频 ──
-
     @override
     async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
         if not self.user:
-            await self.login()
+            raise AuthError("未登录平台")
 
-        assert self.user is not None
         user_id = int(self.user.id)
-
         if "free_sku_id" not in course.metadata:
             await self._get_chapter_data(course)
 
@@ -375,10 +356,8 @@ class YuketangPlatform(BasePlatform):
             request_kwargs=kwargs,
         )
 
-    # ── 作业 ──
-
     @override
-    async def _prepare_submit_context(self, homework: Homework, course: Course) -> None:
-        self._submit_ctx = {
+    async def _prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
+        return {
             "classroom_id": course.metadata["classroom_id"],
         }

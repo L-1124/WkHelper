@@ -20,7 +20,7 @@ def format_leaf_label(
     if section_name and section_name != chapter_name:
         parts.append(section_name)
     parts.append(raw_name)
-    return f"{' › '.join(parts)} (ID:{leaf.get('id')})"
+    return f"{' / '.join(parts)} (ID:{leaf.get('id')})"
 
 
 def iter_leaves_with_context(chapter_data: list[dict[str, Any]]) -> Iterator[LeafContext]:

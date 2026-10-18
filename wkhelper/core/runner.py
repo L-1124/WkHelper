@@ -1,308 +1,238 @@
-"""核心程序运行器。"""
+"""核心调度器：无状态无交互的原子用例执行。"""
 
 import asyncio
+import json
 import logging
-import re
-from collections.abc import Callable, Coroutine
-from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from wkhelper.core.config import MAX_WORKERS_HOMEWORK, MAX_WORKERS_VIDEO
-from wkhelper.core.homework import save_platform_answers
-from wkhelper.core.models import Course, Homework
+import msgspec
+
+from wkhelper.cli.events import emit_event
+from wkhelper.core.models import (
+    Course,
+    Homework,
+    HomeworkSubmitResult,
+    VideoParameters,
+    VideoPlanSummary,
+    VideoStatus,
+    VideoTarget,
+    VideoTargetResult,
+    VideoWatchResult,
+    parse_json_text,
+)
+from wkhelper.core.video import VideoWatchOptions
 from wkhelper.platform.base import BasePlatform
 
 logger = logging.getLogger(__name__)
 
-type AsyncTaskFactory = Callable[[], Coroutine[Any, Any, None]]
-type TaskItem = tuple[str, AsyncTaskFactory]
-
-
-def dedupe_courses(courses: list[Course]) -> list[Course]:
-    """按「课堂」去重课程列表。
-
-    同一个慕课课程常同时挂在主班与子班两个课堂下（course.id 相同、classroom_id 不同），
-    而章节内容是按课堂区分的：子班往往没有章节。若按 course.id 去重，后出现的空课堂会
-    顶掉有视频的课堂，表现为该课程「暂无视频」。
-    """
-    seen: dict[Any, Course] = {}
-    for course in courses:
-        seen.setdefault(course.metadata.get("classroom_id", course.id), course)
-    return list(seen.values())
-
 
 class Runner:
-    """所有平台的通用命令行运行器。"""
+    """原子化用例执行器。"""
 
-    def __init__(self, platform: BasePlatform):
+    def __init__(self, platform: BasePlatform) -> None:
         self.platform = platform
-        self.ui = platform.ui
 
-    @staticmethod
-    def _extract_chapter_lecture_tag(text: str) -> tuple[str | None, str] | None:
-        """从标题中提取“第X章”和“第Y讲”标签。"""
-        chapter_match = re.search(r"(第[一二三四五六七八九十百千万0-9]+章)", text)
-        lecture_match = re.search(r"(第[一二三四五六七八九十百千万0-9]+讲)", text)
-        if not lecture_match:
-            return None
-        chapter = chapter_match.group(1) if chapter_match else None
-        lecture = lecture_match.group(1)
-        return chapter, lecture
-
-    @staticmethod
-    def _is_video_homework_lecture_match(video_tag: tuple[str | None, str], homework_tag: tuple[str | None, str]) -> bool:
-        """判断视频与作业是否属于同一讲次。"""
-        video_chapter, video_lecture = video_tag
-        homework_chapter, homework_lecture = homework_tag
-        if video_lecture != homework_lecture:
-            return False
-        if video_chapter and homework_chapter and video_chapter != homework_chapter:
-            return False
-        return True
-
-    async def _auto_do_homework_by_videos(
+    async def execute_video_task(
         self,
         course: Course,
-        selected_video_names: list[str],
-    ) -> None:
-        """根据已选视频讲次自动完成对应作业。"""
-        video_tags = {tag for name in selected_video_names if (tag := self._extract_chapter_lecture_tag(name))}
-        if not video_tags:
-            logger.info("ℹ️ 未识别到讲次标签，跳过自动作业")
-            return
-
-        homeworks = await self.platform.get_homeworks(course)
-        if not homeworks:
-            logger.info("ℹ️ 无可执行作业，跳过自动作业")
-            return
-
-        matched_hws = []
-        for hw in homeworks:
-            hw_tag = self._extract_chapter_lecture_tag(hw.name)
-            if (
-                hw_tag
-                and any(self._is_video_homework_lecture_match(video_tag, hw_tag) for video_tag in video_tags)
-                and not bool(hw.metadata.get("is_completed"))
-            ):
-                matched_hws.append(hw)
-
-        if not matched_hws:
-            logger.info("ℹ️ 未找到对应讲次的未完成作业")
-            return
-
-        logger.info(f"🧩 已匹配到 {len(matched_hws)} 份对应作业，自动答题中...")
-        tasks: list[TaskItem] = []
-        for hw in matched_hws:
-
-            def create_task(h=hw, c=course):
-                return lambda: self.platform.do_homework(h, c, is_random=False)
-
-            tasks.append((hw.name, create_task()))
-
-        await self._run_parallel_tasks("对应作业任务", tasks, MAX_WORKERS_HOMEWORK)
-
-    async def _run_parallel_tasks(
-        self,
-        title: str,
-        items: list[TaskItem],
-        max_workers: int,
-    ) -> None:
-        """并发执行异步任务并输出摘要。"""
-        if not items:
-            return
-
-        failed: list[tuple[str, str]] = []
-        success = 0
-        semaphore = asyncio.Semaphore(max_workers)
-        result_lock = asyncio.Lock()
-
-        async def worker(name: str, task_coro_factory: AsyncTaskFactory):
-            nonlocal success
-            try:
-                async with semaphore:
-                    await task_coro_factory()
-                async with result_lock:
-                    success += 1
-            except Exception as exc:  # noqa: BLE001
-                async with result_lock:
-                    failed.append((name, str(exc)))
-            finally:
-                tracker.update()
-
-        with self.ui.track_progress(title, len(items)) as tracker:
-            async with asyncio.TaskGroup() as tg:
-                for name, fn in items:
-                    tg.create_task(worker(name, fn))
-
-        msg = f"📊 {title}摘要：总数 {len(items)}，成功 {success}，失败 {len(failed)}"
-        if not failed:
-            logger.info(msg)
-        else:
-            logger.warning(msg)
-
-        if failed:
-            self.ui.show_table(
-                f"❌ {title}失败项目",
-                ["任务名", "错误原因"],
-                [[name, str(exc)] for name, exc in failed],
-            )
-
-    async def run_main_menu(self) -> None:
-        """顶级功能菜单。"""
-        logger.info(f"👤 登录成功：{self.platform.user.name if self.platform.user else '未知'}")
-
-        logger.info("📚 正在获取课程列表...")
-        courses = dedupe_courses(await self.platform.get_courses())
-
-        if not courses:
-            logger.warning("⚠️ 未找到任何课程")
-            return
-
-        while True:
-            mode = await self.ui.select_one(
-                f"功能菜单 (共 {len(courses)} 门课程)",
-                ["学习课程视频", "完成课程作业", "下载课程答案", "导出课程题目 (Markdown)", "退出"],
-            )
-            if mode in (None, "退出"):
-                break
-
-            # 课程选择
-            course_names = [c.name for c in courses]
-            selected_names = await self.ui.select_many("请选择要操作的课程", course_names)
-            if not selected_names:
-                continue
-
-            target_courses = [c for c in courses if c.name in selected_names]
-
-            match mode:
-                case "学习课程视频":
-                    await self.batch_learn_videos(target_courses)
-                case "完成课程作业":
-                    await self.batch_do_homework(target_courses)
-                case "下载课程答案":
-                    await self.batch_save_answers(target_courses)
-                case "导出课程题目 (Markdown)":
-                    await self.batch_export_questions(target_courses)
-
-            logger.info("✅ 流程结束！\n")
-
-    async def batch_learn_videos(self, target_courses: list[Course]):
-        """学习所选课程的视频。"""
-        for idx, course in enumerate(target_courses, 1):
-            logger.info(f"\n🎯 [{idx}/{len(target_courses)}] 处理课程: {course.name}")
-            videos_dict = await self.platform.get_videos(course)
-            if not videos_dict:
-                logger.warning(
-                    "暂无视频：该课堂的章节树里没有可学习的视频节点，可能是内容只发布在课堂教学活动（回放/课件）里，或老师尚未发布"
-                )
-                continue
-
-            video_list = list(videos_dict.items())
-            video_names = [vname for _, vname in video_list]
-            completed_video_ids = set(course.metadata.get("completed_video_ids", set()))
-            completed_video_names = {vname for vid, vname in video_list if int(vid) in completed_video_ids}
-            # 默认勾选未完成的视频：直接回车即学习全部待看视频，已完成的仍保持不可选。
-            pending_video_names = {vname for vname in video_names if vname not in completed_video_names}
-            logger.info(f"🎬 共 {len(video_names)} 个视频，其中待看 {len(pending_video_names)} 个（已默认勾选）")
-            selected_vnames = await self.ui.select_many(
-                f"选择视频 - {course.name}",
-                video_names,
-                default_selected=pending_video_names,
-                disabled_choices=completed_video_names,
-            )
-
-            if not selected_vnames:
-                continue
-
-            auto_do_homework = await self.ui.confirm(
-                "完成视频后是否自动完成对应讲次作业？",
-                default=False,
-            )
-
-            # 构造任务
-            tasks: list[TaskItem] = []
-            for vid, vname in video_list:
-                if vname in selected_vnames:
-                    # 使用闭包绑定变量
-                    def create_task(v_id=vid, v_name=vname, c=course):
-                        return lambda: self.platform.do_video(str(v_id), v_name, c)
-
-                    tasks.append((vname, create_task()))
-
-            await self._run_parallel_tasks("视频任务", tasks, MAX_WORKERS_VIDEO)
-            if auto_do_homework:
-                await self._auto_do_homework_by_videos(course, selected_vnames)
-
-    async def batch_do_homework(self, target_courses: list[Course]):
-        """完成所选课程作业。"""
-        for idx, course in enumerate(target_courses, 1):
-            logger.info(f"\n📝 [{idx}/{len(target_courses)}] 获取课程作业: {course.name}")
-            homeworks = await self.platform.get_homeworks(course)
-
-            if not homeworks:
-                logger.warning("暂无作业")
-                continue
-
-            hw_labels = []
-            hw_map: dict[str, Homework] = {}
-            for hw in homeworks:
-                deadline_str = datetime.fromtimestamp(hw.deadline / 1000).strftime("%Y-%m-%d %H:%M") if hw.deadline else "无截止时间"
-                label = f"{hw.name} (截止: {deadline_str})"
-                hw_labels.append(label)
-                hw_map[label] = hw
-
-            selected_labels = await self.ui.select_many(
-                f"选择作业 - {course.name}",
-                hw_labels,
-                disabled_choices={label for label, hw in hw_map.items() if bool(hw.metadata.get("is_completed"))},
-            )
-            if not selected_labels:
-                continue
-
-            target_hws = [hw_map[label] for label in selected_labels]
-            # 课堂作业统一使用自动答题；随机答题仅用于探测答案，不用于课堂作业提交流程。
-            is_random = False
-            logger.info(f"🧠 模式：自动，共 {len(target_hws)} 份作业")
-
-            tasks: list[TaskItem] = []
-            for hw in target_hws:
-                # 使用闭包绑定变量
-                def create_task(h=hw, c=course, r=is_random):
-                    return lambda: self.platform.do_homework(h, c, is_random=r)
-
-                tasks.append((hw.name, create_task()))
-
-            await self._run_parallel_tasks("作业任务", tasks, MAX_WORKERS_HOMEWORK)
-
-    async def batch_save_answers(self, target_courses: list[Course]):
-        """保存所选课程答案。"""
-        do_random_answer_first = await self.ui.confirm(
-            "下载答案前是否先进行随机答题以获取正确答案？",
-            default=False,
+        video_id: str,
+        video_name: str,
+        options: VideoWatchOptions | None = None,
+    ) -> VideoWatchResult:
+        """执行单个视频观看任务。"""
+        return await self.platform.do_video(
+            video_id=video_id,
+            video_name=video_name,
+            course=course,
+            options=options,
         )
 
-        for course in target_courses:
+    @staticmethod
+    def _failed_result(target: VideoTarget, message: str, status: VideoStatus = "failed") -> VideoTargetResult:
+        """构造失败或未执行的结果记录。"""
+        return VideoTargetResult(
+            course_id=target.course_id,
+            video_id=target.video_id,
+            video_name=target.name or target.video_id,
+            status=status,
+            platform_completed=False,
+            initial_rate=0.0,
+            final_rate=0.0,
+            heartbeats_sent=0,
+            duration_seconds=0.0,
+            message=message,
+        )
+
+    @staticmethod
+    def _load_completed_records(resume_from: str | Path, target_keys: set[str]) -> list[VideoTargetResult]:
+        """从检查点读取已完成记录，仅保留属于当前目标集的条目。"""
+        resume_path = Path(resume_from)
+        if not resume_path.exists():
+            return []
+
+        try:
+            checkpoint = parse_json_text(resume_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.debug(f"读取恢复检查点失败: {exc}")
+            return []
+
+        if not isinstance(checkpoint, dict):
+            return []
+        raw_results = checkpoint.get("results")
+        if not isinstance(raw_results, list):
+            return []
+
+        preserved: list[VideoTargetResult] = []
+        seen: set[str] = set()
+        for index, raw_item in enumerate(raw_results, 1):
             try:
-                if do_random_answer_first:
-                    logger.info(f"🎲 先执行随机答题以补充答案：{course.name}")
-                    homeworks = await self.platform.get_homeworks(course)
-                    for hw in homeworks:
-                        if bool(hw.metadata.get("is_completed")):
-                            continue
-                        await self.platform.do_homework(hw, course, is_random=True)
+                record = VideoTargetResult.from_mapping(raw_item, f"检查点第 {index} 条记录")
+            except ValueError as exc:
+                logger.debug(f"跳过无效检查点记录: {exc}")
+                continue
+            key = f"{record.course_id}:{record.video_id}"
+            if key in target_keys and key not in seen and record.status in ("completed", "threshold_reached"):
+                seen.add(key)
+                preserved.append(record)
+        return preserved
 
-                # 注意：此处要求 save_platform_answers 也是异步的
-                await save_platform_answers(self.platform, course)
-                logger.info(f"✅ 下载答案完成：{course.name}")
-            except Exception as exc:  # noqa: BLE001
-                logger.error(f"❌ 下载答案失败：{course.name}，原因：{exc}")
+    async def execute_video_plan(
+        self,
+        courses_map: dict[str, Course],
+        targets: list[VideoTarget],
+        concurrency: int = 1,
+        on_error: str = "stop",
+        default_options: VideoWatchOptions | None = None,
+        plan_parameters: VideoParameters | None = None,
+        cli_parameters: VideoParameters | None = None,
+        checkpoint_file: str | Path | None = None,
+        resume_from: str | Path | None = None,
+    ) -> VideoPlanSummary:
+        """执行 Agent 编写的批量视频计划。"""
+        base_options = default_options or VideoWatchOptions()
+        semaphore = asyncio.Semaphore(max(1, concurrency))
 
-    async def batch_export_questions(self, target_courses: list[Course]):
-        """导出所选课程题目到 Markdown 文件。"""
-        from wkhelper.core.exporter import export_questions_to_markdown
+        # 1. 目标排重（相同 course_id + video_id 只保留第一个）
+        deduped_targets: list[VideoTarget] = []
+        seen_keys: set[str] = set()
+        for target in targets:
+            key = f"{target.course_id}:{target.video_id}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped_targets.append(target)
 
-        for course in target_courses:
+        # 2. 读取已有检查点恢复记录（仅恢复属于本次计划 targets 的完成项）
+        preserved_records = self._load_completed_records(resume_from, seen_keys) if resume_from else []
+        completed_target_keys = {f"{record.course_id}:{record.video_id}" for record in preserved_records}
+
+        results: list[VideoTargetResult] = list(preserved_records)
+        lock = asyncio.Lock()
+        stop_flag = False
+        plan_deadline = asyncio.get_running_loop().time() + base_options.total_timeout
+
+        def _save_checkpoint() -> None:
+            if not checkpoint_file:
+                return
+            cp_path = Path(checkpoint_file)
+            payload: dict[str, Any] = {
+                "total_targets": len(deduped_targets),
+                "processed": len(results),
+                "results": results,
+            }
+            tmp_path = cp_path.with_suffix(".tmp")
             try:
-                await export_questions_to_markdown(self.platform, course)
-            except Exception as exc:  # noqa: BLE001
-                logger.error(f"❌ 导出课程题目失败：{course.name}，原因：{exc}")
+                cp_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path.write_text(
+                    json.dumps(msgspec.to_builtins(payload), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                tmp_path.replace(cp_path)
+            except OSError as exc:
+                logger.error(f"保存检查点失败: {exc}")
+
+        async def worker(target: VideoTarget) -> None:
+            nonlocal stop_flag
+            if stop_flag:
+                return
+
+            target_key = f"{target.course_id}:{target.video_id}"
+            # 已从检查点恢复的完成项直接跳过
+            if target_key in completed_target_keys:
+                return
+
+            course = courses_map.get(target.course_id)
+            if course is None:
+                async with lock:
+                    results.append(self._failed_result(target, f"找不到课程 ID: {target.course_id}"))
+                    _save_checkpoint()
+                    if on_error == "stop":
+                        stop_flag = True
+                return
+
+            async with semaphore:
+                if stop_flag:
+                    return
+                # 总预算耗尽后不再启动新目标
+                if asyncio.get_running_loop().time() >= plan_deadline:
+                    async with lock:
+                        results.append(self._failed_result(target, "整次执行预算已耗尽，目标未启动", status="stopped"))
+                        _save_checkpoint()
+                        stop_flag = True
+                    return
+                try:
+                    # 内建默认值 < 计划级参数 < 目标级参数 < 本次命令行显式覆盖
+                    merged = (
+                        base_options.with_parameters(plan_parameters).with_parameters(target.parameters).with_parameters(cli_parameters)
+                    )
+                    res = await self.platform.do_video(
+                        video_id=target.video_id,
+                        video_name=target.name or target.video_id,
+                        course=course,
+                        options=merged,
+                    )
+                    record = res.with_course_id(target.course_id)
+                    async with lock:
+                        results.append(record)
+                        _save_checkpoint()
+                        if record.status in ("failed", "timed_out", "stalled") and on_error == "stop":
+                            stop_flag = True
+                except Exception as exc:
+                    async with lock:
+                        results.append(self._failed_result(target, str(exc)))
+                        _save_checkpoint()
+                        if on_error == "stop":
+                            stop_flag = True
+
+        async with asyncio.TaskGroup() as tg:
+            for target in deduped_targets:
+                tg.create_task(worker(target))
+
+        completed_count = sum(1 for record in results if record.status in ("completed", "threshold_reached"))
+        return VideoPlanSummary(
+            total=len(deduped_targets),
+            completed=completed_count,
+            failed=len(results) - completed_count,
+            results=results,
+        )
+
+    async def execute_homework_submit(
+        self,
+        course: Course,
+        homework: Homework,
+        answers: dict[str, list[str]],
+    ) -> HomeworkSubmitResult:
+        """执行作业答案提交。"""
+        emit_event("homework.started", {"course_id": str(course.id), "homework_id": str(homework.id), "name": homework.name})
+        result = await self.platform.do_homework(homework, course, answers=answers)
+        emit_event(
+            "homework.finished",
+            {
+                "course_id": str(course.id),
+                "homework_id": str(homework.id),
+                "total": result.total,
+                "submitted_count": result.submitted_count,
+                "correct_count": result.correct_count,
+            },
+        )
+        return result
