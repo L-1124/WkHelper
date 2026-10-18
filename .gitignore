@@ -174,3 +174,6 @@ __marimo__/
 credentials.db
 exports/
 skills-lock.json
+
+# 本地 Agent/IDE 目录
+.agents/
