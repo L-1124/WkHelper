@@ -578,6 +578,18 @@ class BasePlatform(ABC):
                     completed=is_completed,
                 )
             )
+
+        for exam in exams:
+            try:
+                cover = await self.get_exam_cover(exam.id, course)
+            except Exception as exc:  # 单个考试封面失败不影响整体列表
+                logger.debug(f"考试 {exam.id} 封面查询失败: {exc}")
+                continue
+            exam.status = cover.status
+            if cover.status == "已交卷":
+                exam.completed = True
+            elif cover.status == "已缺考":
+                exam.overdue = True
         return exams
 
     @staticmethod
@@ -596,9 +608,104 @@ class BasePlatform(ABC):
         """进入考场并申请考试授权令牌。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现进入考场接口")
 
+    def bind_exam_room(self, host: str, eid: int, login_url: str) -> None:
+        """绑定已存在的考场会话，避免重复换票把浏览器端挤下线。"""
+        self._exam_room_binding = (host, eid, login_url)
+
     async def _open_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
-        """换取考场令牌并完成换票，返回 (exam_host, exam_id, 考场直达 URL)。"""
+        """返回 (exam_host, exam_id, 考场直达 URL)；已绑定会话时不再换票。"""
+        binding = getattr(self, "_exam_room_binding", None)
+        if binding is not None:
+            return binding
+        return await self._mint_exam_room(leaf_id, course)
+
+    async def _mint_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
+        """换票建立新的考场会话；子类实现。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现考场令牌接口")
+
+    @staticmethod
+    def _exam_status_text(raw: Any) -> str:
+        """考场 result.status 归一：1 答题中，2-5 已交卷，0/6 未开始，其余原样。"""
+        if raw in (2, 3, 4, 5):
+            return "已交卷"
+        if raw == 1:
+            return "答题中"
+        if raw in (0, 6):
+            return "未开始"
+        return str(raw) if raw is not None else "未知"
+
+    async def get_exam_room_status(self, leaf_id: str | int, course: Course) -> str | None:
+        """读取考场子系统权威状态；失败时返回 None。"""
+        try:
+            host, eid, _login_url = await self._open_exam_room(leaf_id, course)
+            resp = await self._request_json("GET", f"{host}/exam_room/cover", params={"exam_id": eid})
+        except (APIError, AuthError, RiskControlError, NotImplementedError):
+            return None
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        result = data.get("result") if isinstance(data.get("result"), dict) else {}
+        if "status" not in result:
+            return None
+        return self._exam_status_text(result.get("status"))
+
+    async def get_exam_status_snapshot(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        """只读汇总考场各接口状态，用于定位「页面已提交但成绩未落库」。"""
+        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
+        snapshot: dict[str, Any] = {"exam_id": str(leaf_id)}
+
+        cover = await self._request_json("GET", f"{host}/exam_room/cover", params={"exam_id": eid})
+        cover_data = cover.get("data") if isinstance(cover.get("data"), dict) else {}
+        result = cover_data.get("result") if isinstance(cover_data.get("result"), dict) else {}
+        snapshot["room_status"] = self._exam_status_text(result.get("status"))
+        snapshot["room_status_raw"] = result.get("status") if isinstance(result.get("status"), int) else None
+        snapshot["result_detail"] = result
+        try:
+            lms_cover = await self.get_exam_cover(leaf_id, course)
+            snapshot["lms_status"] = lms_cover.raw_status
+            snapshot["lms_status_text"] = lms_cover.status
+        except Exception:
+            snapshot["lms_status"] = None
+
+        refresh = await self._request_json("GET", f"{host}/exam_room/refresh_time", params={"exam_id": eid})
+        snapshot["refresh_code"] = refresh.get("errcode")
+        snapshot["refresh_message"] = str(refresh.get("errmsg") or "")
+
+        cached = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
+        cached_data = cached.get("data") if isinstance(cached.get("data"), dict) else {}
+        results = cached_data.get("results") if isinstance(cached_data.get("results"), list) else []
+        snapshot["cached_count"] = len(results)
+        snapshot["cached_sample"] = results[0] if results and isinstance(results[0], dict) else None
+
+        problem = await self._request_json("GET", f"{host}/exam_room/problem_results", params={"exam_id": eid})
+        snapshot["result_code"] = problem.get("errcode")
+        snapshot["result_message"] = str(problem.get("errmsg") or "")
+        return snapshot
+
+    async def get_exam_result(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        """读取考场成绩与作答结果（只读）；未交卷时平台返回空数据。"""
+        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
+        resp = await self._request_json("GET", f"{host}/exam_room/problem_results", params={"exam_id": eid})
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        payload = dict(data) if isinstance(data, dict) else {}
+        payload["errcode"] = resp.get("errcode")
+        payload["errmsg"] = resp.get("errmsg")
+        return payload
+
+    async def begin_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
+        """真正开始作答：调用 `start_paper` 创建作答记录并启动服务端计时。"""
+        host, eid, login_url = await self._open_exam_room(leaf_id, course)
+        resp = await self._request_json("POST", f"{host}/exam_room/start_paper", json={"exam_id": eid})
+        ok = int(resp.get("errcode") or 0) == 0
+        cover = await self.get_exam_cover(eid, course)
+        message = "作答已开始，服务端计时已启动" if ok else f"开始作答失败: {resp.get('errmsg') or '未知错误'}"
+        return ExamStartResult(
+            course_id=str(course.id),
+            exam_id=str(leaf_id),
+            title=cover.title,
+            started=ok,
+            limit_minutes=cover.limit_minutes,
+            web_url=login_url,
+            message=message,
+        )
 
     async def get_exam_paper(self, leaf_id: str | int, course: Course) -> ExamPaperData:
         """读取考场子系统下发的整卷题目；风控拦截时拉起浏览器由用户完成滑块后截获。"""
@@ -705,14 +812,27 @@ class BasePlatform(ABC):
         unanswered = [pid for pid in all_ids if pid not in set(answered)]
 
         resp = await self._request_json("POST", f"{host}/exam_room/submit_paper", json={"results": results, "exam_id": eid})
-        ok = int(resp.get("errcode") or 0) == 0
+        code = int(resp.get("errcode") or 0)
+        ok = code == 0
         message = str(resp.get("errmsg") or ("交卷成功" if ok else "交卷失败"))
+
+        verified = False
+        if ok:
+            check = await self._request_json("GET", f"{host}/exam_room/cover", params={"exam_id": eid})
+            check_data = check.get("data") if isinstance(check.get("data"), dict) else {}
+            check_result = check_data.get("result") if isinstance(check_data.get("result"), dict) else {}
+            verified = check_result.get("status") in (2, 3, 4, 5)
+            if not verified:
+                message = "平台返回成功但考场状态未变为已交卷，请在浏览器考场页提交"
+        elif code != 0:
+            message = f"{message} (errcode: {code})"
+
         return ExamSubmitResult(
             dry_run=False,
             exam_id=str(leaf_id),
             answered_count=len(answered),
             unanswered=unanswered,
-            submitted=ok,
+            submitted=ok and verified,
             message=message,
         )
 
