@@ -35,6 +35,16 @@ class APIError(WKError):
 class RiskControlError(WKError):
     """触发平台风控（人机验证），需要人工介入后才能继续。"""
 
+    def __init__(
+        self,
+        message: str,
+        web_url: str | None = None,
+        next_actions: list[NextAction] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.web_url = web_url
+        self.next_actions: list[NextAction] = next_actions or []
+
 
 class OutputExistsError(WKError):
     """输出目标已存在，拒绝覆盖。"""

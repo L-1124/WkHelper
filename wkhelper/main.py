@@ -71,7 +71,20 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
     if isinstance(exc, AuthError):
         return create_error_envelope(code="AUTH_EXPIRED", message=str(exc), retryable=False, details=details), 3
     if isinstance(exc, RiskControlError):
-        return create_error_envelope(code="RISK_CONTROL_REQUIRED", message=str(exc), retryable=False, details=details), 6
+        details_map = dict(details)
+        if exc.web_url:
+            details_map["web_url"] = exc.web_url
+            details_map["guidance"] = "请在浏览器打开 web_url 页面完成滑块人机验证，通过后重新运行当前命令即可。"
+        return (
+            create_error_envelope(
+                code="RISK_CONTROL_REQUIRED",
+                message=str(exc),
+                retryable=False,
+                details=details_map,
+                next_actions=exc.next_actions,
+            ),
+            6,
+        )
     if isinstance(exc, (FileNotFoundError, KeyError)):
         return create_error_envelope(code="NOT_FOUND", message=str(exc), retryable=False, details=details), 4
     if isinstance(exc, ValueError):

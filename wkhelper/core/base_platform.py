@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import sys
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
@@ -24,6 +25,7 @@ from wkhelper.core.results import (
     DiscussionItem,
     DiscussionTopicDetail,
     HomeworkSubmitResult,
+    NextAction,
     QuestionSubmitOutcome,
     QuestionSubmitResult,
     VideoProgress,
@@ -432,6 +434,17 @@ class BasePlatform(ABC):
         """构建提交载荷；题型差异（如填空需 `answers` 映射）由平台实现处理。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现题目提交载荷")
 
+    def _format_web_task_url(self, course: Course, leaf_id: str | int, task_type: str = "exercise") -> str | None:
+        """格式化官方平台的前端网页直达 URL，方便用户/Agent 在风控拦截时直接打开。"""
+        cid = self._classroom_id(course)
+        lid = str(leaf_id)
+        if "xuetangx" in self.api_base:
+            sign = str(course.metadata.get("sign") or "")
+            return f"https://www.xuetangx.com/learn/{sign}/{cid}/{lid}/{task_type}"
+        if "yuketang" in self.api_base:
+            return f"https://www.yuketang.cn/v2/web/studentLog/{cid}"
+        return None
+
     def _get_request_kwargs(self, course: Course) -> dict[str, Any] | None:
         return None
 
@@ -663,7 +676,16 @@ class BasePlatform(ABC):
         sku_id = data.get("sku_id") if isinstance(data, dict) else None
 
         ex_url = self._build_exercise_list_url(leaf_type_id, sku_id)
-        q_resp = await self._request_json("GET", ex_url, **kwargs)
+        try:
+            q_resp = await self._request_json("GET", ex_url, **kwargs)
+        except RiskControlError as exc:
+            web_url = self._format_web_task_url(course, leaf_id, "exercise")
+            next_actions = (
+                [NextAction(reason="在浏览器打开该任务页面完成滑块人机验证后重试", argv=list(sys.argv), description=web_url or "")]
+                if web_url
+                else None
+            )
+            raise RiskControlError(f"获取题目列表触发平台风控人机验证: {ex_url}", web_url=web_url, next_actions=next_actions) from exc
         questions = self._parse_exercise_response(q_resp)
         q_data = q_resp.get("data")
         if isinstance(q_data, dict):
@@ -800,25 +822,33 @@ class BasePlatform(ABC):
         """观看单个视频。"""
         ctx = await self._prepare_video_context(video_id, course)
         opts = options or VideoWatchOptions()
-
-        return await generic_watch_video(
-            client=self.client,
-            video_id=ctx.video_id,
-            video_name=video_name,
-            classroom_id=ctx.classroom_id,
-            user_id=ctx.user_id,
-            course_id=ctx.course_id,
-            sku_id=ctx.sku_id,
-            progress_url=ctx.progress_url,
-            heartbeat_url=ctx.heartbeat_url,
-            payload_gen=self._build_heartbeat_payload,
-            progress_params=ctx.progress_params,
-            request_kwargs=ctx.request_kwargs,
-            options=opts,
-            on_event=on_event,
-            media_ccid=ctx.media_ccid,
-            video_duration=ctx.duration,
-        )
+        try:
+            return await generic_watch_video(
+                client=self.client,
+                video_id=ctx.video_id,
+                video_name=video_name,
+                classroom_id=ctx.classroom_id,
+                user_id=ctx.user_id,
+                course_id=ctx.course_id,
+                sku_id=ctx.sku_id,
+                progress_url=ctx.progress_url,
+                heartbeat_url=ctx.heartbeat_url,
+                payload_gen=self._build_heartbeat_payload,
+                progress_params=ctx.progress_params,
+                request_kwargs=ctx.request_kwargs,
+                options=opts,
+                on_event=on_event,
+                media_ccid=ctx.media_ccid,
+                video_duration=ctx.duration,
+            )
+        except RiskControlError as exc:
+            web_url = self._format_web_task_url(course, video_id, "video")
+            next_actions = (
+                [NextAction(reason="在浏览器打开视频页面完成滑块人机验证后重试", argv=list(sys.argv), description=web_url or "")]
+                if web_url
+                else None
+            )
+            raise RiskControlError(str(exc), web_url=web_url, next_actions=next_actions) from exc
 
     async def get_video_progress(self, video_id: str, course: Course) -> VideoProgress:
         """查询单视频服务端进度与完成标识。"""
@@ -924,14 +954,23 @@ class BasePlatform(ABC):
                 question = item
                 break
 
-        res = await self._submit_answer(
-            homework.name,
-            pid,
-            ans_list,
-            kwargs=kwargs,
-            submit_ctx=submit_ctx,
-            question=question,
-        )
+        try:
+            res = await self._submit_answer(
+                homework.name,
+                pid,
+                ans_list,
+                kwargs=kwargs,
+                submit_ctx=submit_ctx,
+                question=question,
+            )
+        except RiskControlError as exc:
+            web_url = self._format_web_task_url(course, homework.id, "exercise")
+            next_actions = (
+                [NextAction(reason="在浏览器打开作业页面完成滑块人机验证后重试", argv=list(sys.argv), description=web_url or "")]
+                if web_url
+                else None
+            )
+            raise RiskControlError(str(exc), web_url=web_url, next_actions=next_actions) from exc
         return QuestionSubmitResult(
             question_id=str(question_id),
             submitted_answer=ans_list,
