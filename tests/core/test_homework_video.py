@@ -2,12 +2,12 @@
 
 from typing import Any
 
-import niquests
 import pytest
 
 from wkhelper.core.entities import Course
 from wkhelper.core.homework import generic_submit_homework
 from wkhelper.core.results import QuestionSubmitOutcome
+from wkhelper.core.transport import AsyncSession
 from wkhelper.core.video import VideoWatchOptions, generic_watch_video
 
 
@@ -19,7 +19,7 @@ async def test_generic_submit_homework_submits_and_returns_summary():
         problem_id: int,
         answer: list[str],
         course_info: Course,
-        client: niquests.AsyncSession,
+        client: AsyncSession,
         kwargs: dict[str, Any] | None,
         question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
@@ -33,7 +33,7 @@ async def test_generic_submit_homework_submits_and_returns_summary():
     ]
 
     course = Course(id="1", name="测试课程", platform_id="test")
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         summary = await generic_submit_homework(resolved_pairs, fake_submit, course, client)
 
     assert summary.total == 2
@@ -54,7 +54,7 @@ async def test_generic_submit_homework_already_submitted_and_platform_error():
         problem_id: int,
         answer: list[str],
         course_info: Course,
-        client: niquests.AsyncSession,
+        client: AsyncSession,
         kwargs: dict[str, Any] | None,
         question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
@@ -82,7 +82,7 @@ async def test_generic_submit_homework_already_submitted_and_platform_error():
     ]
 
     course = Course(id="1", name="测试课程", platform_id="test")
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         summary = await generic_submit_homework(resolved_pairs, fake_submit, course, client)
 
     assert summary.total == 3
@@ -107,7 +107,7 @@ async def test_generic_submit_homework_anti_risk_options():
         problem_id: int,
         answer: list[str],
         course_info: Course,
-        client: niquests.AsyncSession,
+        client: AsyncSession,
         kwargs: dict[str, Any] | None,
         question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
@@ -117,7 +117,7 @@ async def test_generic_submit_homework_anti_risk_options():
     resolved_pairs: list[tuple[dict[str, Any], list[str]]] = [({"id": i}, ["A"]) for i in range(1, 6)]
 
     course = Course(id="1", name="测试课程", platform_id="test")
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         summary = await generic_submit_homework(
             resolved_pairs,
             fake_submit,

@@ -3,13 +3,13 @@
 import time
 from typing import Any
 
-import niquests
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
 from wkhelper.core.base_platform import BasePlatform
 from wkhelper.core.exceptions import APIError
 from wkhelper.core.throttle import RateGate, RetryPolicy, parse_retry_hint
+from wkhelper.core.transport import HTTPError
 
 
 class _Resp:
@@ -20,7 +20,7 @@ class _Resp:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            raise niquests.HTTPError(f"HTTP {self.status_code}")
+            raise HTTPError(f"HTTP {self.status_code}")
 
     def json(self) -> Any:
         return {"ok": True}

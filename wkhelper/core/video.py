@@ -8,13 +8,12 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-import niquests
-
 from wkhelper.core.events import EventCallback, notifier
 from wkhelper.core.json_types import json_float, parse_json_text
 from wkhelper.core.plan import VideoParameters, VideoStatus
 from wkhelper.core.results import VideoWatchResult
 from wkhelper.core.throttle import parse_retry_hint
+from wkhelper.core.transport import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +106,7 @@ def parse_progress_text(text: str, video_id: str) -> tuple[float, float]:
 
 
 async def generic_watch_video(
-    client: niquests.AsyncSession,
+    client: AsyncSession,
     video_id: str,
     video_name: str,
     classroom_id: str,

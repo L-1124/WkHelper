@@ -4,11 +4,11 @@ import json
 import logging
 from io import StringIO
 
-import niquests
 import pytest
 
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.events import is_debug_enabled, set_debug_enabled
+from wkhelper.core.transport import AsyncSession
 from wkhelper.main import async_main
 
 
@@ -121,7 +121,7 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
 
     try:
         set_debug_enabled(True)
-        async with niquests.AsyncSession() as client:
+        async with AsyncSession() as client:
             plat = DummyPlatform(client)
 
             # 模拟假响应

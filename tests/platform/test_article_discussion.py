@@ -1,10 +1,10 @@
 """资料题 (article) 与讨论题 (discussion) 单元与流程测试。"""
 
-import niquests
 import pytest
 
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course
+from wkhelper.core.transport import AsyncSession
 
 
 def _sample_course() -> Course:
@@ -112,7 +112,7 @@ class MockPlatform(BasePlatform):
 @pytest.mark.asyncio
 async def test_get_articles_and_read_article():
     """验证资料/图文节点列表提取与标为已读。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         plat = MockPlatform(client)
         course = _sample_course()
 
@@ -130,7 +130,7 @@ async def test_get_articles_and_read_article():
 @pytest.mark.asyncio
 async def test_get_discussions_and_submit():
     """验证讨论题列表提取、题目详情与回复打卡。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         plat = MockPlatform(client)
         course = _sample_course()
 

@@ -3,50 +3,50 @@
 import json
 from typing import Any, override
 
-import niquests
 import pytest
 
 from wkhelper.core import base_platform
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course, UserInfo
+from wkhelper.core.transport import AsyncSession
 from wkhelper.core.video import VideoWatchOptions, generic_watch_video
 
 
-class _FakeExtension:
-    """模拟 niquests WebSocket 扩展：按序吐出报文并记录已发送载荷。"""
+class _FakeSocket:
+    """模拟 curl_cffi WebSocket：按序吐出报文并记录已发送载荷。"""
 
     def __init__(self, messages: list[dict[str, Any]]) -> None:
         self._messages = [json.dumps(m) for m in messages]
         self.sent: list[str] = []
         self.closed = False
 
-    async def send_payload(self, payload: str) -> None:
+    async def send_str(self, payload: str) -> None:
         self.sent.append(payload)
 
-    async def next_payload(self) -> str | None:
-        return self._messages.pop(0) if self._messages else None
+    async def recv_str(self) -> str:
+        return self._messages.pop(0) if self._messages else ""
 
-    async def close(self) -> None:
+    async def __aenter__(self) -> "_FakeSocket":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
         self.closed = True
 
 
-class _FakeWsResponse:
-    def __init__(self, extension: _FakeExtension) -> None:
-        self.extension = extension
-
-
 class _FakeWsSession:
-    def __init__(self, extension: _FakeExtension) -> None:
-        self._extension = extension
+    """模拟带 ws_connect 的 curl_cffi 会话。"""
+
+    def __init__(self, socket: _FakeSocket) -> None:
+        self._socket = socket
+
+    def ws_connect(self, url: str, **kwargs: Any) -> _FakeSocket:
+        return self._socket
 
     async def __aenter__(self) -> "_FakeWsSession":
         return self
 
     async def __aexit__(self, *args: Any) -> None:
         return None
-
-    async def get(self, url: str, **kwargs: Any) -> _FakeWsResponse:
-        return _FakeWsResponse(self._extension)
 
 
 class _QrPlatform(BasePlatform):
@@ -121,15 +121,15 @@ class _QrPlatform(BasePlatform):
 @pytest.mark.asyncio
 async def test_qr_login_template_drives_hooks(monkeypatch) -> None:
     """基类扫码模板应按序推送二维码、应用超时提示并完成凭据换取。"""
-    extension = _FakeExtension(
+    socket = _FakeSocket(
         [
             {"qrcode": "payload", "expire_seconds": 45},
             {"op": "loginsuccess", "token": "tk-123"},
         ]
     )
-    monkeypatch.setattr(base_platform.niquests, "AsyncSession", lambda **kwargs: _FakeWsSession(extension))
+    monkeypatch.setattr(base_platform, "build_session", lambda **kwargs: _FakeWsSession(socket))
 
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = _QrPlatform(client)
         platform.published = []
         platform.receipt = {}
@@ -137,9 +137,9 @@ async def test_qr_login_template_drives_hooks(monkeypatch) -> None:
 
     assert user.name == "测试用户"
     assert platform.receipt["token"] == "tk-123"
-    assert extension.sent == ['{"op": "requestlogin"}']
+    assert socket.sent == ['{"op": "requestlogin"}']
     assert [m.get("qrcode") or "loginsuccess" for m in platform.published] == ["payload", "loginsuccess"]
-    assert extension.closed is True
+    assert socket.closed is True
 
 
 class _RecordingClient:
