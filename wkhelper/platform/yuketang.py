@@ -7,11 +7,12 @@ from typing import Any, override
 
 import niquests
 
+from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.config import DEFAULT_HEADERS
+from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.exporter import html_to_md
-from wkhelper.core.models import Course, DiscussionCommentResult, DiscussionTopicDetail, Homework, UserInfo, VideoContext
-from wkhelper.platform.base import BasePlatform
+from wkhelper.core.results import DiscussionCommentResult, DiscussionTopicDetail
 from wkhelper.platform.login_helper import QrCodeSession
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 class YuketangPlatform(BasePlatform):
     """雨课堂平台。"""
+
+    @property
+    @override
+    def heartbeat_profile(self) -> HeartbeatProfile:
+        """雨课堂心跳报文的固定字段。"""
+        return HeartbeatProfile(origin="ali-cdn.xuetangx.com", lob="ykt")
 
     @override
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:

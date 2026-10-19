@@ -5,9 +5,10 @@ from typing import Any
 
 import pytest
 
+from wkhelper.core.entities import Course, Homework
 from wkhelper.core.exceptions import OutputExistsError
 from wkhelper.core.exporter import export_questions_to_markdown, html_to_md, localize_question_detail
-from wkhelper.core.models import Course, Homework, OptionItem, QuestionDetail
+from wkhelper.core.results import OptionItem, QuestionDetail
 
 
 @pytest.mark.asyncio
@@ -104,6 +105,9 @@ async def test_export_questions_with_download_resources(fake_platform, tmp_path:
         status_code = 200
         content = b"fake image bytes"
 
+        def raise_for_status(self) -> None:
+            return None
+
     async def fake_get(*args: Any, **kwargs: Any) -> FakeResp:
         return FakeResp()
 
@@ -146,13 +150,16 @@ async def test_localize_question_detail(fake_platform, tmp_path: Path, monkeypat
         status_code = 200
         content = b"sample bytes"
 
+        def raise_for_status(self) -> None:
+            return None
+
     async def fake_get(*args: Any, **kwargs: Any) -> FakeResp:
         return FakeResp()
 
     monkeypatch.setattr(fake_platform.client, "get", fake_get)
 
     assets_dir = tmp_path / "assets"
-    localized = await localize_question_detail(fake_platform.client, detail, assets_dir)
+    localized = await localize_question_detail(fake_platform.fetch_bytes, detail, assets_dir)
 
     assert len(localized.resources) == 2
     assert "./assets/q_2001_body_1.png" in localized.prompt

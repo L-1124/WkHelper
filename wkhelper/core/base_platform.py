@@ -3,32 +3,30 @@
 import asyncio
 import logging
 import math
+import random
 import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import niquests
 
-from wkhelper.core.events import emit_event, is_debug_enabled
+from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
+from wkhelper.core.events import EventCallback, emit_event, is_debug_enabled
 from wkhelper.core.exceptions import APIError
 from wkhelper.core.homework import generic_submit_homework
-from wkhelper.core.models import (
+from wkhelper.core.json_types import JsonDict
+from wkhelper.core.results import (
     ArticleItem,
     ArticleReadResult,
-    Course,
     DiscussionCommentResult,
     DiscussionItem,
     DiscussionTopicDetail,
-    Homework,
     HomeworkSubmitResult,
-    JsonDict,
-    JsonValue,
     QuestionSubmitOutcome,
     QuestionSubmitResult,
-    UserInfo,
-    VideoContext,
     VideoProgress,
     VideoWatchResult,
 )
@@ -37,6 +35,15 @@ from wkhelper.core.video import VideoWatchOptions, generic_watch_video, parse_pr
 logger = logging.getLogger(__name__)
 
 type LeafContext = tuple[dict[str, Any], str, str | None]
+
+
+@dataclass(frozen=True)
+class HeartbeatProfile:
+    """心跳报文中随平台变化的固定字段，由平台适配层显式提供。"""
+
+    origin: str
+    lob: str
+    fixed_duration: float = 4976.5
 
 
 class BasePlatformParser:
@@ -406,7 +413,7 @@ class BasePlatform(ABC):
                 try:
                     from wkhelper.core.deobfuscator import deobfuscate_questions
 
-                    await deobfuscate_questions(questions, font_url, self.client)
+                    await deobfuscate_questions(questions, font_url, self.fetch_bytes)
                 except Exception as e:
                     logger.debug(f"反混淆题目失败: {e}")
         return questions
@@ -462,8 +469,23 @@ class BasePlatform(ABC):
 
         raise RuntimeError(f"题目 {problem_id} 提交重试次数过多")
 
+    async def fetch_bytes(self, url: str) -> bytes:
+        """下载远程资源字节。
+
+        传输实现由平台层持有，`core` 只消费这一能力（见 `core.transport.Fetcher`），
+        从而避免把具体 HTTP 客户端类型泄漏到导出与反混淆模块。
+        """
+        response = await self.client.get(url, timeout=15)
+        response.raise_for_status()
+        return bytes(response.content or b"")
+
     @abstractmethod
     async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext: ...
+
+    @property
+    @abstractmethod
+    def heartbeat_profile(self) -> HeartbeatProfile:
+        """本平台心跳报文的固定字段，缺失实现时启动即报错。"""
 
     def _build_heartbeat_payload(
         self,
@@ -476,15 +498,15 @@ class BasePlatform(ABC):
         i: int,
         timestamp: int,
     ) -> JsonDict:
-        """构建心跳请求载荷。"""
-        import random
-
+        """构建心跳请求载荷；平台差异经 `heartbeat_profile` 注入。"""
+        profile = self.heartbeat_profile
+        nonce = "".join(random.sample("abcdefghijklmnopqrstuvwxyz0123456789", 4))
         return {
             "i": i,
             "et": "heartbeat",
             "p": "web",
-            "n": "ali-cdn.xuetangx.com",
-            "lob": "ykt",
+            "n": profile.origin,
+            "lob": profile.lob,
             "cp": video_frame,
             "fp": 0,
             "tp": 0,
@@ -497,8 +519,8 @@ class BasePlatform(ABC):
             "skuid": int(sku_id),
             "classroomid": str(classroom_id),
             "cc": str(video_id),
-            "d": 4976.5,
-            "pg": f"{video_id}_{''.join(random.sample('abcdefghijklmnopqrstuvwxyz0123456789', 4))}",
+            "d": profile.fixed_duration,
+            "pg": f"{video_id}_{nonce}",
             "sq": i,
             "t": "video",
         }
@@ -509,7 +531,7 @@ class BasePlatform(ABC):
         video_name: str,
         course: Course,
         options: VideoWatchOptions | None = None,
-        on_event: Callable[[str, dict[str, JsonValue]], None] | None = None,
+        on_event: EventCallback | None = None,
     ) -> VideoWatchResult:
         """观看单个视频。"""
         ctx = await self._prepare_video_context(video_id, course)
@@ -556,7 +578,7 @@ class BasePlatform(ABC):
         homework: Homework,
         course: Course,
         answers: dict[str, list[str]] | None = None,
-        on_event: Callable[[str, dict[str, JsonValue]], None] | None = None,
+        on_event: EventCallback | None = None,
         concurrency: int = 1,
         delay: float = 0.0,
         delay_jitter: float = 0.0,

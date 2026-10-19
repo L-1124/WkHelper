@@ -8,8 +8,9 @@ import os
 import re
 from typing import Any
 
-import niquests
 from fontTools.ttLib import TTFont
+
+from wkhelper.core.transport import Fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def _deobfuscate_html_str(html_str: Any, obfuscated_to_real: dict[int, int]) -> 
     return html_str
 
 
-async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, client: niquests.AsyncSession) -> None:
+async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, fetch: Fetcher) -> None:
     """下载混淆字体并对题目列表进行就地（in-place）反混淆处理。"""
     if not questions or not font_url:
         return
@@ -112,8 +113,7 @@ async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, 
     logger.debug(f"正在下载混淆字体用于解密: {font_url}")
 
     try:
-        resp = await client.get(font_url)
-        resp.raise_for_status()
+        font_bytes = await fetch(font_url)
     except Exception as e:
         logger.error(f"下载混淆字体失败，无法完成反混淆: {e}")
         return
@@ -121,7 +121,7 @@ async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, 
     obfuscated_to_real: dict[int, int] = {}
 
     try:
-        font = TTFont(io.BytesIO(resp.content or b""))
+        font = TTFont(io.BytesIO(font_bytes or b""))
         glyph_set = font.getGlyphSet()
         cmap = font.getBestCmap()
         if not cmap:

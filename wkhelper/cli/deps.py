@@ -10,19 +10,13 @@ from pathlib import Path
 import niquests
 
 from wkhelper.cli.context import ctx
+from wkhelper.core.base_platform import BasePlatform
+from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.credential_store import CredentialStore
+from wkhelper.core.entities import Course, PaginationMeta, course_reference, dedupe_courses
 from wkhelper.core.exceptions import AuthError
-from wkhelper.core.models import (
-    Course,
-    JsonValue,
-    PaginationMeta,
-    VideoPlan,
-    course_reference,
-    dedupe_courses,
-    json_str_list,
-    parse_json_text,
-)
-from wkhelper.platform.base import BasePlatform
+from wkhelper.core.json_types import JsonValue, json_str_list, parse_json_text
+from wkhelper.core.plan import VideoPlan
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 
@@ -30,11 +24,14 @@ logger = logging.getLogger("wkhelper")
 
 
 def _create_http_session(timeout: float = 15.0) -> niquests.AsyncSession:
-    """按全局网络上下文创建 niquests 会话。"""
+    """按全局网络上下文创建 niquests 会话。
+
+    未显式指定 `--user-agent` 时使用 `core/config.py` 声明的默认浏览器标头，
+    避免声明值与实际请求标头不一致。
+    """
     proxies = {"all": ctx.proxy} if ctx.proxy else None
     sess = niquests.AsyncSession(timeout=timeout, proxies=proxies)
-    if ctx.user_agent:
-        sess.headers["User-Agent"] = ctx.user_agent
+    sess.headers["User-Agent"] = ctx.user_agent or DEFAULT_HEADERS["User-Agent"]
     return sess
 
 
