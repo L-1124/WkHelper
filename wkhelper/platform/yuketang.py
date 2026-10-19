@@ -8,6 +8,7 @@ from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
+from wkhelper.core.json_types import json_int
 from wkhelper.core.qr_login import QrCodeSession
 from wkhelper.core.results import ExamCoverDetail, ExamStartResult
 from wkhelper.core.time_types import epoch_millis
@@ -472,9 +473,17 @@ class YuketangPlatform(BasePlatform):
         if status in ("未开始", "答题中", "未知") and self._is_exam_overdue(deadline):
             status = "已缺考"
 
-        face_auth_status = cover_data.get("face_auth_status")
-        face_auth = bool(cover_data.get("identity_auth") or (isinstance(face_auth_status, dict) and face_auth_status.get("online_proctor")))
-        capture_screen = bool(cover_data.get("capture_screen") or cover_data.get("app_capture_screen"))
+        face_status = cover_data.get("face_auth_status") if isinstance(cover_data.get("face_auth_status"), dict) else {}
+        online_proctor = bool(cover_data.get("online_proctor") or face_status.get("online_proctor"))
+        identity_auth = bool(cover_data.get("identity_auth") or face_status.get("has_idphoto"))
+        face_auth = bool(identity_auth or online_proctor)
+        capture_screen = bool(cover_data.get("capture_screen"))
+        app_capture_screen = bool(cover_data.get("app_capture_screen"))
+        front_random_snap = bool(cover_data.get("app_front_random_snap"))
+        screen_cuts = bool(cover_data.get("open_screen_cuts"))
+        max_screen_cuts = json_int(cover_data.get("max_screen_cuts_num"), 0)
+        max_retry = json_int(cover_data.get("max_retry"), 1)
+        is_offline = bool(cover_data.get("is_offline"))
 
         return ExamCoverDetail(
             course_id=str(course.id),
@@ -489,11 +498,18 @@ class YuketangPlatform(BasePlatform):
             description=str(cover_data.get("description") or ""),
             face_auth=face_auth,
             capture_screen=capture_screen,
+            app_capture_screen=app_capture_screen,
+            front_random_snap=front_random_snap,
+            screen_cuts=screen_cuts,
+            max_screen_cuts=max_screen_cuts,
+            online_proctor=online_proctor,
+            identity_auth=identity_auth,
+            max_retry=max_retry,
+            is_offline=is_offline,
         )
 
-    @override
-    async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
-        cover = await self.get_exam_cover(leaf_id, course)
+    async def _open_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
+        """换取考场令牌并完成换票，返回 (exam_host, exam_id, 考场直达 URL)。"""
         cid = course.metadata["classroom_id"]
         kwargs = self._get_course_kwargs(course) or {}
         url = self._build_leaf_info_url(leaf_id, course)
@@ -501,11 +517,12 @@ class YuketangPlatform(BasePlatform):
         resp = await self._request_json("GET", url, params=params, **kwargs)
         data = resp.get("data") or {}
         ci = data.get("content_info") if isinstance(data, dict) else {}
-        eid = (
+        raw_eid = (
             (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
             or (data.get("leaf_type_id") if isinstance(data, dict) else None)
             or leaf_id
         )
+        eid = int(raw_eid)
 
         r_gen = await self._request_json(
             "POST",
@@ -515,14 +532,16 @@ class YuketangPlatform(BasePlatform):
         )
         token_data = r_gen.get("data") if isinstance(r_gen.get("data"), dict) else {}
         crypt = str(token_data.get("token") or token_data.get("crypt") or "")
-        exam_host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
+        host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
         user_id = str(token_data.get("user_id") or (self.user.id if self.user else ""))
-
-        login_url = (
-            f"{exam_host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={exam_host}/exam/{eid}?isFrom=0&language=zh"
-        )
+        login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={host}/exam/{eid}?isFrom=0&language=zh"
         await self.client.get(login_url, allow_redirects=True)
+        return host, eid, login_url
 
+    @override
+    async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
+        cover = await self.get_exam_cover(leaf_id, course)
+        _host, _eid, login_url = await self._open_exam_room(leaf_id, course)
         return ExamStartResult(
             course_id=str(course.id),
             exam_id=str(leaf_id),

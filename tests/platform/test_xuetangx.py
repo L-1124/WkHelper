@@ -372,3 +372,45 @@ async def test_exam_cover_limit_is_seconds(monkeypatch) -> None:
         cover = await platform.get_exam_cover("999", _sample_course())
         assert cover.limit_minutes == 0
         assert cover.has_limit is False
+
+
+@pytest.mark.asyncio
+async def test_exam_cover_proctoring_flags_are_distinct(monkeypatch) -> None:
+    """Web 截屏与 App 截屏必须分开建模，不能用 `or` 合并成同一个布尔。"""
+    async with AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+
+        async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "exam/cover" in url:
+                return {
+                    "data": {
+                        "data": {
+                            "title": "监考卷",
+                            "capture_screen": 0,
+                            "app_capture_screen": 1,
+                            "app_front_random_snap": 1,
+                            "open_screen_cuts": 1,
+                            "max_screen_cuts_num": 3,
+                            "online_proctor": 0,
+                            "identity_auth": 0,
+                            "max_retry": -1,
+                            "is_offline": False,
+                            "face_auth_status": {"online_proctor": 1, "has_idphoto": True},
+                        }
+                    }
+                }
+            return {"data": {"leaf_type": 5, "content_info": {"leaf_type_id": 44}}}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request_json)
+        cover = await platform.get_exam_cover("999", _sample_course())
+
+        assert cover.capture_screen is False
+        assert cover.app_capture_screen is True
+        assert cover.front_random_snap is True
+        assert cover.screen_cuts is True
+        assert cover.max_screen_cuts == 3
+        assert cover.online_proctor is True
+        assert cover.identity_auth is True
+        assert cover.face_auth is True
+        assert cover.max_retry == -1
+        assert cover.is_offline is False

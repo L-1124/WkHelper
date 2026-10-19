@@ -1,26 +1,16 @@
 """学堂在线平台实现。"""
 
 import logging
-import time
 from typing import Any, override
 from urllib.parse import quote
 
 from wkhelper.core.base_platform import BasePlatform, BasePlatformParser, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
-from wkhelper.core.exceptions import APIError, AuthError, RiskControlError
+from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
 from wkhelper.core.json_types import json_int
-from wkhelper.core.markdown import html_to_md, html_to_md_with_images
 from wkhelper.core.qr_login import QrCodeSession
-from wkhelper.core.results import (
-    ExamAnswerResult,
-    ExamCoverDetail,
-    ExamPaperData,
-    ExamProblemItem,
-    ExamStartResult,
-    ExamSubmitResult,
-    OptionItem,
-)
+from wkhelper.core.results import ExamCoverDetail, ExamStartResult
 from wkhelper.core.time_types import epoch_millis
 
 logger = logging.getLogger(__name__)
@@ -371,9 +361,17 @@ class XuetangXPlatform(BasePlatform):
         if status in ("未开始", "答题中", "未知") and self._is_exam_overdue(deadline):
             status = "已缺考"
 
-        face_auth_status = cover_data.get("face_auth_status")
-        face_auth = bool(cover_data.get("identity_auth") or (isinstance(face_auth_status, dict) and face_auth_status.get("online_proctor")))
-        capture_screen = bool(cover_data.get("capture_screen") or cover_data.get("app_capture_screen"))
+        face_status = cover_data.get("face_auth_status") if isinstance(cover_data.get("face_auth_status"), dict) else {}
+        online_proctor = bool(cover_data.get("online_proctor") or face_status.get("online_proctor"))
+        identity_auth = bool(cover_data.get("identity_auth") or face_status.get("has_idphoto"))
+        face_auth = bool(identity_auth or online_proctor)
+        capture_screen = bool(cover_data.get("capture_screen"))
+        app_capture_screen = bool(cover_data.get("app_capture_screen"))
+        front_random_snap = bool(cover_data.get("app_front_random_snap"))
+        screen_cuts = bool(cover_data.get("open_screen_cuts"))
+        max_screen_cuts = json_int(cover_data.get("max_screen_cuts_num"), 0)
+        max_retry = json_int(cover_data.get("max_retry"), 1)
+        is_offline = bool(cover_data.get("is_offline"))
 
         return ExamCoverDetail(
             course_id=str(course.id),
@@ -389,6 +387,14 @@ class XuetangXPlatform(BasePlatform):
             description=str(cover_data.get("description") or ""),
             face_auth=face_auth,
             capture_screen=capture_screen,
+            app_capture_screen=app_capture_screen,
+            front_random_snap=front_random_snap,
+            screen_cuts=screen_cuts,
+            max_screen_cuts=max_screen_cuts,
+            online_proctor=online_proctor,
+            identity_auth=identity_auth,
+            max_retry=max_retry,
+            is_offline=is_offline,
         )
 
     async def _open_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
@@ -426,125 +432,4 @@ class XuetangXPlatform(BasePlatform):
             limit_minutes=cover.limit_minutes,
             web_url=login_url,
             message="考场会话已成功建立，已启动服务端计时与令牌授权",
-        )
-
-    @override
-    async def get_exam_paper(self, leaf_id: str | int, course: Course) -> ExamPaperData:
-        """读取考场子系统下发的整卷题目；风控拦截时拉起浏览器由用户完成滑块后截获。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        paper_url = f"{host}/exam_room/show_paper"
-        try:
-            payload = await self._request_json("GET", paper_url, params={"exam_id": eid})
-        except RiskControlError:
-            from wkhelper.core.browser_cdp import find_chromium_browser, solve_captcha_interactive
-
-            if not find_chromium_browser():
-                raise
-            payload, fresh = await solve_captcha_interactive(
-                web_url=f"{host}/exam/{eid}?isFrom=0&language=zh",
-                target_api_pattern="exam_room/show_paper",
-                cookies={k: v for k, v in self.client.cookies.items()},
-                cookie_domain="examination.xuetangx.com",
-            )
-            for key, value in fresh.items():
-                self.client.cookies.set(key, value)
-
-        paper = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        raw_problems = paper.get("problems") if isinstance(paper.get("problems"), list) else []
-        problems = [self._parse_exam_problem(item, index) for index, item in enumerate(raw_problems, 1)]
-        cover = await self.get_exam_cover(eid, course)
-        return ExamPaperData(
-            course_id=str(course.id),
-            exam_id=str(leaf_id),
-            title=str(paper.get("title") or cover.title),
-            problems=problems,
-        )
-
-    @staticmethod
-    def _parse_exam_problem(item: Any, index: int) -> ExamProblemItem:
-        """把考场试卷的题目条目归一为对外模型。"""
-        raw = item if isinstance(item, dict) else {}
-        raw_options = raw.get("Options") if isinstance(raw.get("Options"), list) else []
-        options = [
-            OptionItem(key=str(opt.get("key") or ""), text=html_to_md(str(opt.get("value") or "")))
-            for opt in raw_options
-            if isinstance(opt, dict)
-        ]
-        raw_answer = raw.get("Answer")
-        answers = [str(a) for a in raw_answer] if isinstance(raw_answer, list) else []
-        type_text = str(raw.get("TypeText") or raw.get("Type") or "")
-        prompt, images = html_to_md_with_images(str(raw.get("Body") or ""))
-        return ExamProblemItem(
-            index=index,
-            id=str(raw.get("problem_id") or index),
-            type=type_text or None,
-            prompt=prompt,
-            images=images,
-            options=options,
-            score=float(raw.get("score") or raw.get("Score") or 0.0),
-            answer=answers,
-            has_remark=bool(raw.get("HasRemark")),
-        )
-
-    @override
-    async def get_exam_answer_state(self, leaf_id: str | int, course: Course) -> tuple[list[str], list[str]]:
-        """对照试卷与暂存作答，返回 (已作答 ID, 全部题目 ID)。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        cached = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
-        cached_data = cached.get("data") if isinstance(cached.get("data"), dict) else {}
-        results = cached_data.get("results") if isinstance(cached_data.get("results"), list) else []
-        answered_ids = {str(item.get("problem_id")) for item in results if isinstance(item, dict) and item.get("result")}
-
-        paper = await self.get_exam_paper(leaf_id, course)
-        all_ids = [problem.id for problem in paper.problems]
-        answered = [pid for pid in all_ids if pid in answered_ids]
-        return answered, all_ids
-
-    @override
-    async def answer_exam_problem(
-        self,
-        leaf_id: str | int,
-        course: Course,
-        problem_id: str,
-        answer: list[str],
-    ) -> ExamAnswerResult:
-        """提交考试单题答案，答案立即写入服务端暂存。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        payload = {
-            "results": [{"problem_id": int(problem_id), "result": answer, "time": int(time.time() * 1000)}],
-            "exam_id": eid,
-            "record": [],
-        }
-        resp = await self._request_json("POST", f"{host}/exam_room/answer_problem", json=payload)
-        ok = int(resp.get("errcode") or 0) == 0
-        message = str(resp.get("errmsg") or ("作答已保存" if ok else "作答保存失败"))
-        return ExamAnswerResult(
-            dry_run=False,
-            exam_id=str(leaf_id),
-            problem_id=str(problem_id),
-            answer=answer,
-            saved=ok,
-            message=message,
-        )
-
-    @override
-    async def submit_exam(self, leaf_id: str | int, course: Course) -> ExamSubmitResult:
-        """交卷：以服务端暂存作答为准提交整卷。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        cached = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
-        cached_data = cached.get("data") if isinstance(cached.get("data"), dict) else {}
-        results = cached_data.get("results") if isinstance(cached_data.get("results"), list) else []
-        answered, all_ids = await self.get_exam_answer_state(leaf_id, course)
-        unanswered = [pid for pid in all_ids if pid not in set(answered)]
-
-        resp = await self._request_json("POST", f"{host}/exam_room/submit_paper", json={"results": results, "exam_id": eid})
-        ok = int(resp.get("errcode") or 0) == 0
-        message = str(resp.get("errmsg") or ("交卷成功" if ok else "交卷失败"))
-        return ExamSubmitResult(
-            dry_run=False,
-            exam_id=str(leaf_id),
-            answered_count=len(answered),
-            unanswered=unanswered,
-            submitted=ok,
-            message=message,
         )

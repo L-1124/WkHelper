@@ -27,6 +27,7 @@ from wkhelper.core.results import (
     DiscussionListData,
     DiscussionTopicDetail,
     ExamAnswerResult,
+    ExamBrowserCloseResult,
     ExamCoverDetail,
     ExamExportResult,
     ExamListData,
@@ -531,8 +532,14 @@ def _render_exam_cover(data: ExamCoverDetail) -> list[str]:
         f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.has_limit else '不限时（无倒计时，仅受截止时间约束）'}",
         f"- **开考时间**：{_format_time_str(data.start_time)}",
         f"- **截止时间**：{_format_time_str(data.deadline)}",
-        f"- **人脸核验**：{'是' if data.face_auth else '否'}",
-        f"- **屏幕监控**：{'是' if data.capture_screen else '否'}",
+        f"- **在线监考**：{'是' if data.online_proctor else '否'}",
+        f"- **身份核验（人脸/证件）**：{'是' if data.identity_auth else '否'}",
+        f"- **Web 桌面截屏**：{'是（需共享整个屏幕）' if data.capture_screen else '否'}",
+        f"- **App 端截屏**：{'是' if data.app_capture_screen else '否'}",
+        f"- **App 前置随机抓拍**：{'是' if data.front_random_snap else '否'}",
+        f"- **切屏检测**：{f'开启（上限 {data.max_screen_cuts} 次）' if data.screen_cuts else '关闭'}",
+        f"- **作答次数**：{'不限次数' if data.max_retry < 0 else f'最多 {data.max_retry} 次'}",
+        f"- **线下考试**：{'是' if data.is_offline else '否'}",
     ]
     if data.description:
         lines.extend(["", "### 考试须知", data.description])
@@ -547,6 +554,7 @@ def _render_exam_start_preview(data: ExamStartPreview) -> list[str]:
         f"- **考试节点 ID**：`{data.exam_id}`",
         f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.limit_minutes > 0 else '不限时'}",
         f"- **注意事项**：{data.note}",
+        *([f"> **注意**：{data.notice}"] if data.notice else []),
     ]
 
 
@@ -560,6 +568,7 @@ def _render_exam_start_result(data: ExamStartResult) -> list[str]:
         f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.limit_minutes > 0 else '不限时'}",
         f"- **考场直达地址**：<{data.web_url}>",
         f"- **提示信息**：{data.message}",
+        *([f"> **注意**：{data.notice}"] if data.notice else []),
     ]
 
 
@@ -604,6 +613,7 @@ def _render_exam_answer(data: ExamAnswerResult) -> list[str]:
         f"- **作答内容**：{'、'.join(data.answer) if data.answer else '-'}",
         f"- **写入状态**：{'已保存' if data.saved else ('预览未写入' if data.dry_run else '保存失败')}",
         f"- **提示信息**：{data.message}",
+        *([f"> **注意**：{data.notice}"] if data.notice else []),
     ]
 
 
@@ -619,4 +629,17 @@ def _render_exam_submit(data: ExamSubmitResult) -> list[str]:
     ]
     if data.unanswered:
         lines.append(f"- **未作答题目**：{'、'.join(data.unanswered)}")
+    if data.notice:
+        lines.append(f"> **注意**：{data.notice}")
     return lines
+
+
+@renderer(ExamBrowserCloseResult)
+def _render_exam_browser_close(data: ExamBrowserCloseResult) -> list[str]:
+    return [
+        "## 考场浏览器会话",
+        "",
+        f"- **关联考试**：{data.exam_id or '-'}",
+        f"- **关闭状态**：{'已关闭' if data.closed else '未关闭'}",
+        f"- **提示信息**：{data.message}",
+    ]

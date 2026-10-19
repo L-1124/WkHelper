@@ -186,6 +186,11 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "description": "查看考试封面、考试须知、满分、限时时长与考场状态。",
         "examples": ["wkhelper exam inspect --course 1001 --exam 2001"],
     },
+    "exam close": {
+        "description": "关闭 exam start --browser 拉起的常驻考场浏览器会话。",
+        "side_effects": "local_write",
+        "examples": ["wkhelper exam close"],
+    },
     "exam answer": {
         "description": "提交考试单题作答（写入服务端暂存，不改动最终得分）。",
         "side_effects": "remote_write",
