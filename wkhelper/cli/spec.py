@@ -186,6 +186,33 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "description": "查看考试封面、考试须知、满分、限时时长与考场状态。",
         "examples": ["wkhelper exam inspect --course 1001 --exam 2001"],
     },
+    "exam answer": {
+        "description": "提交考试单题作答（写入服务端暂存，不改动最终得分）。",
+        "side_effects": "remote_write",
+        "requires_confirm": True,
+        "examples": [
+            "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --dry-run",
+            "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --confirm",
+        ],
+    },
+    "exam submit": {
+        "description": "交卷并封存本次考试成绩，提交后不可撤销。",
+        "side_effects": "remote_write",
+        "requires_confirm": True,
+        "examples": [
+            "wkhelper exam submit --course 1001 --exam 2001 --dry-run",
+            "wkhelper exam submit --course 1001 --exam 2001 --confirm",
+        ],
+    },
+    "exam export": {
+        "description": "把考场试卷导出为 Markdown，可下载题干与选项配图，拒绝覆盖已有文件。",
+        "side_effects": "local_file_write",
+        "examples": ["wkhelper exam export --course 1001 --exam 2001 --output ./exam.md"],
+    },
+    "exam paper": {
+        "description": "读取考场子系统下发的整卷题目（只读，不提交答案）。",
+        "examples": ["wkhelper exam paper --course 1001 --exam 2001"],
+    },
     "exam start": {
         "description": "显式确认后向平台发起进入考场请求，启动考场会话与授权令牌。",
         "side_effects": "remote_write",

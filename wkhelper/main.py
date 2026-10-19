@@ -90,7 +90,7 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
     if isinstance(exc, ValueError):
         return create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False, details=details), 2
     if isinstance(exc, APIError):
-        return create_error_envelope(code="PLATFORM_ERROR", message=str(exc), retryable=True, details=details), 6
+        return create_error_envelope(code="PLATFORM_ERROR", message=str(exc), retryable=exc.retryable, details=details), 6
     if isinstance(exc, WKError):
         return create_error_envelope(code="BIZ_ERROR", message=str(exc), retryable=False, details=details), 1
 

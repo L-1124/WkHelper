@@ -26,10 +26,14 @@ from wkhelper.core.results import (
     DiscussionCommentResult,
     DiscussionListData,
     DiscussionTopicDetail,
+    ExamAnswerResult,
     ExamCoverDetail,
+    ExamExportResult,
     ExamListData,
+    ExamPaperData,
     ExamStartPreview,
     ExamStartResult,
+    ExamSubmitResult,
     ExportResult,
     HomeworkListData,
     HomeworkOutline,
@@ -48,6 +52,7 @@ from wkhelper.core.results import (
     VideoPlanSummary,
     VideoProgress,
 )
+from wkhelper.core.time_types import EpochMillis
 
 type Renderer = Callable[[object], list[str]]
 
@@ -88,7 +93,17 @@ def _format_next_actions(actions: list[NextAction] | None) -> list[str]:
     """渲染 Agent 下一步动作建议。"""
     if not actions:
         return []
-    return ["", "### 下一步建议", "", *(f"- **{_cell(action.reason)}**：`{' '.join(action.argv)}`" for action in actions)]
+    lines = ["", "### 下一步建议", ""]
+    for action in actions:
+        reason = _cell(action.reason)
+        if action.argv:
+            cmd = " ".join(action.argv)
+            lines.append(f"- **{reason}**：`{cmd}`")
+        elif action.description:
+            lines.append(f"- **{reason}**：{_cell(action.description)}")
+        else:
+            lines.append(f"- **{reason}**")
+    return lines
 
 
 def _pagination_hint(meta: JsonDict) -> str:
@@ -480,13 +495,12 @@ def format_result_markdown(
     return "\n".join(lines).strip()
 
 
-def _format_time_str(ts: int | None) -> str:
+def _format_time_str(ts: EpochMillis | None) -> str:
     if not ts:
         return "无限制"
-    sec = ts / 1000 if ts > 1e11 else ts
     import datetime
 
-    return datetime.datetime.fromtimestamp(sec).strftime("%Y-%m-%d %H:%M")
+    return datetime.datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M")
 
 
 @renderer(ExamListData)
@@ -498,7 +512,7 @@ def _render_exam_list(data: ExamListData) -> list[str]:
             exam.name,
             _format_time_str(exam.start_time),
             _format_time_str(exam.deadline),
-            "已完成" if exam.completed else "未完成",
+            "已完成" if exam.completed else ("已缺考" if exam.overdue else "未完成"),
         ]
         for i, exam in enumerate(data.exams, 1)
     ]
@@ -514,7 +528,7 @@ def _render_exam_cover(data: ExamCoverDetail) -> list[str]:
         f"- **考场状态**：`{data.status}`",
         f"- **题目数量**：{data.problem_count} 题",
         f"- **试卷满分**：{data.total_score} 分",
-        f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.limit_minutes > 0 else '不限时（受截止时间约束）'}",
+        f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.has_limit else '不限时（无倒计时，仅受截止时间约束）'}",
         f"- **开考时间**：{_format_time_str(data.start_time)}",
         f"- **截止时间**：{_format_time_str(data.deadline)}",
         f"- **人脸核验**：{'是' if data.face_auth else '否'}",
@@ -547,3 +561,62 @@ def _render_exam_start_result(data: ExamStartResult) -> list[str]:
         f"- **考场直达地址**：<{data.web_url}>",
         f"- **提示信息**：{data.message}",
     ]
+
+
+@renderer(ExamPaperData)
+def _render_exam_paper(data: ExamPaperData) -> list[str]:
+    rows = [
+        [
+            problem.index,
+            problem.id,
+            problem.type or "-",
+            problem.score,
+            problem.prompt,
+            ",".join(problem.answer) if problem.answer else "-",
+        ]
+        for problem in data.problems
+    ]
+    return [
+        f"## 考场试卷：{_cell(data.title)} (共 {len(data.problems)} 题)",
+        "",
+        *_table(["序号", "题目 ID", "题型", "分值", "题干摘要", "平台答案"], rows),
+    ]
+
+
+@renderer(ExamExportResult)
+def _render_exam_export(data: ExamExportResult) -> list[str]:
+    return [
+        "## 考场试卷导出完成",
+        "",
+        f"- **文件路径**：`{data.file_path}`",
+        f"- **考试 ID**：`{data.exam_id}`",
+        f"- **题目数量**：{data.problems_count} 题",
+        f"- **下载配图**：{data.resources_count} 个",
+    ]
+
+
+@renderer(ExamAnswerResult)
+def _render_exam_answer(data: ExamAnswerResult) -> list[str]:
+    return [
+        f"## 考试作答：题目 `{data.problem_id}`",
+        "",
+        f"- **考试 ID**：`{data.exam_id}`",
+        f"- **作答内容**：{'、'.join(data.answer) if data.answer else '-'}",
+        f"- **写入状态**：{'已保存' if data.saved else ('预览未写入' if data.dry_run else '保存失败')}",
+        f"- **提示信息**：{data.message}",
+    ]
+
+
+@renderer(ExamSubmitResult)
+def _render_exam_submit(data: ExamSubmitResult) -> list[str]:
+    lines = [
+        f"## 考试交卷：`{data.exam_id}`",
+        "",
+        f"- **已作答题数**：{data.answered_count}",
+        f"- **未作答题数**：{len(data.unanswered)}",
+        f"- **交卷状态**：{'已交卷' if data.submitted else ('预览未交卷' if data.dry_run else '交卷失败')}",
+        f"- **提示信息**：{data.message}",
+    ]
+    if data.unanswered:
+        lines.append(f"- **未作答题目**：{'、'.join(data.unanswered)}")
+    return lines

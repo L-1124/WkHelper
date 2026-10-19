@@ -8,6 +8,7 @@ import msgspec
 from wkhelper.core.entities import AccountSummary, StorageStatus
 from wkhelper.core.json_types import JsonDict
 from wkhelper.core.plan import _VIDEO_STATUSES, ExecutionSettings, VideoStatus, VideoTarget
+from wkhelper.core.time_types import EpochMillis, now_millis
 
 
 @dataclass(frozen=True)
@@ -373,9 +374,15 @@ class ExamItem:
 
     id: str
     name: str
-    start_time: int | None
-    deadline: int | None
+    start_time: EpochMillis | None
+    deadline: EpochMillis | None
     completed: bool
+    overdue: bool = False
+
+    def __post_init__(self) -> None:
+        """未完成且已过截止时间即视为缺考。"""
+        if not self.completed and not self.overdue and self.deadline:
+            self.overdue = self.deadline < now_millis()
 
 
 @dataclass
@@ -393,12 +400,17 @@ class ExamCoverDetail:
     problem_count: int
     total_score: float
     limit_minutes: int
-    start_time: int | None
-    deadline: int | None
+    start_time: EpochMillis | None
+    deadline: EpochMillis | None
     status: str
     description: str
     face_auth: bool
     capture_screen: bool
+    has_limit: bool = False
+
+    def __post_init__(self) -> None:
+        """平台限时为 0 表示不限时（无倒计时），仅受截止时间约束。"""
+        self.has_limit = self.limit_minutes > 0
 
 
 @dataclass
@@ -423,4 +435,63 @@ class ExamStartResult:
     started: bool
     limit_minutes: int
     web_url: str
+    message: str
+
+
+@dataclass
+class ExamProblemItem:
+    """考场试卷中的一道题目。"""
+
+    index: int
+    id: str
+    type: str | None
+    prompt: str
+    images: list[str]
+    options: list[OptionItem]
+    score: float
+    answer: list[str]
+    has_remark: bool
+
+
+@dataclass
+class ExamPaperData:
+    """考场试卷题目列表。"""
+
+    course_id: str
+    exam_id: str
+    title: str
+    problems: list[ExamProblemItem]
+
+
+@dataclass
+class ExamExportResult:
+    """考场试卷导出结果。"""
+
+    file_path: str
+    exam_id: str
+    problems_count: int
+    resources_count: int
+
+
+@dataclass
+class ExamAnswerResult:
+    """考试单题作答回执。"""
+
+    dry_run: bool
+    exam_id: str
+    problem_id: str
+    answer: list[str]
+    saved: bool
+    message: str
+
+
+@dataclass
+class ExamSubmitResult:
+    """考试交卷回执。"""
+
+    dry_run: bool
+    exam_id: str
+    answered_count: int
+    unanswered: list[str]
+    submitted: bool
     message: str

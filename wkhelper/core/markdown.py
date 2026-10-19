@@ -5,6 +5,7 @@
 """
 
 import html
+import re
 from typing import Any
 
 from markdownify import MarkdownConverter
@@ -37,3 +38,27 @@ def html_to_md(html_str: str) -> str:
     if not html_str:
         return ""
     return WkhelperConverter().convert(html_str).strip()
+
+
+_IMG_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_SRC = re.compile(r"""src\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+
+
+def html_to_md_with_images(html_str: str) -> tuple[str, list[str]]:
+    """转换富文本：非公式图片抽出地址列表，正文内保留 `[图]` 占位。"""
+    if not html_str:
+        return "", []
+
+    images: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        if re.search(r"data-(latex|formula|math|tex)", tag, re.IGNORECASE):
+            return tag
+        src = _IMG_SRC.search(tag)
+        if not src:
+            return ""
+        images.append(html.unescape(src.group(1)))
+        return "[图]"
+
+    return html_to_md(_IMG_TAG.sub(_replace, html_str)), images

@@ -271,3 +271,15 @@ def test_unregistered_payload_falls_back_safely() -> None:
     """未登记模型走 JSON 兜底；不可序列化对象降级为文本而不是抛错。"""
     assert format_result_markdown({"a": 1}).lstrip().startswith("```json")
     assert "无法结构化渲染" in format_result_markdown(object())
+
+
+def test_next_actions_without_argv_renders_description() -> None:
+    """当 NextAction 没有 argv 时，优雅展示 description 且不输出空反引号。"""
+    from wkhelper.cli.envelope import NextAction
+    from wkhelper.core.results import ExamListData
+
+    action = NextAction(reason="请自主完成", argv=[], description="登录官网考场页作答")
+    md = format_result_markdown(ExamListData(exams=[]), next_actions=[action])
+    assert "- **请自主完成**：登录官网考场页作答" in md
+    assert ": ``" not in md
+    assert "：``" not in md

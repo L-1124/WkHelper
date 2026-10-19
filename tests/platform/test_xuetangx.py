@@ -267,3 +267,108 @@ async def test_xuetangx_article_and_discussions(monkeypatch) -> None:
 
         resp = await platform._post_discussion_comment(unit, "hello", course, "leaf_456")
         assert resp["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_task_url_matches_spa_route() -> None:
+    """前端任务页 URL 必须符合 SPA 路由 /learn/{sign}/{course}/{classroom}/{kind}/{leaf}。"""
+    async with AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+        course = _sample_course()
+
+        assert (
+            platform._format_web_task_url(course, "75369926", "exercise")
+            == "https://www.xuetangx.com/learn/mock-sign-123/1001/2001/exercise/75369926"
+        )
+        assert (
+            platform._format_web_task_url(course, "75369927", "video")
+            == "https://www.xuetangx.com/learn/mock-sign-123/1001/2001/video/75369927"
+        )
+
+
+@pytest.mark.asyncio
+async def test_exam_leaf_rejected_for_exercise_api(monkeypatch) -> None:
+    """考试节点不能走普通习题接口，必须给出明确指引而不是空题目。"""
+    async with AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+
+        async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            return {"success": True, "data": {"leaf_type": 5, "content_info": {"leaf_type_id": 3908369}}}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request_json)
+
+        with pytest.raises(APIError, match="是考试"):
+            await platform.get_leaf_questions("75369926", _sample_course())
+
+
+def test_parse_exam_problem_normalizes_fields() -> None:
+    """考场试卷条目归一化：HTML 题干/选项转 Markdown，缺失字段有默认值。"""
+    problem = XuetangXPlatform._parse_exam_problem(
+        {
+            "problem_id": 181540477,
+            "TypeText": "单选题",
+            "Body": "<p>1+1=? (  )</p>",
+            "Options": [{"key": "A", "value": "<p>2</p>"}, {"key": "B", "value": "<p>3</p>"}],
+            "score": 4,
+            "Answer": ["A"],
+            "HasRemark": False,
+        },
+        1,
+    )
+
+    assert problem.id == "181540477"
+    assert problem.type == "单选题"
+    assert problem.prompt == "1+1=? ( )"
+    assert [(o.key, o.text) for o in problem.options] == [("A", "2"), ("B", "3")]
+    assert problem.score == 4.0
+    assert problem.answer == ["A"]
+
+    empty = XuetangXPlatform._parse_exam_problem({}, 7)
+    assert empty.index == 7
+    assert empty.id == "7"
+    assert empty.answer == []
+
+
+def test_parse_exam_problem_extracts_images() -> None:
+    """题干中的插图抽到 images，正文只保留 `[图]` 占位，避免 Markdown 表格被 URL 污染。"""
+    problem = XuetangXPlatform._parse_exam_problem(
+        {
+            "problem_id": 181540477,
+            "TypeText": "单选题",
+            "Body": "<p><img src='http://sc0.ykt.io/ue_i/a.png'> (  )</p>",
+            "Options": [],
+            "score": 4,
+        },
+        1,
+    )
+
+    assert problem.prompt == "[图] ( )"
+    assert problem.images == ["http://sc0.ykt.io/ue_i/a.png"]
+    assert problem.answer == []
+
+
+@pytest.mark.asyncio
+async def test_exam_cover_limit_is_seconds(monkeypatch) -> None:
+    """封面 limit 以秒为单位（前端 1e3*limit 换算毫秒），0 表示不限时。"""
+    async with AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+
+        async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "exam/cover" in url:
+                return {"data": {"data": {"title": "限时卷", "problem_count": 10, "total_score": 50.0, "limit": 5400}}}
+            return {"data": {"leaf_type": 5, "content_info": {"leaf_type_id": 42}}}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request_json)
+        cover = await platform.get_exam_cover("999", _sample_course())
+        assert cover.limit_minutes == 90
+        assert cover.has_limit is True
+
+        async def no_limit(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "exam/cover" in url:
+                return {"data": {"data": {"title": "不限时卷", "limit": 0}}}
+            return {"data": {"leaf_type": 5, "content_info": {"leaf_type_id": 43}}}
+
+        monkeypatch.setattr(platform, "_request_json", no_limit)
+        cover = await platform.get_exam_cover("999", _sample_course())
+        assert cover.limit_minutes == 0
+        assert cover.has_limit is False
