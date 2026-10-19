@@ -1,11 +1,11 @@
 """字体反混淆模块。"""
 
 import hashlib
+import io
 import json
 import logging
 import os
 import re
-import tempfile
 from typing import Any
 
 import niquests
@@ -118,16 +118,10 @@ async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, 
         logger.error(f"下载混淆字体失败，无法完成反混淆: {e}")
         return
 
-    # 保存临时字体文件
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".ttf") as tmp:
-        if resp.content is not None:
-            tmp.write(resp.content)
-        tmp_path = tmp.name
-
     obfuscated_to_real: dict[int, int] = {}
 
     try:
-        font = TTFont(tmp_path)
+        font = TTFont(io.BytesIO(resp.content or b""))
         glyph_set = font.getGlyphSet()
         cmap = font.getBestCmap()
         if not cmap:
@@ -168,9 +162,3 @@ async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, 
 
     except Exception as e:
         logger.error(f"解析混淆字体进行还原时出错: {e}")
-    finally:
-        # 清理临时文件
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass

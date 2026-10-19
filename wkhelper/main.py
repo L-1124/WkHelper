@@ -2,11 +2,15 @@
 
 import logging
 import sys
+import traceback
+from collections.abc import Sequence
+from typing import Any
 
 from cyclopts import CycloptsError
 
-from wkhelper.cli.app import app, extract_global_flags
-from wkhelper.cli.envelope import create_error_envelope, print_json
+from wkhelper.cli.app import app, ctx
+from wkhelper.cli.envelope import create_error_envelope
+from wkhelper.cli.output import emit_error
 from wkhelper.core.exceptions import (
     APIError,
     AuthError,
@@ -15,92 +19,80 @@ from wkhelper.core.exceptions import (
     PartialFailureError,
     WKError,
 )
+from wkhelper.core.models import JsonDict
 
 logger = logging.getLogger("wkhelper")
 
 
+def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
+    """统一异常到退出码映射，在 --debug 时注入堆栈与类型诊断。"""
+    details: JsonDict = {}
+    if hasattr(exc, "details") and isinstance(exc.details, dict):
+        details.update(exc.details)
+    if ctx.debug:
+        details["exception_type"] = type(exc).__name__
+        details["traceback"] = traceback.format_exc().strip().splitlines()
+
+    if isinstance(exc, CycloptsError):
+        return create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False, details=details), 2
+    if isinstance(exc, ConfirmationRequiredError):
+        return (
+            create_error_envelope(
+                code="CONFIRMATION_REQUIRED",
+                message=str(exc),
+                retryable=False,
+                details=details,
+                next_actions=exc.next_actions,
+            ),
+            5,
+        )
+    if isinstance(exc, OutputExistsError):
+        return create_error_envelope(code="FILE_EXISTS", message=str(exc), retryable=False, details=details), 5
+    if isinstance(exc, PartialFailureError):
+        return (
+            create_error_envelope(code="PARTIAL_FAILURE", message=str(exc), retryable=False, details=details, data=exc.data),
+            7,
+        )
+    if isinstance(exc, AuthError):
+        return create_error_envelope(code="AUTH_EXPIRED", message=str(exc), retryable=False, details=details), 3
+    if isinstance(exc, (FileNotFoundError, KeyError)):
+        return create_error_envelope(code="NOT_FOUND", message=str(exc), retryable=False, details=details), 4
+    if isinstance(exc, ValueError):
+        return create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False, details=details), 2
+    if isinstance(exc, APIError):
+        return create_error_envelope(code="PLATFORM_ERROR", message=str(exc), retryable=True, details=details), 6
+    if isinstance(exc, WKError):
+        return create_error_envelope(code="BIZ_ERROR", message=str(exc), retryable=False, details=details), 1
+
+    logger.exception("未捕获的内部异常")
+    return create_error_envelope(code="INTERNAL_ERROR", message=str(exc), retryable=False, details=details), 1
+
+
+async def async_main(argv: Sequence[str]) -> int:
+    """异步入口：供测试与嵌入调用，不产生 SystemExit。"""
+    ctx.configure()
+    try:
+        return int(await app.meta.run_async(list(argv)) or 0)
+    except BaseException as exc:
+        if isinstance(exc, SystemExit):
+            return exc.code if isinstance(exc.code, int) else 0
+        envelope, code = _handle_exception(exc)
+        emit_error(envelope)
+        return code
+
+
 def main() -> None:
-    """命令行同步主入口。"""
-    exit_code = 0
+    """同步入口：Cyclopts 内部以 asyncio 驱动异步命令。"""
+    ctx.configure()
     try:
-        remaining = extract_global_flags(sys.argv[1:])
-        if not remaining:
-            app(["--help"])
-            sys.exit(0)
-        exit_code = app(remaining)
-    except CycloptsError as exc:
-        print_json(create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False))
-    except ConfirmationRequiredError as exc:
-        print_json(create_error_envelope(code="CONFIRMATION_REQUIRED", message=str(exc), retryable=False, next_actions=exc.next_actions))
-        sys.exit(5)
-    except OutputExistsError as exc:
-        print_json(create_error_envelope(code="FILE_EXISTS", message=str(exc), retryable=False))
-        sys.exit(5)
-    except PartialFailureError as exc:
-        print_json(create_error_envelope(code="PARTIAL_FAILURE", message=str(exc), retryable=False, data=exc.data))
-        sys.exit(7)
-    except AuthError as exc:
-        print_json(create_error_envelope(code="AUTH_EXPIRED", message=str(exc), retryable=False))
-        sys.exit(3)
-    except (FileNotFoundError, KeyError) as exc:
-        print_json(create_error_envelope(code="NOT_FOUND", message=str(exc), retryable=False))
-        sys.exit(4)
-    except ValueError as exc:
-        print_json(create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False))
-        sys.exit(2)
-    except APIError as exc:
-        print_json(create_error_envelope(code="PLATFORM_ERROR", message=str(exc), retryable=True))
-        sys.exit(6)
-    except WKError as exc:
-        print_json(create_error_envelope(code="BIZ_ERROR", message=str(exc), retryable=False))
-        sys.exit(1)
-    except Exception as exc:
-        logger.exception("未捕获的内部异常")
-        print_json(create_error_envelope(code="INTERNAL_ERROR", message=str(exc), retryable=False))
-        sys.exit(1)
-
-    sys.exit(exit_code or 0)
-
-
-async def async_main(argv: list[str]) -> int:
-    """供测试套件异步调用的入口。"""
-    try:
-        remaining = extract_global_flags(argv)
-        if not remaining:
-            await app.run_async(["--help"])
-            return 0
-        res = await app.run_async(remaining)
-        return int(res or 0)
-    except CycloptsError as exc:
-        print_json(create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False))
-        return 2
-    except ConfirmationRequiredError as exc:
-        print_json(create_error_envelope(code="CONFIRMATION_REQUIRED", message=str(exc), retryable=False, next_actions=exc.next_actions))
-        return 5
-    except OutputExistsError as exc:
-        print_json(create_error_envelope(code="FILE_EXISTS", message=str(exc), retryable=False))
-        return 5
-    except PartialFailureError as exc:
-        print_json(create_error_envelope(code="PARTIAL_FAILURE", message=str(exc), retryable=False, data=exc.data))
-        return 7
-    except AuthError as exc:
-        print_json(create_error_envelope(code="AUTH_EXPIRED", message=str(exc), retryable=False))
-        return 3
-    except (FileNotFoundError, KeyError) as exc:
-        print_json(create_error_envelope(code="NOT_FOUND", message=str(exc), retryable=False))
-        return 4
-    except ValueError as exc:
-        print_json(create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False))
-        return 2
-    except APIError as exc:
-        print_json(create_error_envelope(code="PLATFORM_ERROR", message=str(exc), retryable=True))
-        return 6
-    except WKError as exc:
-        print_json(create_error_envelope(code="BIZ_ERROR", message=str(exc), retryable=False))
-        return 1
-    except Exception as exc:
-        print_json(create_error_envelope(code="INTERNAL_ERROR", message=str(exc), retryable=False))
-        return 1
+        code = int(app.meta(sys.argv[1:]) or 0)
+    except BaseException as exc:
+        if isinstance(exc, SystemExit):
+            raise
+        envelope, exit_code = _handle_exception(exc)
+        emit_error(envelope)
+        sys.exit(exit_code)
+    sys.exit(code)
 
 
 if __name__ == "__main__":

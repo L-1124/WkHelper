@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 scripts = { wkhelper = "wkhelper.main:main" }
 dependencies = [
-  "cyclopts>=3.0.0",
+  "cyclopts>=5.0.0",
   "keyring>=24.0.0",
   "qrcode>=8.2",
   "niquests[ws]>=3.18.0",
