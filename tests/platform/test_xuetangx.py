@@ -2,11 +2,11 @@
 
 from typing import Any
 
-import niquests
 import pytest
 
 from wkhelper.core.entities import Course, Homework
 from wkhelper.core.exceptions import APIError, AuthError
+from wkhelper.core.transport import AsyncSession
 from wkhelper.platform.xuetangx import XuetangXPlatform
 
 
@@ -22,7 +22,7 @@ def _sample_course() -> Course:
 @pytest.mark.asyncio
 async def test_xuetangx_login_with_cookies_success(monkeypatch) -> None:
     """验证 Cookie 包含有效 csrftoken 与 sessionid 时正确解析用户资料及指纹头。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -51,7 +51,7 @@ async def test_xuetangx_login_with_cookies_success(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_xuetangx_login_with_cookies_missing_token() -> None:
     """Cookie 缺少 csrftoken 或 sessionid 时应拒绝登录。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
         with pytest.raises(AuthError, match="缺少 csrftoken 或 sessionid"):
             await platform._login_with_cookies({"csrftoken": "only_token"})
@@ -60,7 +60,7 @@ async def test_xuetangx_login_with_cookies_missing_token() -> None:
 @pytest.mark.asyncio
 async def test_xuetangx_get_courses(monkeypatch) -> None:
     """验证获取用户课程列表并映射课堂 ID 与签名元数据。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -93,7 +93,7 @@ async def test_xuetangx_get_courses(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_xuetangx_get_courses_failure(monkeypatch) -> None:
     """接口返回失败时应抛出 APIError。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -109,7 +109,7 @@ async def test_xuetangx_get_courses_failure(monkeypatch) -> None:
 async def test_xuetangx_get_chapter_and_schedule(monkeypatch) -> None:
     """验证章节大纲查询与进度字典解析。"""
     course = _sample_course()
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -145,7 +145,7 @@ async def test_xuetangx_submit_payload_and_context(monkeypatch) -> None:
     course = _sample_course()
     hw = Homework(id="5001", name="测试作业")
 
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -193,7 +193,7 @@ async def test_xuetangx_submit_payload_and_context(monkeypatch) -> None:
 async def test_xuetangx_video_context(monkeypatch) -> None:
     """验证视频上下文与心跳地址构造。"""
     course = _sample_course()
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -241,7 +241,7 @@ async def test_xuetangx_article_and_discussions(monkeypatch) -> None:
     """验证学堂在线图文参数与讨论题接口 hook。"""
     course = _sample_course()
     course.metadata["sku_id"] = "sku_888"
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
         assert platform._article_finish_params(course) == {"cid": "2001", "sid": "sku_888"}

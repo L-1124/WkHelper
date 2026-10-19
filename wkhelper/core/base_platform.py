@@ -10,8 +10,6 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-import niquests
-
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.events import EventCallback, emit_event, is_debug_enabled
 from wkhelper.core.exceptions import APIError, AuthError, RiskControlError
@@ -32,6 +30,20 @@ from wkhelper.core.results import (
     VideoWatchResult,
 )
 from wkhelper.core.throttle import RateGate, RetryPolicy, parse_retry_hint
+from wkhelper.core.transport import (
+    AsyncSession,
+    HttpMethod,
+    build_session,
+)
+from wkhelper.core.transport import (
+    ConnectionError as HttpConnectionError,
+)
+from wkhelper.core.transport import (
+    HTTPError as HttpError,
+)
+from wkhelper.core.transport import (
+    Timeout as HttpTimeout,
+)
 from wkhelper.core.video import VideoWatchOptions, generic_watch_video, parse_progress_text
 
 logger = logging.getLogger(__name__)
@@ -188,10 +200,12 @@ class BasePlatform(ABC):
     # 平台 API 端点基址与路径前缀，供通用 URL 构造复用；子类以类属性声明。
     api_base: ClassVar[str] = ""
     api_prefix: ClassVar[str] = ""
+    # 默认 TLS 指纹伪装目标；`None` 表示不伪装（会话 Cookie 与签发指纹绑定时必须一致）
+    impersonate: ClassVar[str | None] = "chrome"
 
     def __init__(
         self,
-        client: niquests.AsyncSession,
+        client: AsyncSession,
         *,
         gate: RateGate | None = None,
         retry_policy: RetryPolicy | None = None,
@@ -217,7 +231,7 @@ class BasePlatform(ABC):
             payload["error"] = error
         emit_event("http.trace", payload)
 
-    async def _request_json(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request_json(self, method: HttpMethod, url: str, **kwargs: Any) -> dict[str, Any]:
         """发起 HTTP 请求并解析 JSON；瞬时错误按退避与冷却策略重试。"""
         policy = self.retry_policy
         for attempt in range(1, policy.max_attempts + 1):
@@ -235,19 +249,19 @@ class BasePlatform(ABC):
                     await asyncio.sleep(delay)
         raise APIError(f"请求失败次数过多: {url}")  # 循环必然在内部返回或抛出
 
-    async def _request_json_once(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request_json_once(self, method: HttpMethod, url: str, **kwargs: Any) -> dict[str, Any]:
         """单次请求：HTTP 失败与限流提示统一收敛为带重试元数据的错误。"""
         start = time.perf_counter()
         try:
             resp = await self.client.request(method, url, **kwargs)
-        except (niquests.ConnectionError, niquests.Timeout) as exc:
+        except (HttpConnectionError, HttpTimeout) as exc:
             self._trace_http(method, url, start, None, str(exc))
             raise APIError(f"网络请求失败: {url}") from exc
 
         body = resp.text or ""
         try:
             resp.raise_for_status()
-        except niquests.HTTPError as exc:
+        except HttpError as exc:
             self._trace_http(method, url, start, resp.status_code, str(exc))
             if _looks_like_risk_control(body):
                 raise RiskControlError(f"触发平台风控人机验证，请先在浏览器完成验证后重试: {url}") from exc
@@ -332,22 +346,21 @@ class BasePlatform(ABC):
         wait_limit = 60.0
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        async with niquests.AsyncSession(timeout=max(30.0, timeout + 15.0), verify=True) as ws_sess:
-            resp = await ws_sess.get(self._qr_ws_url())
-            if resp.extension is None:
-                raise AuthError("WebSocket 升级失败")
-            await resp.extension.send_payload(payload)
-            try:
+        async with build_session(timeout=max(30.0, timeout + 15.0), proxy=None, user_agent=None) as ws_sess:
+            async with ws_sess.ws_connect(self._qr_ws_url(), timeout=max(30.0, timeout + 15.0)) as ws:
+                await ws.send_str(payload)
                 while loop.time() < deadline:
                     remain_time = max(1.0, deadline - loop.time())
                     try:
-                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=min(wait_limit, remain_time))
+                        raw = await asyncio.wait_for(ws.recv_str(), timeout=min(wait_limit, remain_time))
                     except TimeoutError:
                         if loop.time() >= deadline:
                             break
-                        await resp.extension.send_payload(payload)
+                        await ws.send_str(payload)
                         continue
-                    if raw is None:
+                    except Exception as exc:  # 连接被对端关闭时 curl 会抛传输异常
+                        raise AuthError(f"WebSocket 连接已关闭: {exc}") from exc
+                    if not raw:
                         raise AuthError("WebSocket 连接已关闭")
                     message = json.loads(raw)
                     hint = self._qr_expire_seconds(message)
@@ -356,8 +369,6 @@ class BasePlatform(ABC):
                     await self._qr_publish_image(message, qr_session, remain_time)
                     if message.get("op") == "loginsuccess":
                         return message
-            finally:
-                await resp.extension.close()
         raise AuthError("扫码超时或未获得有效认证回执")
 
     async def _login_with_qrcode(
@@ -700,7 +711,7 @@ class BasePlatform(ABC):
 
             try:
                 response.raise_for_status()
-            except niquests.HTTPError as exc:
+            except HttpError as exc:
                 if response.status_code in (401, 403):
                     raise AuthError(f"平台拒绝提交（HTTP {response.status_code}），登录态可能已失效") from exc
                 if response.status_code >= 500 and attempt < max_attempts:
@@ -859,7 +870,7 @@ class BasePlatform(ABC):
             problem_id: int,
             answer: list[str],
             course_info: Course,
-            client: niquests.AsyncSession,
+            client: AsyncSession,
             kwargs: dict[str, Any] | None,
             question: dict[str, Any] | None = None,
         ) -> QuestionSubmitOutcome:

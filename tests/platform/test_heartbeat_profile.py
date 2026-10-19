@@ -1,10 +1,10 @@
 """心跳报文的平台差异契约测试。"""
 
-import niquests
 import pytest
 
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.json_types import JsonDict
+from wkhelper.core.transport import AsyncSession
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 
@@ -27,7 +27,7 @@ def _build(platform: BasePlatform) -> JsonDict:
 @pytest.mark.asyncio
 async def test_heartbeat_payload_uses_platform_profile() -> None:
     """心跳报文的平台固定字段来自 `heartbeat_profile`，字段语义对齐 Web 播放器。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         for platform in (YuketangPlatform(client), XuetangXPlatform(client)):
             profile = platform.heartbeat_profile
             payload = _build(platform)

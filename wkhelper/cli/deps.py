@@ -7,32 +7,27 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import niquests
-
 from wkhelper.cli.context import ctx
 from wkhelper.core.base_platform import BasePlatform
-from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.credential_store import CredentialStore
 from wkhelper.core.entities import Course, PaginationMeta, course_reference, dedupe_courses
 from wkhelper.core.exceptions import AuthError
 from wkhelper.core.json_types import JsonValue, json_str_list, parse_json_text
 from wkhelper.core.plan import VideoPlan
+from wkhelper.core.transport import AsyncSession, build_session
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 
 logger = logging.getLogger("wkhelper")
 
 
-def _create_http_session(timeout: float = 15.0) -> niquests.AsyncSession:
-    """按全局网络上下文创建 niquests 会话。
+def _create_http_session(timeout: float = 15.0, impersonate: str | None = None) -> AsyncSession:
+    """按全局网络上下文与目标平台创建 HTTP 会话。
 
-    未显式指定 `--user-agent` 时使用 `core/config.py` 声明的默认浏览器标头，
-    避免声明值与实际请求标头不一致。
+    指纹伪装由平台声明（`BasePlatform.impersonate`）：会话 Cookie 与签发时的
+    TLS 指纹绑定，平台间不一致时必须分别处理，否则会被直接拒绝。
     """
-    proxies = {"all": ctx.proxy} if ctx.proxy else None
-    sess = niquests.AsyncSession(timeout=timeout, proxies=proxies)
-    sess.headers["User-Agent"] = ctx.user_agent or DEFAULT_HEADERS["User-Agent"]
-    return sess
+    return build_session(timeout=timeout, proxy=ctx.proxy, user_agent=ctx.user_agent, impersonate=impersonate)
 
 
 def _read_json_file_or_stdin(file_path: str) -> JsonValue:
@@ -125,13 +120,15 @@ def _validate_platform_code(platform: str | None) -> None:
         raise ValueError(f"不支持的平台代码: {platform}，仅支持 ykt 或 xtzx")
 
 
-def _create_platform_instance(platform_code: str, client: niquests.AsyncSession) -> BasePlatform:
+_PLATFORM_TYPES: dict[str, type[BasePlatform]] = {"ykt": YuketangPlatform, "xtzx": XuetangXPlatform}
+
+
+def _create_platform_instance(platform_code: str, client: AsyncSession) -> BasePlatform:
     """按平台代码实例化平台对象。"""
-    if platform_code == "ykt":
-        return YuketangPlatform(client)
-    if platform_code == "xtzx":
-        return XuetangXPlatform(client)
-    raise ValueError(f"未知的平台代码: {platform_code}")
+    platform_cls = _PLATFORM_TYPES.get(platform_code)
+    if platform_cls is None:
+        raise ValueError(f"未知的平台代码: {platform_code}")
+    return platform_cls(client)
 
 
 def _load_plan(plan_file: str) -> VideoPlan:
@@ -190,7 +187,9 @@ async def _open_platform(
     """打开已认证的平台客户端上下文。"""
     store = ctx.get_store()
     platform_code, _account_id, cookies = _resolve_account_and_platform(store, platform, account)
-    async with _create_http_session(timeout=timeout) as client:
+    platform_cls = _PLATFORM_TYPES.get(platform_code)
+    impersonate = platform_cls.impersonate if platform_cls is not None else None
+    async with _create_http_session(timeout=timeout, impersonate=impersonate) as client:
         plat = _create_platform_instance(platform_code, client)
         await plat.login(cookies=cookies)
         yield plat

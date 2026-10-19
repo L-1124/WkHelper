@@ -2,10 +2,10 @@
 
 from typing import Any
 
-import niquests
 import pytest
 
 from wkhelper.core.entities import Course, UserInfo
+from wkhelper.core.transport import AsyncSession
 from wkhelper.platform.yuketang import YuketangPlatform
 
 
@@ -21,7 +21,7 @@ def _course() -> Course:
 @pytest.mark.asyncio
 async def test_completed_video_ids_reads_watched_record(monkeypatch) -> None:
     """用 video-log/get_video_watched_record 判定完成：completed=1 或 rate 达到 100%。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = YuketangPlatform(client)
         platform.user = UserInfo(id=108178260, name="tester")
 
@@ -47,7 +47,7 @@ async def test_completed_video_ids_reads_watched_record(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_completed_video_ids_returns_none_on_error(monkeypatch) -> None:
     """接口异常时返回 None，让基类退回章节进度判断，而不是宣称全部未完成。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = YuketangPlatform(client)
         platform.user = UserInfo(id=1, name="tester")
 
@@ -62,7 +62,7 @@ async def test_completed_video_ids_returns_none_on_error(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_completed_video_ids_returns_none_on_bad_payload(monkeypatch) -> None:
     """返回结构异常时同样退回章节进度，不把异常当成「全部未完成」。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = YuketangPlatform(client)
         platform.user = UserInfo(id=1, name="tester")
 
@@ -77,7 +77,7 @@ async def test_completed_video_ids_returns_none_on_bad_payload(monkeypatch) -> N
 @pytest.mark.asyncio
 async def test_build_videos_marks_completed_from_platform(monkeypatch) -> None:
     """有权威完成集合时，视频列表按它标记 [已完成]，且不再请求章节进度。"""
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         platform = YuketangPlatform(client)
         course = _course()
 

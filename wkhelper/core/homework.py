@@ -4,11 +4,10 @@ import asyncio
 import logging
 from typing import Any, Protocol
 
-import niquests
-
 from wkhelper.core.entities import Course
 from wkhelper.core.events import EventCallback, notifier
 from wkhelper.core.results import HomeworkSubmitResult, QuestionSubmitOutcome, SubmitItem
+from wkhelper.core.transport import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,7 @@ class SubmitFunc(Protocol):
         problem_id: int,
         answer: list[str],
         course_info: Course,
-        client: niquests.AsyncSession,
+        client: AsyncSession,
         kwargs: HeaderMap | None,
         question: QuestionPayload | None = None,
     ) -> QuestionSubmitOutcome: ...
@@ -63,7 +62,7 @@ async def generic_submit_homework(
     resolved_pairs: list[tuple[QuestionPayload, list[str]]],
     submit_func: SubmitFunc,
     course_info: Course,
-    client: niquests.AsyncSession,
+    client: AsyncSession,
     headers: HeaderMap | None = None,
     on_event: EventCallback | None = None,
     concurrency: int = 1,

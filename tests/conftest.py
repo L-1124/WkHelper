@@ -2,17 +2,17 @@
 
 from typing import Any, override
 
-import niquests
 import pytest_asyncio
 
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
+from wkhelper.core.transport import AsyncSession
 
 
 class FakeAsyncPlatform(BasePlatform):
     """通用的异步平台假实现。"""
 
-    def __init__(self, client: niquests.AsyncSession, **kwargs: Any) -> None:
+    def __init__(self, client: AsyncSession, **kwargs: Any) -> None:
         super().__init__(client, **kwargs)
 
     @property
@@ -100,5 +100,5 @@ class FakeAsyncPlatform(BasePlatform):
 
 @pytest_asyncio.fixture
 async def fake_platform():
-    async with niquests.AsyncSession() as client:
+    async with AsyncSession() as client:
         yield FakeAsyncPlatform(client)

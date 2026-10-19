@@ -1,5 +1,6 @@
 """WkHelper 命令行主程序入口（基于 Cyclopts）。"""
 
+import asyncio
 import logging
 import sys
 import traceback
@@ -23,6 +24,19 @@ from wkhelper.core.exceptions import (
 from wkhelper.core.json_types import JsonDict
 
 logger = logging.getLogger("wkhelper")
+
+
+def _loop_factory() -> asyncio.AbstractEventLoop:
+    """选择事件循环实现。
+
+    Windows 默认的 `ProactorEventLoop` 不实现 `add_reader/add_writer`，而
+    curl_cffi 依赖它们驱动 libcurl 的 socket action；用 selector 循环可避免
+    curl_cffi 退回到「额外选择器线程」的兼容路径。本程序不使用子进程，
+    因此不受 selector 循环在 Windows 上的限制影响。
+    """
+    if sys.platform == "win32":
+        return asyncio.SelectorEventLoop()
+    return asyncio.new_event_loop()
 
 
 def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
@@ -85,17 +99,22 @@ async def async_main(argv: Sequence[str]) -> int:
 
 
 def main() -> None:
-    """同步入口：Cyclopts 内部以 asyncio 驱动异步命令。"""
+    """同步入口：在受控事件循环中运行异步命令。
+
+    Cyclopts 的同步调用路径内部固定使用 `asyncio.run`（无法指定 loop factory），
+    因此这里改为自己创建循环并调用 `run_async`，以便在 Windows 上使用 selector
+    循环，避免 curl_cffi 的额外选择器线程。
+    """
     ctx.configure()
     try:
-        code = int(app.meta(sys.argv[1:]) or 0)
+        code = asyncio.run(async_main(sys.argv[1:]), loop_factory=_loop_factory)
     except BaseException as exc:
         if isinstance(exc, SystemExit):
             raise
         envelope, exit_code = _handle_exception(exc)
         emit_error(envelope)
         sys.exit(exit_code)
-    sys.exit(code)
+    sys.exit(code or 0)
 
 
 if __name__ == "__main__":

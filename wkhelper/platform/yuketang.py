@@ -4,7 +4,6 @@ import logging
 from typing import Any, override
 
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
-from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
@@ -18,6 +17,8 @@ class YuketangPlatform(BasePlatform):
 
     api_base = "https://www.yuketang.cn"
     api_prefix = "mooc-api"
+    # 会话 Cookie 与签发时的 TLS 指纹绑定：沿用非浏览器指纹，重新登录后可切换
+    impersonate = None
 
     @property
     @override
@@ -34,7 +35,6 @@ class YuketangPlatform(BasePlatform):
 
         self.client.headers.update(
             {
-                "User-Agent": DEFAULT_HEADERS["User-Agent"],
                 "Content-Type": "application/json",
                 "Referer": "https://www.yuketang.cn/",
                 "X-CSRFToken": csrftoken,
@@ -79,7 +79,6 @@ class YuketangPlatform(BasePlatform):
         response = await self.client.post(
             f"{self.api_base}/pc/web_login",
             json={"Auth": login_data["Auth"], "UserID": int(login_data["UserID"])},
-            headers=DEFAULT_HEADERS,
         )
         cookies = {
             "csrftoken": response.cookies.get("csrftoken") or "",

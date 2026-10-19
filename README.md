@@ -22,7 +22,8 @@
   - **心跳抖动**：视频心跳间隔支持随机抖动（`--jitter`），消除周期性机器指纹。
   - **切换冷却**：跨视频支持设置间隔等待（`--video-delay`）。
   - **作业节流**：支持自定义并发（`--concurrency`，默认单线程）、逐题提交延迟（`--delay` / `--delay-jitter`）与乱序提交（`--random-order`）。
-  - **网络出口**：全局支持指定代理通道（`--proxy`）与真实浏览器标头（`--user-agent`）。
+  - **浏览器指纹**：默认伪装 Chrome 的 TLS/JA3 与 HTTP/2 指纹（`WKHELPER_IMPERSONATE` 可切换目标或 `none`），UA 与指纹保持一致。
+  - **网络出口**：全局支持指定代理通道（`--proxy`）与自定义浏览器标头（`--user-agent`，指定后会关闭指纹伪装）。
 - **安全凭据存储**
   - 接入操作系统安全保管库（Windows Vault / macOS Keychain / SecretService），不以明文存储会话秘密；支持系统凭据或纯内存会话（`--credential-mode session`）。
 - **完备的机器契约自省**
@@ -179,7 +180,7 @@ wkhelper schema --path "homework submit" --full
 | 模块 | 参数 | 默认值 | 作用说明 |
 |---|---|---|---|
 | **全局** | `--proxy <url>` | 无 | 路由全局网络流量通过 HTTP / SOCKS5 代理出口 |
-| **全局** | `--user-agent <ua>` | 内置 Chrome | 覆盖默认标头为用户真实浏览器 User-Agent |
+| **全局** | `--user-agent <ua>` | 伪装目标自带 | 指定真实浏览器 UA；与指纹伪装互斥，指定后回退为 libcurl 默认指纹 |
 | **全局** | `--format <json\|md>` | 按 TTY 推断 | 强制输出格式，非 TTY 下默认 `json` |
 | **全局** | `--credential-mode <system\|session>` | `system` | 凭据写入系统保险库，或仅驻留内存 |
 | **全局** | `--data-dir <dir>` | 平台默认目录 | 凭据元数据与检查点数据目录 |
