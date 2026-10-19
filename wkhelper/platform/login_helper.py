@@ -11,15 +11,25 @@ from typing import Any
 import qrcode
 from qrcode.image.svg import SvgImage
 
-from wkhelper.cli.events import emit_event
+from wkhelper.core.events import emit_event
 
 
 class QrCodeSession:
     """扫码登录会话管理：包含临时文件生成与本地 HTTP 服务。"""
 
-    def __init__(self, display: str = "image", open_browser: bool = False) -> None:
+    def __init__(
+        self,
+        display: str = "image",
+        open_browser: bool = False,
+        platform_name: str = "雨课堂",
+        tip: str | None = None,
+    ) -> None:
         self.display = display
         self.open_browser = open_browser
+        self.platform_name = platform_name
+        self.tip = tip or (
+            "请使用 微信 扫描二维码完成学堂在线登录" if platform_name == "学堂在线" else "请使用 微信 或 雨课堂 App 扫描二维码完成登录"
+        )
         self.image_path: Path | None = None
         self.token = secrets.token_urlsafe(16)
         self.server: asyncio.Server | None = None
@@ -72,14 +82,6 @@ class QrCodeSession:
                 headers[name.strip().lower()] = value.strip()
         return headers
 
-    def _is_loopback_host(self, host: str) -> bool:
-        """只接受指向本机回环地址与本服务端口的 Host 头。"""
-        return host in (f"127.0.0.1:{self.port}", f"localhost:{self.port}")
-
-    def _is_loopback_origin(self, origin: str) -> bool:
-        """只接受由本地页面发起的 Origin。"""
-        return origin in (f"http://127.0.0.1:{self.port}", f"http://localhost:{self.port}")
-
     @staticmethod
     async def _reject(writer: asyncio.StreamWriter, status_line: str) -> None:
         """返回统一的最小化拒绝响应并关闭连接。"""
@@ -102,11 +104,12 @@ class QrCodeSession:
                 return
 
             headers = await self._read_headers(reader)
-            if not self._is_loopback_host(headers.get("host", "")):
+            loopback_hosts = (f"127.0.0.1:{self.port}", f"localhost:{self.port}")
+            if headers.get("host", "") not in loopback_hosts:
                 await self._reject(writer, "403 Forbidden")
                 return
             origin = headers.get("origin")
-            if origin is not None and not self._is_loopback_origin(origin):
+            if origin is not None and origin not in (f"http://127.0.0.1:{self.port}", f"http://localhost:{self.port}"):
                 await self._reject(writer, "403 Forbidden")
                 return
 
@@ -153,7 +156,7 @@ class QrCodeSession:
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>WkHelper 扫码登录</title>
+<title>WkHelper 扫码登录 - {self.platform_name}</title>
 <style>
 body {{ font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
 .card {{ background: #fff; padding: 2.5rem 2rem; border-radius: 16px; text-align: center; max-width: 360px; width: 100%; }}
@@ -168,8 +171,8 @@ img {{ width: 230px; height: 230px; border-radius: 10px; border: 1px solid #e2e8
 <body>
 <div class="card" id="card">
   <div id="qr-box">
-    <h2>扫码登录</h2>
-    <p>请使用 微信 或 雨课堂 App 扫描二维码完成登录</p>
+    <h2>扫码登录（{self.platform_name}）</h2>
+    <p>{self.tip}</p>
     <img src="/qr?token={self.token}" alt="登录二维码" id="qr-img" />
   </div>
   <div class="success-box" id="success-box">
