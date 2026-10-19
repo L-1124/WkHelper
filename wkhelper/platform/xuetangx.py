@@ -7,10 +7,11 @@ from typing import Any, override
 
 import niquests
 
+from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
+from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.exporter import html_to_md
-from wkhelper.core.models import Course, DiscussionCommentResult, DiscussionTopicDetail, Homework, UserInfo, VideoContext
-from wkhelper.platform.base import BasePlatform
+from wkhelper.core.results import DiscussionCommentResult, DiscussionTopicDetail
 from wkhelper.platform.login_helper import QrCodeSession
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 class XuetangXPlatform(BasePlatform):
     """学堂在线平台。"""
+
+    @property
+    @override
+    def heartbeat_profile(self) -> HeartbeatProfile:
+        """学堂在线心跳报文固定字段。
+
+        现网沿用雨课堂报文格式（仅请求 URL 不同），因此此处保持与雨课堂一致的取值；
+        若平台侧协议变化，只需在此覆写，不再改动 `core`。
+        """
+        return HeartbeatProfile(origin="ali-cdn.xuetangx.com", lob="ykt")
 
     @override
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:

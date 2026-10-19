@@ -1,16 +1,17 @@
 """CLI 展现层输出：成功/错误信封与终端渲染，供入口与 result_action 共用。"""
 
 import sys
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 
 from wkhelper.cli.context import get_effective_format
-from wkhelper.cli.envelope import CommandResult, create_success_envelope, print_json
+from wkhelper.cli.envelope import CommandResult, NextAction, create_success_envelope, print_json
 from wkhelper.cli.markdown import format_error_markdown, format_result_markdown
-from wkhelper.core.models import JsonDict
+from wkhelper.core.json_types import JsonDict, JsonValue
 
 TERMINAL_THEME = Theme(
     {
@@ -43,13 +44,18 @@ def emit_error(envelope: JsonDict, console: Console = CONSOLE) -> None:
         print_json(envelope)
         return
 
-    error = envelope.get("error") or {}
+    raw_error = envelope.get("error")
+    error: Mapping[str, JsonValue] = raw_error if isinstance(raw_error, Mapping) else {}
+    raw_details = error.get("details")
+    raw_actions = envelope.get("next_actions")
+    # 信封已由强类型模型生成，此处是 JSON 反查边界，按契约收窄一次即可。
+    actions = cast("list[NextAction]", raw_actions) if isinstance(raw_actions, list) else []
     _print_markdown(
         format_error_markdown(
             str(error.get("code", "ERROR")),
             str(error.get("message", "未知错误")),
-            error.get("details") if isinstance(error.get("details"), dict) else None,
-            envelope.get("next_actions") or [],
+            dict(raw_details) if isinstance(raw_details, Mapping) else None,
+            actions,
         ),
         console,
     )

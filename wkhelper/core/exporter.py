@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-import niquests
 from markdownify import MarkdownConverter
 
 from wkhelper.core.base_platform import BasePlatform
 from wkhelper.core.config import MAX_WORKERS_DOWNLOAD
+from wkhelper.core.entities import Course, Homework
 from wkhelper.core.exceptions import OutputExistsError
-from wkhelper.core.models import Course, ExportResult, Homework, OptionItem, QuestionDetail
+from wkhelper.core.results import ExportResult, OptionItem, QuestionDetail
+from wkhelper.core.transport import Fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ def _safe_filename_part(name: str) -> str:
 
 
 async def download_resource_file(
-    client: niquests.AsyncSession,
+    fetch: Fetcher,
     url: str,
     dest_path: Path,
 ) -> bool:
@@ -75,18 +76,18 @@ async def download_resource_file(
         return True
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        resp = await client.get(url, timeout=15)
-        if resp.status_code == 200 and resp.content:
-            dest_path.write_bytes(resp.content)
+        content = await fetch(url)
+        if content:
+            dest_path.write_bytes(content)
             return True
-        logger.debug(f"下载资源失败: status={resp.status_code}, url={url}")
+        logger.debug(f"下载资源失败: 空内容, url={url}")
     except Exception as exc:
         logger.debug(f"下载资源异常: url={url}, err={exc}")
     return False
 
 
 async def localize_text_resources(
-    client: niquests.AsyncSession,
+    fetch: Fetcher,
     text: str,
     assets_dir: Path,
     filename_prefix: str,
@@ -102,7 +103,7 @@ async def localize_text_resources(
         ext = _extract_extension(url, default=".png")
         filename = f"{filename_prefix}_{seq}{ext}"
         dest_path = assets_dir / filename
-        ok = await download_resource_file(client, url, dest_path)
+        ok = await download_resource_file(fetch, url, dest_path)
         if ok:
             rel_path = f"{relative_base}/{filename}"
             rewritten_text = rewritten_text.replace(url, rel_path)
@@ -115,7 +116,7 @@ async def localize_text_resources(
         safe_title = _safe_filename_part(link_title)
         filename = f"{filename_prefix}_attach_{seq}_{safe_title}{ext}"
         dest_path = assets_dir / filename
-        ok = await download_resource_file(client, url, dest_path)
+        ok = await download_resource_file(fetch, url, dest_path)
         if ok:
             rel_path = f"{relative_base}/{filename}"
             rewritten_text = rewritten_text.replace(url, rel_path)
@@ -125,21 +126,21 @@ async def localize_text_resources(
 
 
 async def localize_question_detail(
-    client: niquests.AsyncSession,
+    fetch: Fetcher,
     detail: QuestionDetail,
     assets_dir: Path,
     relative_base: str = "./assets",
 ) -> QuestionDetail:
     """下载单题题干与选项中的图片与附件，并按规范命名改写路径。"""
     prefix = f"q_{detail.id}"
-    new_prompt, body_res = await localize_text_resources(client, detail.prompt, assets_dir, f"{prefix}_body", relative_base=relative_base)
+    new_prompt, body_res = await localize_text_resources(fetch, detail.prompt, assets_dir, f"{prefix}_body", relative_base=relative_base)
     all_res = list(body_res)
 
     new_options: list[OptionItem] = []
     for opt in detail.options:
         key_str = _safe_filename_part(str(opt.key))
         new_text, opt_res = await localize_text_resources(
-            client, opt.text, assets_dir, f"{prefix}_opt_{key_str}", relative_base=relative_base
+            fetch, opt.text, assets_dir, f"{prefix}_opt_{key_str}", relative_base=relative_base
         )
         new_options.append(OptionItem(key=opt.key, text=new_text))
         all_res.extend(opt_res)
@@ -220,7 +221,7 @@ async def export_questions_to_markdown(
 
                     if assets_dir:
                         body, body_res = await localize_text_resources(
-                            platform.client, body, assets_dir, f"{prefix}_body", relative_base="./assets"
+                            platform.fetch_bytes, body, assets_dir, f"{prefix}_body", relative_base="./assets"
                         )
                         downloaded_resources_total += len(body_res)
 
@@ -236,7 +237,7 @@ async def export_questions_to_markdown(
                             if assets_dir:
                                 key_safe = _safe_filename_part(str(key))
                                 value, opt_res = await localize_text_resources(
-                                    platform.client, value, assets_dir, f"{prefix}_opt_{key_safe}", relative_base="./assets"
+                                    platform.fetch_bytes, value, assets_dir, f"{prefix}_opt_{key_safe}", relative_base="./assets"
                                 )
                                 downloaded_resources_total += len(opt_res)
                             value = value.replace("\n", "\n    ")
@@ -261,7 +262,7 @@ async def export_questions_to_markdown(
                                     safe_name = _safe_filename_part(att_name)
                                     fn = f"{prefix}_attach_{a_idx}_{safe_name}{ext}"
                                     dest_p = assets_dir / fn
-                                    ok = await download_resource_file(platform.client, att_url, dest_p)
+                                    ok = await download_resource_file(platform.fetch_bytes, att_url, dest_p)
                                     if ok:
                                         downloaded_resources_total += 1
                                         attach_lines.append(f"- 附件：[{att_name}](./assets/{fn})")
