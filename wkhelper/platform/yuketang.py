@@ -199,6 +199,31 @@ class YuketangPlatform(BasePlatform):
                 schedules[int(leaf_id)] = float(progress)
             except (TypeError, ValueError):
                 continue
+        # 补充从 c27 接口获取作业与测验多类型叶子的真实完成状态
+        try:
+            p_url = f"https://www.yuketang.cn/c27/online_courseware/schedule/course/progress/?classroom_id={cid}"
+            p_resp = await self._request_json("GET", p_url, **kwargs)
+            cp = p_resp.get("data", {}).get("course_progress", [])
+
+            def walk(nodes: list[dict[str, Any]]) -> None:
+                for n in nodes:
+                    if isinstance(n, dict):
+                        lid = n.get("id")
+                        prog = n.get("progress")
+                        if lid is not None and prog is not None:
+                            try:
+                                schedules[int(lid)] = float(prog)
+                            except (TypeError, ValueError):
+                                pass
+                        for k in ("section_leaf_list", "leaf_list", "section_list"):
+                            children = n.get(k)
+                            if isinstance(children, list):
+                                walk(children)
+
+            walk(cp)
+        except Exception as exc:
+            logger.debug(f"获取多类型任务进度失败: {exc}")
+
         return schedules
 
     @override
