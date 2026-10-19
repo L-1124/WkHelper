@@ -84,13 +84,13 @@ def _deobfuscate_html_str(html_str: Any, obfuscated_to_real: dict[int, int]) -> 
     if isinstance(html_str, str):
         # 只提取加密字体标签内的文本进行反混淆，其他文本原样保留
         _ENCRYPTED_RE = re.compile(
-            r'<(span|div|p)\b[^>]*?class=["\'][^"\']*(?:xuetangx-com-encrypted-font|custom_ueditor_cn_body)[^"\']*["\'][^>]*>(.*?)</\1>',
+            r'<(span|div|p|pre)\b[^>]*?class=["\'][^"\']*(?:xuetangx-com-encrypted-font|custom_ueditor_cn_body)[^"\']*["\'][^>]*>(.*?)</\1>',
             re.IGNORECASE | re.DOTALL,
         )
 
         def _replace(m: re.Match[str]) -> str:
             inner = m.group(2)
-            return _deobfuscate_text(inner, obfuscated_to_real)
+            return m.group(0).replace(inner, _deobfuscate_text(inner, obfuscated_to_real), 1)
 
         return _ENCRYPTED_RE.sub(_replace, html_str)
     elif isinstance(html_str, list):
@@ -144,21 +144,14 @@ async def deobfuscate_questions(questions: list[dict[str, Any]], font_url: str, 
 
         logger.debug(f"成功建立了 {len(obfuscated_to_real)} 个字符的反混淆映射")
 
-        # 就地修改 questions
+        # 就地修改 questions：content 下所有字符串/列表/字典字段统一按加密标签替换
         for q in questions:
             content = q.get("content", {})
-
-            # 反混淆题干
-            if "Body" in content:
-                content["Body"] = _deobfuscate_html_str(content["Body"], obfuscated_to_real)
-            elif "body" in content:
-                content["body"] = _deobfuscate_html_str(content["body"], obfuscated_to_real)
-
-            # 反混淆选项
-            if "Options" in content:
-                content["Options"] = _deobfuscate_html_str(content["Options"], obfuscated_to_real)
-            elif "options" in content:
-                content["options"] = _deobfuscate_html_str(content["options"], obfuscated_to_real)
+            if not isinstance(content, dict):
+                continue
+            for key, value in list(content.items()):
+                if isinstance(value, (str, list, dict)):
+                    content[key] = _deobfuscate_html_str(value, obfuscated_to_real)
 
     except Exception as e:
         logger.error(f"解析混淆字体进行还原时出错: {e}")

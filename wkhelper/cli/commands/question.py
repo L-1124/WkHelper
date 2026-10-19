@@ -12,7 +12,7 @@ from wkhelper.cli.envelope import CommandResult
 from wkhelper.core.entities import Homework
 from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
 from wkhelper.core.exporter import export_questions_to_markdown, html_to_md, localize_question_detail
-from wkhelper.core.homework import question_type
+from wkhelper.core.homework import normalize_judgement_answer, question_type
 from wkhelper.core.json_types import json_int
 from wkhelper.core.results import (
     ExportResult,
@@ -65,7 +65,7 @@ async def question_list_cmd(
                     content_truncated=len(body) > 200,
                     options=[OptionItem(key=option.get("key"), text=html_to_md(option.get("value", ""))) for option in options],
                     submitted=bool(user_answer or attempt_count > 0),
-                    is_correct=user_info.get("is_right"),
+                    is_correct=user_info.get("is_right") if user_info.get("is_right") is not None else user_info.get("is_correct"),
                 )
             )
 
@@ -105,7 +105,7 @@ async def question_get_cmd(
             options=[OptionItem(key=option.get("key"), text=html_to_md(option.get("value", ""))) for option in options],
             submitted=bool(user_info.get("answer") or attempt_count > 0),
             user_answer=user_info.get("answer"),
-            is_correct=user_info.get("is_right"),
+            is_correct=user_info.get("is_right") if user_info.get("is_right") is not None else user_info.get("is_correct"),
             score=user_info.get("score") if user_info.get("score") is not None else user_info.get("my_score"),
             attempt_count=attempt_count,
             library_id=content.get("LibraryID") or content.get("library_id"),
@@ -157,6 +157,7 @@ async def question_submit_cmd(
         target_question = next((item for item in questions if str(item.get("problem_id") or item.get("id")) == str(question)), None)
         if target_question is None:
             raise KeyError(f"题目 ID '{question}' 不属于作业 '{homework}'")
+        answer_list = normalize_judgement_answer(target_question, answer_list)
         options = target_question.get("content", {}).get("Options") or []
         valid_keys = {str(option.get("key")) for option in options if option.get("key")}
         if valid_keys:

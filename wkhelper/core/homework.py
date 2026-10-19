@@ -16,6 +16,27 @@ type QuestionPayload = dict[str, Any]
 type HeaderMap = dict[str, Any]
 
 _FILL_IN_TYPE = 4
+_JUDGEMENT_TYPE = 6
+
+# 判断题前端只认 true/false；兼容常见的字母与中文写法
+_TRUE_ANSWERS = {"A", "T", "TRUE", "1", "对", "正确", "√"}
+_FALSE_ANSWERS = {"B", "F", "FALSE", "0", "错", "错误", "×"}
+
+
+def normalize_judgement_answer(question: QuestionPayload | None, answer: list[str]) -> list[str]:
+    """把判断题答案归一为平台约定的 `true` / `false`。"""
+    if question_type(question) != _JUDGEMENT_TYPE:
+        return answer
+    normalized: list[str] = []
+    for item in answer:
+        token = item.strip().upper()
+        if token in _TRUE_ANSWERS:
+            normalized.append("true")
+        elif token in _FALSE_ANSWERS:
+            normalized.append("false")
+        else:
+            normalized.append(item)
+    return normalized
 
 
 def question_type(question: QuestionPayload | None) -> int | None:
@@ -104,9 +125,10 @@ async def generic_submit_homework(
                 return
             user_info = q.get("user") or {}
             my_count = user_info.get("my_count") or 0
-            max_retry = q.get("max_retry", 1)
+            # 单题可作答次数在 user.count（0=不限次）；顶部 max_retry 属于整卷字段
+            retry_limit = int(user_info.get("count") or 0)
             already_submitted = bool(user_info.get("answer") or user_info.get("my_answer") or my_count > 0)
-            already_correct = bool(user_info.get("is_right", False))
+            already_correct = bool(user_info.get("is_right") or user_info.get("is_correct"))
 
             if already_submitted and already_correct:
                 item_record.submitted = True
@@ -116,7 +138,7 @@ async def generic_submit_homework(
                     correct_count += 1
                 return
 
-            if already_submitted and max_retry > 0 and my_count >= max_retry:
+            if already_submitted and retry_limit > 0 and my_count >= retry_limit:
                 item_record.submitted = True
                 item_record.is_correct = already_correct
                 item_record.error = "作答次数已用尽"
