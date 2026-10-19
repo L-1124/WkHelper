@@ -24,15 +24,31 @@ def format_leaf_label(
 
 
 def iter_leaves_with_context(chapter_data: list[dict[str, Any]]) -> Iterator[LeafContext]:
-    """遍历课件叶子节点并保留章节上下文。"""
-    for chapter in chapter_data:
-        chapter_name = str(chapter.get("name") or "未命名章节")
-        for section in chapter.get("section_leaf_list", []):
-            section_name = section.get("name")
-            leaf_list = section.get("leaf_list")
-            if isinstance(leaf_list, list) and leaf_list:
-                for leaf in leaf_list:
-                    yield leaf, chapter_name, section_name
-            else:
-                # section 本身就是叶子（常见于直接挂载作业或复习视频）
-                yield section, chapter_name, None
+    """递归遍历课件树，支持单层、多层嵌套及混合结构，保留完整章节上下文。"""
+
+    def _traverse(node: dict[str, Any], chapter: str, section: str | None) -> Iterator[LeafContext]:
+        name = str(node.get("name") or "").strip()
+        children = node.get("section_leaf_list") or node.get("section_list") or node.get("leaf_list") or node.get("units")
+
+        if isinstance(children, list) and children:
+            curr_chapter = chapter or name or "未命名章节"
+            curr_section = name if chapter else section
+            for child in children:
+                if isinstance(child, dict):
+                    yield from _traverse(child, curr_chapter, curr_section)
+        else:
+            yield node, chapter or "未命名章节", section
+
+    for root_item in chapter_data:
+        if not isinstance(root_item, dict):
+            continue
+        ch_name = str(root_item.get("name") or "未命名章节")
+        children = (
+            root_item.get("section_leaf_list") or root_item.get("section_list") or root_item.get("leaf_list") or root_item.get("units")
+        )
+        if isinstance(children, list) and children:
+            for sub in children:
+                if isinstance(sub, dict):
+                    yield from _traverse(sub, ch_name, sub.get("name"))
+        elif "leaf_type" in root_item:
+            yield root_item, ch_name, None
