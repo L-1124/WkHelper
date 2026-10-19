@@ -17,8 +17,6 @@ class YuketangPlatform(BasePlatform):
 
     api_base = "https://www.yuketang.cn"
     api_prefix = "mooc-api"
-    # 会话 Cookie 与签发时的 TLS 指纹绑定：沿用非浏览器指纹，重新登录后可切换
-    impersonate = None
 
     @property
     @override

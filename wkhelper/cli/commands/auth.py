@@ -64,8 +64,9 @@ async def auth_login_cmd(
 
     store = ctx.get_store()
     actual_cookie_file = cookie_file or ctx.cookie_file
-    async with _create_http_session(timeout=15) as client:
-        plat = YuketangPlatform(client) if platform == "ykt" else XuetangXPlatform(client)
+    platform_cls = YuketangPlatform if platform == "ykt" else XuetangXPlatform
+    async with _create_http_session(timeout=15, impersonate=platform_cls.impersonate) as client:
+        plat = platform_cls(client)
         if method == "cookie":
             if not actual_cookie_file:
                 raise ValueError("Cookie 登录模式必须指定 `--cookie-file` 参数")

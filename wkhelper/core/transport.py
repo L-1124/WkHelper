@@ -38,6 +38,14 @@ DEFAULT_IMPERSONATE = "chrome"
 DISABLED = "none"
 
 
+# 伪装默认带的是「文档导航」头（Accept: text/html 等）。我们的全部请求都是 API
+# 调用，实测雨课堂网关会因 text/html 的 Accept 直接返回 HTTP 500，故统一改成 XHR 语义。
+API_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+
+
 def resolve_impersonate(impersonate: str | None = DEFAULT_IMPERSONATE, user_agent: str | None = None) -> str | None:
     """解析最终使用的伪装目标（`None` 表示关闭伪装）。
 
@@ -64,7 +72,9 @@ def build_session(
     平台默认值由 `BasePlatform.impersonate` 声明，因为部分平台的会话 Cookie
     与签发时的 TLS 指纹绑定，换指纹需要重新登录。
     """
-    headers: dict[str, str] | None = {"User-Agent": user_agent} if user_agent else None
+    headers: dict[str, str] = dict(API_HEADERS)
+    if user_agent:
+        headers["User-Agent"] = user_agent
     return AsyncSession(
         impersonate=resolve_impersonate(impersonate, user_agent),
         timeout=timeout,
