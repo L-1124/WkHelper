@@ -535,7 +535,8 @@ class BasePlatform(ABC):
         schedules = await self._get_leaf_schedules(course)
         homeworks: list[Homework] = []
         for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
-            if leaf.get("leaf_type") not in (5, 6, 7, 9) or not leaf.get("is_show", True):
+            # leaf_type 语义以平台前端为准：6=作业；5=考试、7=课件、9=随堂测验、10=公告均不属作业
+            if leaf.get("leaf_type") != 6 or not leaf.get("is_show", True):
                 continue
             leaf_id = leaf.get("id")
             if leaf_id is None:
@@ -558,10 +559,8 @@ class BasePlatform(ABC):
         schedules = await self._get_leaf_schedules(course)
         exams: list[ExamItem] = []
         for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
-            leaf_type = leaf.get("leaf_type")
-            name = str(leaf.get("name") or "")
-            is_exam = (leaf_type in (5, 6, 7, 9) and "考" in name) or leaf_type in (7, 9)
-            if not is_exam or not leaf.get("is_show", True):
+            # 只有 leaf_type=5 才进入考场子系统；9=随堂测验属于活动流，不走考场接口
+            if leaf.get("leaf_type") != 5 or not leaf.get("is_show", True):
                 continue
             leaf_id = leaf.get("id")
             if leaf_id is None:
@@ -877,7 +876,11 @@ class BasePlatform(ABC):
         )
 
     async def get_discussions(self, course: Course) -> list[DiscussionItem]:
-        """获取课程讨论题列表。"""
+        """获取课程讨论题列表。
+
+        章节进度（`leaf_schedules`）与讨论页徽标（`comment/status`）是两个数据源，
+        列表必须与徽标一致，否则已完成讨论会被反复要求发言。
+        """
         data = await self._get_chapter_data(course)
         schedules = await self._get_leaf_schedules(course)
         discussions: list[DiscussionItem] = []
@@ -890,7 +893,21 @@ class BasePlatform(ABC):
             label = BasePlatformParser.format_leaf_label(leaf, chapter_name, section_name)
             is_completed = schedules.get(int(leaf_id), 0.0) >= 1.0
             discussions.append(DiscussionItem(id=str(leaf_id), name=label, completed=is_completed))
+
+        pending = [item for item in discussions if not item.completed]
+        if pending:
+            statuses = await asyncio.gather(
+                *(self._discussion_leaf_completed(item.id, course) for item in pending),
+                return_exceptions=True,
+            )
+            for item, status in zip(pending, statuses, strict=True):
+                if status is True:
+                    item.completed = True
         return discussions
+
+    async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
+        """按平台发言状态判定讨论节点是否完成；无法廉价判定时返回 None 回退章节进度。"""
+        return None
 
     async def _fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         """拉取讨论题单元信息；两个平台的讨论接口族完全不同，由平台实现。"""
@@ -961,10 +978,16 @@ class BasePlatform(ABC):
         resp = await self._request_json("GET", url, params=params, **kwargs)
         data = resp.get("data")
         leaf_type = data.get("leaf_type") if isinstance(data, dict) else None
-        if leaf_type in (5, 6, 7, 9):
+        # leaf_type 以平台前端为准：5=考试，6=作业（走习题接口），7=课件，8=线下课堂，9=随堂测验，10=公告
+        if leaf_type == 5:
             raise APIError(
-                f"节点 {leaf_id} 是考试（leaf_type={leaf_type}），普通习题接口不提供考试题目；"
+                f"节点 {leaf_id} 是考试（leaf_type=5），普通习题接口不提供考试题目；"
                 "请使用 `exam inspect` 查看考试信息，并在浏览器中完成考试",
+                retryable=False,
+            )
+        if leaf_type in (7, 8, 9, 10):
+            raise APIError(
+                f"节点 {leaf_id} 是 leaf_type={leaf_type}（7=课件、8=线下课堂、9=随堂测验、10=公告），不属于可导出的章节作业",
                 retryable=False,
             )
         content_info = data.get("content_info") if isinstance(data, dict) else None

@@ -1,0 +1,87 @@
+"""雨课堂考场换票与 fail-closed 行为测试。"""
+
+from typing import Any
+
+import pytest
+
+from wkhelper.core.entities import Course, UserInfo
+from wkhelper.core.exceptions import APIError
+from wkhelper.core.transport import AsyncSession
+from wkhelper.platform.yuketang import YuketangPlatform
+
+
+def _course() -> Course:
+    return Course(id="1", name="测试课程", platform_id="ykt", metadata={"classroom_id": 2001, "university_id": 9})
+
+
+class _Resp:
+    status_code = 200
+
+
+def _platform(client: AsyncSession) -> YuketangPlatform:
+    platform = YuketangPlatform(client)
+    platform.user = UserInfo(id="42", name="tester")
+    return platform
+
+
+@pytest.mark.asyncio
+async def test_mint_exam_room_rejects_empty_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """令牌为空时不得继续拼登录地址并报告成功。"""
+    async with AsyncSession() as client:
+        platform = _platform(client)
+
+        async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "leaf_info" in url:
+                return {"success": True, "data": {"leaf_type": 5, "content_info": {"leaf_type_id": 777}}}
+            return {"success": True, "data": {"token": "", "user_id": 42, "exam_host": "https://exam.test"}}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request)
+
+        with pytest.raises(APIError, match="未返回考场令牌"):
+            await platform._mint_exam_room("1", _course())
+
+
+@pytest.mark.asyncio
+async def test_mint_exam_room_rejects_business_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """平台 gen_token 返回业务错误时必须原样上报原因。"""
+    async with AsyncSession() as client:
+        platform = _platform(client)
+
+        async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "leaf_info" in url:
+                return {"success": True, "data": {"leaf_type": 6, "content_info": {"leaf_type_id": 888}}}
+            return {"success": False, "errcode": 500, "errmsg": "非考试节点"}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request)
+
+        with pytest.raises(APIError, match="非考试节点"):
+            await platform._mint_exam_room("2", _course())
+
+
+@pytest.mark.asyncio
+async def test_mint_exam_room_encodes_login_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """登录地址需按前端契约编码 crypt 与 next。"""
+    async with AsyncSession() as client:
+        platform = _platform(client)
+
+        async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "leaf_info" in url:
+                return {"success": True, "data": {"leaf_type": 5, "content_info": {"leaf_type_id": 777}}}
+            return {
+                "success": True,
+                "data": {"token": "tok+1", "user_id": 42, "exam_host": "https://exam.test/"},
+            }
+
+        async def fake_get(url: str, **kwargs: Any) -> _Resp:
+            return _Resp()
+
+        monkeypatch.setattr(platform, "_request_json", fake_request)
+        monkeypatch.setattr(platform.client, "get", fake_get)
+
+        host, eid, login_url = await platform._mint_exam_room("1", _course())
+
+    assert host == "https://exam.test"
+    assert eid == 777
+    assert "crypt=tok%2B1" in login_url
+    assert "next=https%3A%2F%2Fexam.test%2Fexam%2F777%3FisFrom%3D2" in login_url
+    assert login_url.endswith("&language=zh")

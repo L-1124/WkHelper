@@ -142,6 +142,10 @@ wkhelper homework submit -c 1966245:31318907 -w 84704898 \
   --answers '{"73577720": ["C"], "73577724": ["B"]}' \
   --concurrency 1 --delay 8.0 --delay-jitter 3.0 --random-order --confirm
 ```
+
+> [!NOTE]
+> `homework` / `questions` 仅覆盖章节作业（`leaf_type=6`）；期中、期末等考场由 `exam` 命令族处理，两者不再混列。
+
 ### 5. 资料阅读与图文题 (`article`)
 
 ```bash

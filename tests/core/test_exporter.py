@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from wkhelper.core.entities import Course, Homework
-from wkhelper.core.exceptions import OutputExistsError
+from wkhelper.core.exceptions import APIError, OutputExistsError
 from wkhelper.core.exporter import export_questions_to_markdown, html_to_md, localize_question_detail
 from wkhelper.core.results import OptionItem, QuestionDetail
 
@@ -127,6 +127,32 @@ async def test_export_questions_with_download_resources(fake_platform, tmp_path:
     assert (assets_dir / "hw_hw1_q_101_body_1.jpg").exists()
     assert (assets_dir / "hw_hw1_q_101_opt_A_1.png").exists()
     assert (assets_dir / "hw_hw1_q_101_body_1.jpg").read_bytes() == b"fake image bytes"
+
+
+@pytest.mark.asyncio
+async def test_export_reports_each_homework_failure(fake_platform, tmp_path: Path) -> None:
+    """全部作业抓取失败时必须保留节点与原因，不能退化成笼统内部错误。"""
+    course = Course(id="c1", name="测试课程", platform_id="test")
+
+    async def fake_homeworks(current: Course) -> list[Homework]:
+        return [Homework(id="hw1", name="第一章作业"), Homework(id="hw2", name="第二章作业")]
+
+    async def fake_leaf_questions(leaf_id: str | int, current: Course) -> list[dict[str, Any]]:
+        raise APIError(f"节点 {leaf_id} 是考试（leaf_type=5）", retryable=False)
+
+    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
+
+    target = tmp_path / "failed.md"
+    with pytest.raises(APIError) as excinfo:
+        await export_questions_to_markdown(fake_platform, course, output_path=target)
+
+    message = str(excinfo.value)
+    assert "hw1" in message
+    assert "hw2" in message
+    assert "第一章作业" in message
+    assert "leaf_type=5" in message
+    assert not target.exists()
 
 
 @pytest.mark.asyncio
