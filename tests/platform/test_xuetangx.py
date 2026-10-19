@@ -91,6 +91,37 @@ async def test_xuetangx_get_courses(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_xuetangx_get_courses_includes_completed(monkeypatch) -> None:
+    """应同时拉取正在上课（1）与已结课（3）的课程。"""
+    async with AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+        requested: list[str] = []
+
+        async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            status = kwargs["params"]["status"]
+            requested.append(status)
+            if status == "1":
+                products = [
+                    {"course_id": 97330, "name": "高等数学(2026)", "classroom_id": 1, "sign": "a"},
+                    {"course_id": 97330, "name": "高等数学(2025)", "classroom_id": 2, "sign": "a"},
+                ]
+            else:
+                products = [{"course_id": 1000, "name": "已结课课程", "classroom_id": 3, "sign": "b"}]
+            return {"success": True, "data": {"product_list": products, "pages": 1}}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request_json)
+        courses = await platform.get_courses()
+
+    assert requested == ["1", "3"]
+    # 同一 product_id 的不同学期课堂必须都保留
+    assert [(course.id, course.metadata["classroom_id"]) for course in courses] == [
+        ("97330", 1),
+        ("97330", 2),
+        ("1000", 3),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_xuetangx_get_courses_failure(monkeypatch) -> None:
     """接口返回失败时应抛出 APIError。"""
     async with AsyncSession() as client:
