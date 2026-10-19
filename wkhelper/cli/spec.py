@@ -117,11 +117,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "examples": ["wkhelper homework inspect --course 1001 --homework 3001"],
     },
     "homework submit": {
-        "description": "将外部 Agent 生成的显式答案文件提交到平台，支持 dry-run 校验。",
+        "description": (
+            "批量提交作业答案；支持 --delay、--delay-jitter 与 --random-order。默认单题 8s 基础间隔与 3s 随机浮动。"
+            "建议依据题干长短与难度（客观题 5~10s、多选 15~35s、主观题 45~90s）动态调整延迟，"
+            "并开启 --random-order 打乱题目顺序，模拟真人思考作答以规避风控。"
+        ),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
-            'wkhelper homework submit --course 1001 --homework 3001 --answers \'{"4001": ["A"]}\' --confirm',
+            'wkhelper homework submit -c 1001 -w 3001 --answers \'{"4001": ["A"]}\' --delay 8 --delay-jitter 3 --random-order --confirm',
             "wkhelper homework submit --course 1001 --homework 3001 --answers-file ans.json --confirm",
         ],
     },
@@ -134,19 +138,17 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "examples": ["wkhelper question get --course 1001 --homework 3001 --question 4001"],
     },
     "question submit": {
-        "description": "直接向作业提交单道题目的答案选项并返回判题结果。",
+        "description": (
+            "直接向作业提交单道题目答案并返回判题结果；支持 --delay 与 --delay-jitter。"
+            "建议依据题目难易程度（客观题 5~15s，计算题 20~40s）动态设置等待思考时长，模拟真实读题思考。"
+        ),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
             "wkhelper question submit --course 1001 --homework 3001 --question 4001 --answer A --dry-run",
-            "wkhelper question submit --course 1001 --homework 3001 --question 4001 --answer A --confirm",
+            "wkhelper question submit --course 1001 --homework 3001 --question 4001 --answer A --delay 8 --confirm",
             "wkhelper question submit --course 1001 --homework 3001 --question 4001 --answer A,B --confirm",
         ],
-    },
-    "questions export": {
-        "description": "将指定课程的作业题干与选项完整导出为 Markdown 文件。",
-        "side_effects": "local_file_write",
-        "examples": ["wkhelper questions export --course 1001 --output ./export.md"],
     },
     "article list": {
         "description": "有界分页列出指定课程的资料阅读与图文节点及完成状态。",
@@ -200,21 +202,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "examples": ["wkhelper exam close"],
     },
     "exam answer": {
-        "description": "提交考试单题作答（写入服务端暂存，不改动最终得分）。",
+        "description": (
+            "提交考试单题作答（写入服务端暂存，不改动最终得分）；支持 --delay 与 --delay-jitter。"
+            "建议依据题目难度（判断单选 5~15s，多选/计算 15~35s，主观题 45~90s）动态指定思考延迟，避免高频机械提交触发风控。"
+        ),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
             "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --dry-run",
-            "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --confirm",
-        ],
-    },
-    "exam submit": {
-        "description": "交卷并封存本次考试成绩，提交后不可撤销。",
-        "side_effects": "remote_write",
-        "requires_confirm": True,
-        "examples": [
-            "wkhelper exam submit --course 1001 --exam 2001 --dry-run",
-            "wkhelper exam submit --course 1001 --exam 2001 --confirm",
+            "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --delay 10 --delay-jitter 3 --confirm",
         ],
     },
     "exam export": {

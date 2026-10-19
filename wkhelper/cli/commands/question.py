@@ -127,12 +127,26 @@ async def question_submit_cmd(
     homework: Annotated[str, Parameter(name=["--homework", "-w"], help="作业 ID")],
     question: Annotated[str, Parameter(name=["--question", "-q"], help="题目 ID")],
     answer: Annotated[str, Parameter(name=["--answer", "-a"], help="答案选项 (例如 'A' 或 'A,B')")],
+    delay: Annotated[
+        float,
+        Parameter(
+            name=["--delay"],
+            help="单题提交前思考等待秒数（默认 0.0s；建议依据题目难度设置：简单题 5~10s，多选题 15~30s，模拟真人思考）",
+        ),
+    ] = 0.0,
+    delay_jitter: Annotated[
+        float,
+        Parameter(
+            name=["--delay-jitter"],
+            help="思考等待随机浮动秒数（默认 0.0s；实际延迟为 delay ± jitter）",
+        ),
+    ] = 0.0,
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验参数，不提交")] = False,
     confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认提交答案")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account"], help="账号 ID")] = None,
 ) -> CommandResult[QuestionSubmitPreview] | CommandResult[QuestionSubmitResult]:
-    """提交单道题目答案并返回判题结果。"""
+    """提交单道题目答案并返回判题结果。建议依据题目难易程度动态指定 `--delay` 与 `--delay-jitter` 模拟真人思考。"""
     answer_list = [item.strip() for item in answer.split(",") if item.strip()]
     if not answer_list:
         raise ValueError(f"题目答案参数无效: {answer}")
@@ -164,6 +178,12 @@ async def question_submit_cmd(
         if not confirm:
             raise ConfirmationRequiredError("题目提交必须显式附加 `--confirm` 参数")
 
+        if delay > 0:
+            import asyncio
+            import random
+
+            actual_delay = max(0.05, delay + random.uniform(-delay_jitter, delay_jitter) if delay_jitter > 0 else delay)
+            await asyncio.sleep(actual_delay)
         result = await plat.submit_question(
             Homework(id=str(homework), name=str(homework)),
             matched,

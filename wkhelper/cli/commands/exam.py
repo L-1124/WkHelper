@@ -237,12 +237,26 @@ async def exam_answer_cmd(
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     question: Annotated[str, Parameter(name=["--question", "-q"], help="题目 ID")],
     answer: Annotated[str, Parameter(name=["--answer"], help="答案键，多选用逗号分隔")],
+    delay: Annotated[
+        float,
+        Parameter(
+            name=["--delay"],
+            help="单题作答前思考等待秒数（默认 0.0s；建议依据难度动态指定：客观题 5~15s，多选/计算 15~35s，主观题 45~90s，模拟真人）",
+        ),
+    ] = 0.0,
+    delay_jitter: Annotated[
+        float,
+        Parameter(
+            name=["--delay-jitter"],
+            help="思考等待随机浮动秒数（默认 0.0s；实际延迟为 delay ± jitter）",
+        ),
+    ] = 0.0,
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="只预览将要提交的作答")] = False,
     confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认写入服务端作答")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamAnswerResult]:
-    """提交考试单题作答（写入服务端暂存，不改动最终得分）。"""
+    """提交考试单题作答（写入服务端暂存，不改动最终得分）。建议依据题目难易程度动态指定 `--delay` 与 `--delay-jitter` 模拟真人思考。"""
     keys = [part.strip() for part in answer.split(",") if part.strip()]
     if not keys:
         raise ConfirmationRequiredError("答案不能为空，请使用 `--answer A` 或 `--answer A,B`")
@@ -280,6 +294,13 @@ async def exam_answer_cmd(
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         _warn_proctoring(cover)
+        if delay > 0:
+            import asyncio
+            import random
+
+            actual_delay = max(0.05, delay + random.uniform(-delay_jitter, delay_jitter) if delay_jitter > 0 else delay)
+            await asyncio.sleep(actual_delay)
+
         result = await plat.answer_exam_problem(exam, matched, question, keys)
         result.notice = _CLI_NOTICE
         return CommandResult[ExamAnswerResult](data=result)

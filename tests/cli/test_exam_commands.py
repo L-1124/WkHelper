@@ -328,6 +328,35 @@ async def test_exam_answer_dry_run_and_confirm(mock_exam_env: None, monkeypatch:
     assert saved["data"]["saved"] is True
     assert saved["data"]["answer"] == ["A"]
 
+    buf.truncate(0)
+    buf.seek(0)
+    code = await async_main(
+        [
+            "--format",
+            "json",
+            "exam",
+            "answer",
+            "-c",
+            "1001",
+            "-e",
+            "3001",
+            "-q",
+            "9001",
+            "--answer",
+            "A",
+            "--delay",
+            "0.01",
+            "--delay-jitter",
+            "0.005",
+            "--confirm",
+            "-p",
+            "xtzx",
+        ]
+    )
+    assert code == 0
+    delayed = json.loads(buf.getvalue().strip())
+    assert delayed["data"]["saved"] is True
+
 
 @pytest.mark.asyncio
 async def test_exam_submit_gate_dry_run_and_confirm(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
