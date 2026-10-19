@@ -24,6 +24,9 @@ from wkhelper.core.results import (
     DiscussionCommentResult,
     DiscussionItem,
     DiscussionTopicDetail,
+    ExamCoverDetail,
+    ExamItem,
+    ExamStartResult,
     HomeworkSubmitResult,
     NextAction,
     QuestionSubmitOutcome,
@@ -542,6 +545,41 @@ class BasePlatform(ABC):
                 )
             )
         return homeworks
+
+    async def get_exams(self, course: Course) -> list[ExamItem]:
+        """获取课程的期中/期末考试列表。"""
+        data = await self._get_chapter_data(course)
+        schedules = await self._get_leaf_schedules(course)
+        exams: list[ExamItem] = []
+        for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
+            leaf_type = leaf.get("leaf_type")
+            name = str(leaf.get("name") or "")
+            is_exam = (leaf_type in (5, 6, 7, 9) and "考" in name) or leaf_type in (7, 9)
+            if not is_exam or not leaf.get("is_show", True):
+                continue
+            leaf_id = leaf.get("id")
+            if leaf_id is None:
+                continue
+            is_completed = schedules.get(int(leaf_id), 0.0) >= 1.0
+            label = BasePlatformParser.format_leaf_label(leaf, chapter_name, section_name)
+            exams.append(
+                ExamItem(
+                    id=str(leaf_id),
+                    name=label,
+                    start_time=leaf.get("start_time") or None,
+                    deadline=leaf.get("score_deadline") or leaf.get("end_time") or None,
+                    completed=is_completed,
+                )
+            )
+        return exams
+
+    async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
+        """获取考试封面与考场元数据。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现考试封面接口")
+
+    async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
+        """进入考场并申请考试授权令牌。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现进入考场接口")
 
     async def get_articles(self, course: Course) -> list[ArticleItem]:
         """获取课程资料/图文节点列表。"""

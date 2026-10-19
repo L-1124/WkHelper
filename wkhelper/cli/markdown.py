@@ -26,6 +26,10 @@ from wkhelper.core.results import (
     DiscussionCommentResult,
     DiscussionListData,
     DiscussionTopicDetail,
+    ExamCoverDetail,
+    ExamListData,
+    ExamStartPreview,
+    ExamStartResult,
     ExportResult,
     HomeworkListData,
     HomeworkOutline,
@@ -474,3 +478,72 @@ def format_result_markdown(
             lines.extend(["", hint])
     lines.extend(_format_next_actions(next_actions))
     return "\n".join(lines).strip()
+
+
+def _format_time_str(ts: int | None) -> str:
+    if not ts:
+        return "无限制"
+    sec = ts / 1000 if ts > 1e11 else ts
+    import datetime
+
+    return datetime.datetime.fromtimestamp(sec).strftime("%Y-%m-%d %H:%M")
+
+
+@renderer(ExamListData)
+def _render_exam_list(data: ExamListData) -> list[str]:
+    rows = [
+        [
+            i,
+            exam.id,
+            exam.name,
+            _format_time_str(exam.start_time),
+            _format_time_str(exam.deadline),
+            "已完成" if exam.completed else "未完成",
+        ]
+        for i, exam in enumerate(data.exams, 1)
+    ]
+    return [f"## 考试列表 (共 {len(data.exams)} 场)", "", *_table(["序号", "考试 ID", "考试名称", "开考时间", "截止时间", "状态"], rows)]
+
+
+@renderer(ExamCoverDetail)
+def _render_exam_cover(data: ExamCoverDetail) -> list[str]:
+    lines = [
+        f"## 考试详情：{_cell(data.title)}",
+        "",
+        f"- **考试节点 ID**：`{data.exam_id}`",
+        f"- **考场状态**：`{data.status}`",
+        f"- **题目数量**：{data.problem_count} 题",
+        f"- **试卷满分**：{data.total_score} 分",
+        f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.limit_minutes > 0 else '不限时（受截止时间约束）'}",
+        f"- **开考时间**：{_format_time_str(data.start_time)}",
+        f"- **截止时间**：{_format_time_str(data.deadline)}",
+        f"- **人脸核验**：{'是' if data.face_auth else '否'}",
+        f"- **屏幕监控**：{'是' if data.capture_screen else '否'}",
+    ]
+    if data.description:
+        lines.extend(["", "### 考试须知", data.description])
+    return lines
+
+
+@renderer(ExamStartPreview)
+def _render_exam_start_preview(data: ExamStartPreview) -> list[str]:
+    return [
+        f"## 考场进入预检：{_cell(data.title)}",
+        "",
+        f"- **考试节点 ID**：`{data.exam_id}`",
+        f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.limit_minutes > 0 else '不限时'}",
+        f"- **注意事项**：{data.note}",
+    ]
+
+
+@renderer(ExamStartResult)
+def _render_exam_start_result(data: ExamStartResult) -> list[str]:
+    return [
+        f"## 考场会话已开启：{_cell(data.title)}",
+        "",
+        f"- **考试节点 ID**：`{data.exam_id}`",
+        f"- **进入状态**：{'成功' if data.started else '失败'}",
+        f"- **考试限时**：{f'{data.limit_minutes} 分钟' if data.limit_minutes > 0 else '不限时'}",
+        f"- **考场直达地址**：<{data.web_url}>",
+        f"- **提示信息**：{data.message}",
+    ]
