@@ -10,6 +10,9 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar
+from urllib.parse import urlsplit
+
+from curl_cffi.requests.cookies import CookieConflict
 
 from wkhelper.core.config import MAX_WORKERS_STATUS
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
@@ -226,6 +229,8 @@ class BasePlatform(ABC):
     api_prefix: ClassVar[str] = ""
     # 默认 TLS 指纹伪装目标；`None` 表示不伪装（会话 Cookie 与签发指纹绑定时必须一致）
     impersonate: ClassVar[str | None] = "chrome"
+    # 会话 Cookie 的写入域；空串表示由 CookieJar 绑定当前 host
+    cookie_domain: ClassVar[str] = ""
 
     def __init__(
         self,
@@ -286,6 +291,17 @@ class BasePlatform(ABC):
 
     async def _request_json_once(self, method: HttpMethod, url: str, **kwargs: Any) -> dict[str, Any]:
         """单次请求：HTTP 失败与限流提示统一收敛为带重试元数据的错误。"""
+        cookies = getattr(self.client, "cookies", None)
+        csrftoken = None
+        if cookies is not None:
+            try:
+                csrftoken = cookies.get("csrftoken")
+            except CookieConflict:
+                # 跨域会话（如考场子系统）可能同时存在多个 csrftoken，按当前 host 取
+                csrftoken = cookies.get("csrftoken", domain=urlsplit(url).hostname or "")
+        headers = getattr(self.client, "headers", None)
+        if csrftoken and headers is not None and headers.get("X-CSRFToken") != csrftoken:
+            headers["X-CSRFToken"] = csrftoken
         start = time.perf_counter()
         try:
             resp = await self.client.request(method, url, **kwargs)
@@ -393,11 +409,17 @@ class BasePlatform(ABC):
         return "wss://www.yuketang.cn/wsapp/"
 
     def _qr_request_payload(self) -> dict[str, Any]:
-        return {"op": "requestlogin", "role": "web", "version": 1.4, "type": "qrcode"}
+        return {"op": "requestlogin", "role": "web", "version": "1.4", "purpose": "login", "x-client": "web"}
 
     def _qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
-        """消息中携带的下次轮询超时提示；无提示时返回 None。"""
-        return None
+        """消息中携带的二维码有效期；无提示时返回 None。"""
+        raw = message.get("expire_seconds")
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     async def _qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
         """把本轮消息中的二维码展示给用户；默认无图像载荷。"""

@@ -21,6 +21,7 @@ class XuetangXPlatform(BasePlatform):
 
     api_base = "https://www.xuetangx.com"
     api_prefix = "api"
+    cookie_domain = ".xuetangx.com"
 
     @property
     @override
@@ -47,14 +48,16 @@ class XuetangXPlatform(BasePlatform):
                 "x-client": "web",
             }
         )
-        self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
+        for name, value in (("csrftoken", csrftoken), ("sessionid", sessionid)):
+            self.client.cookies.set(name, value, domain=self.cookie_domain)
 
         resp = await self._request_json("GET", "https://www.xuetangx.com/api/v1/u/user/basic_profile/")
         if not resp.get("success"):
             raise AuthError("Cookie 验证失败，可能已过期")
 
         info = resp["data"]
-        self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
+        display_name = info.get("name") or info.get("nickname") or str(info.get("id") or "")
+        self.user = UserInfo(id=info["id"], name=display_name, school=info.get("school"))
         self.current_cookies = cookies
         return self.user
 
@@ -76,16 +79,6 @@ class XuetangXPlatform(BasePlatform):
         }
 
     @override
-    def _qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
-        raw = message.get("expire_seconds")
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
-
-    @override
     async def _qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
         ticket = message.get("ticket")
         if not ticket:
@@ -97,7 +90,11 @@ class XuetangXPlatform(BasePlatform):
 
     @override
     async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
-        token_val = login_data.get("token") or login_data.get("s_s")
+        # 前端：s_s = msg.is_new ? msg.s_s : msg.token
+        if login_data.get("is_new"):
+            token_val = login_data.get("s_s")
+        else:
+            token_val = login_data.get("token") or login_data.get("s_s")
         if not token_val:
             raise AuthError("扫码回执缺少 token 或 s_s")
         response = await self.client.post(

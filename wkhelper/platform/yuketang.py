@@ -52,9 +52,12 @@ class YuketangPlatform(BasePlatform):
                 "Referer": "https://www.yuketang.cn/",
                 "X-CSRFToken": csrftoken,
                 "xtbz": "ykt",
+                "Xt-Agent": "web",
+                "university-id": "0",
             }
         )
-        self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
+        for name, value in (("csrftoken", csrftoken), ("sessionid", sessionid)):
+            self.client.cookies.set(name, value, domain=self.cookie_domain)
 
         data = await self._request_json("GET", "https://www.yuketang.cn/api/v3/user/basic-info")
         if data["code"] != 0:
@@ -87,15 +90,18 @@ class YuketangPlatform(BasePlatform):
 
     @override
     async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
-        if "Auth" not in login_data or "UserID" not in login_data:
+        # 前端容错：UserID || user_id、Auth || auth
+        auth = login_data.get("Auth") or login_data.get("auth")
+        user_id = login_data.get("UserID") or login_data.get("user_id")
+        if not auth or not user_id:
             raise AuthError("扫码回执缺少 Auth 或 UserID")
         response = await self.client.post(
             f"{self.api_base}/pc/web_login",
-            json={"Auth": login_data["Auth"], "UserID": int(login_data["UserID"])},
+            json={"Auth": auth, "UserID": int(user_id)},
         )
         cookies = {
-            "csrftoken": response.cookies.get("csrftoken") or "",
-            "sessionid": response.cookies.get("sessionid") or "",
+            "csrftoken": response.cookies.get("csrftoken") or self.client.cookies.get("csrftoken") or "",
+            "sessionid": response.cookies.get("sessionid") or self.client.cookies.get("sessionid") or "",
         }
         if not cookies["csrftoken"] or not cookies["sessionid"]:
             raise AuthError("登录凭据换取失败")
