@@ -43,6 +43,8 @@ from wkhelper.core.results import (
     HomeworkSubmitPreview,
     HomeworkSubmitResult,
     LoginResult,
+    NoticeDetail,
+    NoticeListData,
     OutputFileResult,
     QuestionDetail,
     QuestionListData,
@@ -672,3 +674,24 @@ def _render_exam_status(data: ExamStatusData) -> list[str]:
         f"- **problem_results**：{data.result_code} {data.result_message}".rstrip(),
         *(["> **说明**：raw 2 表示已交卷待批阅，含主观题的试卷在批阅前不会返回结果"] if data.room_status_raw == 2 else []),
     ]
+
+
+@renderer(NoticeListData)
+def _render_notice_list(data: NoticeListData) -> list[str]:
+    rows = [[i, notice.id, notice.name, "已读" if notice.completed else "未读"] for i, notice in enumerate(data.notices, 1)]
+    return [f"## 公告/通知列表 (共 {len(data.notices)} 条)", "", *_table(["序号", "公告 ID", "节点名称", "阅读状态"], rows)]
+
+
+@renderer(NoticeDetail)
+def _render_notice_detail(data: NoticeDetail) -> list[str]:
+    lines = [
+        f"## 公告：{_cell(data.title)}",
+        "",
+        f"- **节点 ID**：`{data.leaf_id}` | **公告 ID**：`{data.notice_id or '-'}`",
+    ]
+    if data.publisher:
+        lines.append(f"- **发布者**：{_cell(data.publisher)}")
+    if data.published_at:
+        lines.append(f"- **发布时间**：{_format_time_str(data.published_at)}")
+    lines.extend(["", "### 正文", data.content.strip() or "（平台未返回正文）"])
+    return lines

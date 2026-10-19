@@ -75,6 +75,34 @@ class DiscussionItem:
 
 
 @dataclass
+class NoticeItem:
+    """课程公告/通知节点。"""
+
+    id: str
+    name: str
+    completed: bool
+    published_at: EpochMillis | None = None
+
+
+@dataclass
+class NoticeListData:
+    notices: list[NoticeItem]
+
+
+@dataclass
+class NoticeDetail:
+    """公告正文与发布信息。"""
+
+    course_id: str
+    leaf_id: str
+    notice_id: int | None
+    title: str
+    content: str
+    published_at: EpochMillis | None = None
+    publisher: str = ""
+
+
+@dataclass
 class OptionItem:
     key: str
     text: str

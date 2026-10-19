@@ -9,11 +9,21 @@ from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
 from wkhelper.core.json_types import json_int
+from wkhelper.core.markdown import html_to_md
 from wkhelper.core.qr_login import QrCodeSession
-from wkhelper.core.results import ExamCoverDetail, ExamStartResult
+from wkhelper.core.results import ExamCoverDetail, ExamStartResult, NoticeDetail
 from wkhelper.core.time_types import epoch_millis
 
 logger = logging.getLogger(__name__)
+
+
+def _first_text(data: dict[str, Any], *keys: str) -> str:
+    """按优先级取第一个非空字符串字段。"""
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
 
 
 class YuketangPlatform(BasePlatform):
@@ -21,6 +31,7 @@ class YuketangPlatform(BasePlatform):
 
     api_base = "https://www.yuketang.cn"
     api_prefix = "mooc-api"
+    cookie_domain = ".yuketang.cn"
 
     @property
     @override
@@ -433,11 +444,59 @@ class YuketangPlatform(BasePlatform):
             "topic_id": int(topic_info["id"]),
             "content": {
                 "text": content,
-                "app_upload_images": [],
+                "upload_images": [],
+                "accessory_list": [],
             },
         }
         kwargs = self._get_request_kwargs(course) or {}
         return await self._request_json("POST", url, json=payload, **kwargs)
+
+    @override
+    async def get_notice_detail(self, leaf_id: str | int, course: Course) -> NoticeDetail:
+        """读取公告正文：leaf_level_info 取 activity_id，再查 link/notice。"""
+        cid = course.metadata["classroom_id"]
+        kwargs = self._get_course_kwargs(course) or {}
+        info = await self._request_json(
+            "GET",
+            f"{self.api_base}/edu_admin/leaf_level_info/",
+            params={"leaf_level_id": str(leaf_id), "no_loading": False},
+            **kwargs,
+        )
+        if info.get("success") is False:
+            raise APIError(f"获取公告 {leaf_id} 节点信息失败", retryable=False)
+        info_data = info.get("data") if isinstance(info.get("data"), dict) else info
+        notice_id = json_int(info_data.get("activity_id"), 0)
+        if not notice_id:
+            raise APIError(f"节点 {leaf_id} 不是公告（缺少 activity_id）", retryable=False)
+        resp = await self._request_json(
+            "GET",
+            f"{self.api_base}/v2/api/web/link/notice",
+            params={"notice_id": notice_id, "classroom_id": cid},
+            **kwargs,
+        )
+        code = resp.get("errcode")
+        if code not in (None, 0):
+            raise APIError(f"获取公告 {leaf_id} 失败: {resp.get('errmsg') or code}", retryable=False)
+        raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        notice = raw.get("notice") if isinstance(raw.get("notice"), dict) else raw
+        content_value = notice.get("content")
+        if isinstance(content_value, dict):
+            content_html = _first_text(content_value, "text", "html", "content")
+        else:
+            content_html = _first_text(notice, "content", "html", "text", "body")
+        if not content_html:
+            content_info = notice.get("content_info")
+            if isinstance(content_info, dict):
+                content_html = _first_text(content_info, "text", "content")
+        return NoticeDetail(
+            course_id=str(course.id),
+            leaf_id=str(leaf_id),
+            notice_id=notice_id,
+            title=_first_text(notice, "title", "name") or f"公告 {leaf_id}",
+            content=html_to_md(content_html) if content_html else "",
+            published_at=epoch_millis(notice.get("publish_time") or notice.get("create_time") or notice.get("created")),
+            publisher=_first_text(notice, "publisher", "author", "teacher_name", "creator"),
+        )
 
     @override
     async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
