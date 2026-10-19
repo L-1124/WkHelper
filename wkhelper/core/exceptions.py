@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from wkhelper.cli.envelope import NextAction
+from wkhelper.core.models import NextAction
 
 
 class WKError(Exception):
