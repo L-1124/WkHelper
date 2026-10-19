@@ -5,11 +5,28 @@
 """
 
 import time
+from datetime import UTC
+from email.utils import parsedate_to_datetime
 from typing import Any, NewType
 
 EpochMillis = NewType("EpochMillis", int)
 
 _SECONDS_UPPER_BOUND = 100_000_000_000
+
+
+def parse_http_date_ms(raw: str | None) -> EpochMillis | None:
+    """解析 HTTP `Date` 头为毫秒时间戳；非法值返回 None。"""
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return EpochMillis(int(parsed.timestamp() * 1000))
 
 
 def epoch_millis(value: Any) -> EpochMillis | None:
