@@ -19,6 +19,7 @@ from wkhelper.cli.commands.course import course_app
 from wkhelper.cli.commands.discussion import discussion_app
 from wkhelper.cli.commands.exam import exam_app
 from wkhelper.cli.commands.homework import homework_app
+from wkhelper.cli.commands.notice import notice_app
 from wkhelper.cli.commands.question import question_app, questions_app
 from wkhelper.cli.commands.system import schema_cmd, status_cmd
 from wkhelper.cli.commands.video import video_app
@@ -44,6 +45,7 @@ app.command(question_app)
 app.command(questions_app)
 app.command(article_app)
 app.command(discussion_app)
+app.command(notice_app)
 app.command(exam_app)
 
 # 挂载根命令

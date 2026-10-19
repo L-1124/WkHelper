@@ -34,6 +34,8 @@ from wkhelper.core.results import (
     ExamSubmitResult,
     HomeworkSubmitResult,
     NextAction,
+    NoticeDetail,
+    NoticeItem,
     OptionItem,
     QuestionSubmitOutcome,
     QuestionSubmitResult,
@@ -948,7 +950,7 @@ class BasePlatform(ABC):
         schedules = await self._get_leaf_schedules(course)
         discussions: list[DiscussionItem] = []
         for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
-            if leaf.get("leaf_type") not in (4, 10) or not leaf.get("is_show", True):
+            if leaf.get("leaf_type") != 4 or not leaf.get("is_show", True):
                 continue
             leaf_id = leaf.get("id")
             if leaf_id is None:
@@ -976,6 +978,31 @@ class BasePlatform(ABC):
     async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
         """按平台发言状态判定讨论节点是否完成；无法廉价判定时返回 None 回退章节进度。"""
         return None
+
+    async def get_notices(self, course: Course) -> list[NoticeItem]:
+        """获取课程公告/通知节点列表（`leaf_type=10`）。"""
+        data = await self._get_chapter_data(course)
+        schedules = await self._get_leaf_schedules(course)
+        notices: list[NoticeItem] = []
+        for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
+            if leaf.get("leaf_type") != 10 or not leaf.get("is_show", True):
+                continue
+            leaf_id = leaf.get("id")
+            if leaf_id is None:
+                continue
+            notices.append(
+                NoticeItem(
+                    id=str(leaf_id),
+                    name=BasePlatformParser.format_leaf_label(leaf, chapter_name, section_name),
+                    completed=schedules.get(int(leaf_id), 0.0) >= 1.0,
+                    published_at=epoch_millis(leaf.get("start_time")),
+                )
+            )
+        return notices
+
+    async def get_notice_detail(self, leaf_id: str | int, course: Course) -> NoticeDetail:
+        """获取公告正文与发布信息；两个平台的公告接口族不同，由平台实现。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现公告详情接口")
 
     async def _fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         """拉取讨论题单元信息；两个平台的讨论接口族完全不同，由平台实现。"""

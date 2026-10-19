@@ -10,7 +10,7 @@ from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
 from wkhelper.core.json_types import json_int
 from wkhelper.core.qr_login import QrCodeSession
-from wkhelper.core.results import ExamCoverDetail, ExamStartResult
+from wkhelper.core.results import ExamCoverDetail, ExamStartResult, NoticeDetail
 from wkhelper.core.time_types import epoch_millis
 
 logger = logging.getLogger(__name__)
@@ -329,6 +329,11 @@ class XuetangXPlatform(BasePlatform):
             },
         }
         return await self._request_json("POST", url, params=params, json=payload)
+
+    @override
+    async def get_notice_detail(self, leaf_id: str | int, course: Course) -> NoticeDetail:
+        """学堂在线前端暂无独立的公告正文接口，明确失败而不是返回空正文。"""
+        raise APIError(f"学堂在线公告 {leaf_id} 暂不支持程序化读取，请在浏览器中查看", retryable=False)
 
     @override
     async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:

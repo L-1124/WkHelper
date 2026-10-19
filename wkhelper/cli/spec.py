@@ -180,6 +180,14 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper discussion reply --course 1001 --discussion 3001 --content '心得体会...' --confirm",
         ],
     },
+    "notice list": {
+        "description": "有界分页列出指定课程的公告/通知节点及已读状态（`leaf_type=10`）。",
+        "examples": ["wkhelper notice list --course 1001 --status pending"],
+    },
+    "notice inspect": {
+        "description": "读取公告正文（Markdown）、发布者与发布时间。",
+        "examples": ["wkhelper notice inspect --course 1001 --notice 4001"],
+    },
     "exam list": {
         "description": "有界分页列出指定课程的期中/期末考试、开考时间与截止时间。",
         "examples": ["wkhelper exam list --course 1001"],

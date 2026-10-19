@@ -170,7 +170,17 @@ wkhelper discussion reply -c 1966245:31318907 -d 84704891 \
   --content "今天的三件好事：第一，掌握了积极心理学的新视角..." --confirm
 ```
 
-### 7. 契约自省 (`schema`)
+### 7. 公告与通知 (`notice`)
+
+```bash
+# 查询课程公告/通知节点及已读状态
+wkhelper notice list -c 1966245:31318907 --status pending
+
+# 读取公告正文（Markdown）、发布者与发布时间
+wkhelper notice inspect -c 1966245:31318907 -n 84705560
+```
+
+### 8. 契约自省 (`schema`)
 
 ```bash
 # 查询所有命令列表与摘要索引
