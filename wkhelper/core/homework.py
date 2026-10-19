@@ -2,20 +2,19 @@
 
 import asyncio
 import logging
-from collections.abc import Callable
 from typing import Any, Protocol
 
 import niquests
 
-from wkhelper.core.events import emit_event
-from wkhelper.core.models import Course, HomeworkSubmitResult, JsonValue, QuestionSubmitOutcome, SubmitItem
+from wkhelper.core.entities import Course
+from wkhelper.core.events import EventCallback, notifier
+from wkhelper.core.results import HomeworkSubmitResult, QuestionSubmitOutcome, SubmitItem
 
 logger = logging.getLogger(__name__)
 
 # 平台原始题目结构（动态载荷，字段由平台 API 决定）
 type QuestionPayload = dict[str, Any]
 type HeaderMap = dict[str, Any]
-type EventCallback = Callable[[str, dict[str, JsonValue]], None]
 
 
 class SubmitFunc(Protocol):
@@ -45,11 +44,7 @@ async def generic_submit_homework(
 ) -> HomeworkSubmitResult:
     """异步并发提交题目答案，返回结构化逐题记录与汇总。"""
 
-    def _notify(event: str, payload: dict[str, JsonValue]) -> None:
-        if on_event:
-            on_event(event, payload)
-        else:
-            emit_event(event, payload)
+    _notify = notifier(on_event)
 
     if not resolved_pairs:
         return HomeworkSubmitResult(total=0, submitted_count=0, correct_count=0, items=[])

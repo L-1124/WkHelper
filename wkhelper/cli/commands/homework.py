@@ -12,18 +12,18 @@ from wkhelper.cli.deps import (
     _read_json_file_or_stdin,
 )
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.core.entities import Homework
 from wkhelper.core.exceptions import ConfirmationRequiredError, PartialFailureError
-from wkhelper.core.models import (
-    Homework,
+from wkhelper.core.homework_runner import run_homework_submit
+from wkhelper.core.json_types import parse_json_text
+from wkhelper.core.results import (
     HomeworkItem,
     HomeworkListData,
     HomeworkOutline,
     HomeworkSubmitPreview,
     HomeworkSubmitResult,
     QuestionOutline,
-    parse_json_text,
 )
-from wkhelper.core.runner import Runner
 
 homework_app = App(name="homework", help="作业查询与提交")
 
@@ -153,8 +153,8 @@ async def homework_submit_cmd(
         if not confirm:
             raise ConfirmationRequiredError("作业提交必须显式附加 `--confirm` 参数")
 
-        runner = Runner(plat)
-        result = await runner.execute_homework_submit(
+        result = await run_homework_submit(
+            plat,
             matched,
             Homework(id=str(homework), name=str(homework)),
             answers=answers_map,

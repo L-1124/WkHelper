@@ -1,8 +1,6 @@
 """wkhelper 核心异常定义（强类型 NextAction 约束）。"""
 
-from typing import Any
-
-from wkhelper.core.models import NextAction
+from wkhelper.core.results import NextAction
 
 
 class WKError(Exception):
@@ -15,14 +13,6 @@ class AuthError(WKError):
 
 class APIError(WKError):
     """API 请求失败。"""
-
-
-class NetworkError(WKError):
-    """网络连接失败。"""
-
-
-class PlatformError(WKError):
-    """平台特定逻辑错误。"""
 
 
 class OutputExistsError(WKError):
@@ -40,6 +30,6 @@ class ConfirmationRequiredError(WKError):
 class PartialFailureError(WKError):
     """批处理任务部分失败。"""
 
-    def __init__(self, message: str, data: Any = None) -> None:
+    def __init__(self, message: str, data: object = None) -> None:
         super().__init__(message)
-        self.data: Any = data
+        self.data: object = data

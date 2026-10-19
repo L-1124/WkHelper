@@ -5,7 +5,7 @@ from typing import Any
 import niquests
 import pytest
 
-from wkhelper.core.models import Course, UserInfo
+from wkhelper.core.entities import Course, UserInfo
 from wkhelper.platform.yuketang import YuketangPlatform
 
 

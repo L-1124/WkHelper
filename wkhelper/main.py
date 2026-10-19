@@ -19,7 +19,7 @@ from wkhelper.core.exceptions import (
     PartialFailureError,
     WKError,
 )
-from wkhelper.core.models import JsonDict
+from wkhelper.core.json_types import JsonDict
 
 logger = logging.getLogger("wkhelper")
 

@@ -9,11 +9,12 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.core.entities import Homework
 from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
 from wkhelper.core.exporter import export_questions_to_markdown, html_to_md, localize_question_detail
-from wkhelper.core.models import (
+from wkhelper.core.json_types import json_int
+from wkhelper.core.results import (
     ExportResult,
-    Homework,
     OptionItem,
     OutputFileResult,
     QuestionDetail,
@@ -21,7 +22,6 @@ from wkhelper.core.models import (
     QuestionSubmitPreview,
     QuestionSubmitResult,
     QuestionSummary,
-    json_int,
 )
 
 question_app = App(name="question", help="单题与按页题目检索")
@@ -106,7 +106,7 @@ async def question_get_cmd(
         )
         if download_resources:
             target_assets_dir = Path(assets_dir) if assets_dir else (Path(output).parent / "assets" if output else Path("./assets"))
-            detail = await localize_question_detail(plat.client, detail, target_assets_dir)
+            detail = await localize_question_detail(plat.fetch_bytes, detail, target_assets_dir)
 
         if output is not None:
             Path(output).write_bytes(msgspec.json.encode(detail))

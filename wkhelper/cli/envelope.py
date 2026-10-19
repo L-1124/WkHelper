@@ -7,7 +7,8 @@ from typing import Any
 
 import msgspec
 
-from wkhelper.core.models import JsonDict, NextAction
+from wkhelper.core.json_types import JsonDict
+from wkhelper.core.results import NextAction
 
 SCHEMA_VERSION = 1
 

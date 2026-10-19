@@ -8,7 +8,7 @@ from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
 from wkhelper.core.exceptions import ConfirmationRequiredError
-from wkhelper.core.models import ArticleListData, ArticleReadResult
+from wkhelper.core.results import ArticleListData, ArticleReadResult
 
 article_app = App(name="article", help="资料与图文任务管理")
 

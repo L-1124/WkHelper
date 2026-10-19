@@ -11,7 +11,7 @@ from cyclopts import CycloptsError
 from wkhelper.cli.app import app
 from wkhelper.cli.envelope import create_error_envelope, create_success_envelope, print_json
 from wkhelper.cli.spec import command_registry, get_command_schema, get_command_spec
-from wkhelper.core.models import VideoItem
+from wkhelper.core.results import VideoItem
 
 
 def _iter_leaf_commands(app_inst: Any, prefix: str = "") -> list[str]:

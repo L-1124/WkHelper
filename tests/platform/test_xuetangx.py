@@ -5,8 +5,8 @@ from typing import Any
 import niquests
 import pytest
 
+from wkhelper.core.entities import Course, Homework
 from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.models import Course, Homework
 from wkhelper.platform.xuetangx import XuetangXPlatform
 
 

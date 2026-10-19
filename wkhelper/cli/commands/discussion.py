@@ -8,11 +8,7 @@ from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
 from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
-from wkhelper.core.models import (
-    DiscussionCommentResult,
-    DiscussionListData,
-    DiscussionTopicDetail,
-)
+from wkhelper.core.results import DiscussionCommentResult, DiscussionListData, DiscussionTopicDetail
 
 discussion_app = App(name="discussion", help="讨论题查询与互动回复")
 

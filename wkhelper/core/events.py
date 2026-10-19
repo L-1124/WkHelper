@@ -4,9 +4,23 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
-from wkhelper.core.models import JsonValue
+from wkhelper.core.json_types import JsonValue
+
+type EventCallback = Callable[[str, dict[str, JsonValue]], None]
+
+
+def notifier(callback: EventCallback | None) -> EventCallback:
+    """统一事件派发口径：优先外部回调，缺省写入 NDJSON 通道。"""
+
+    def _notify(event: str, payload: dict[str, JsonValue]) -> None:
+        if callback is not None:
+            callback(event, payload)
+        else:
+            emit_event(event, payload)
+
+    return _notify
 
 
 def emit_event(event_type: str, payload: Mapping[str, JsonValue]) -> None:
@@ -35,9 +49,6 @@ class NDJSONLogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-
-# 兼容别名
-NDJsonHandler = NDJSONLogHandler
 
 _DEBUG_ENABLED: bool = False
 

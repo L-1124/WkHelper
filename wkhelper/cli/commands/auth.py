@@ -12,14 +12,9 @@ from wkhelper.cli.deps import (
     _read_json_file_or_stdin,
 )
 from wkhelper.cli.envelope import CommandResult, NextAction
+from wkhelper.core.entities import StorageStatus
 from wkhelper.core.exceptions import ConfirmationRequiredError
-from wkhelper.core.models import (
-    AccountListData,
-    AuthStatusResult,
-    LoginResult,
-    RemoveResult,
-    StorageStatus,
-)
+from wkhelper.core.results import AccountListData, AuthStatusResult, LoginResult, RemoveResult
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 

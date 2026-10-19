@@ -5,8 +5,9 @@ from typing import Any
 import niquests
 import pytest
 
+from wkhelper.core.entities import Course
 from wkhelper.core.homework import generic_submit_homework
-from wkhelper.core.models import Course, QuestionSubmitOutcome
+from wkhelper.core.results import QuestionSubmitOutcome
 from wkhelper.core.video import VideoWatchOptions, generic_watch_video
 
 

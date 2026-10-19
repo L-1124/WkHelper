@@ -3,7 +3,7 @@
 import pytest
 
 from wkhelper.cli.deps import _load_course
-from wkhelper.core.models import Course
+from wkhelper.core.entities import Course
 
 
 def _courses() -> list[Course]:
