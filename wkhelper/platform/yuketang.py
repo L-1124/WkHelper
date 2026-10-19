@@ -9,7 +9,8 @@ import niquests
 
 from wkhelper.core.config import DEFAULT_HEADERS
 from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
+from wkhelper.core.exporter import html_to_md
+from wkhelper.core.models import Course, DiscussionCommentResult, DiscussionTopicDetail, Homework, UserInfo, VideoContext
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.login_helper import QrCodeSession
 
@@ -61,11 +62,15 @@ class YuketangPlatform(BasePlatform):
             "type": "qrcode",
         }
 
-        qr_session = QrCodeSession(display=display, open_browser=open_browser)
+        qr_session = QrCodeSession(
+            display=display,
+            open_browser=open_browser,
+            platform_name="雨课堂",
+        )
         await qr_session.start()
 
         try:
-            async with niquests.AsyncSession(timeout=10, verify=True) as ws_sess:
+            async with niquests.AsyncSession(timeout=max(30.0, timeout + 15.0), verify=True) as ws_sess:
                 resp = await ws_sess.get("wss://www.yuketang.cn/wsapp/")
                 if resp.extension is None:
                     raise AuthError("WebSocket 升级失败")
@@ -361,3 +366,74 @@ class YuketangPlatform(BasePlatform):
         return {
             "classroom_id": course.metadata["classroom_id"],
         }
+
+    @override
+    async def _mark_article_finish(self, leaf_id: str | int, course: Course) -> bool:
+        url = f"https://www.yuketang.cn/mooc-api/v1/lms/learn/user_article_finish/{leaf_id}/"
+        kwargs = self._get_course_kwargs(course)
+        resp = await self._request_json("GET", url, **kwargs)
+        return bool(resp.get("success", False))
+
+    @override
+    async def get_discussion_detail(self, leaf_id: str | int, course: Course) -> DiscussionTopicDetail:
+        cid = course.metadata["classroom_id"]
+        kwargs = self._get_course_kwargs(course)
+        url_unit = "https://www.yuketang.cn/v/discussion/v2/unit/discussion/"
+        r_unit = await self._request_json("GET", url_unit, params={"classroom_id": cid, "leaf_id": leaf_id}, **kwargs)
+        topic_info = r_unit.get("data", {})
+        topic_id = int(topic_info.get("id") or 0)
+        user_comment_num = int(topic_info.get("user_comment_num") or 0)
+        comment_count = int(topic_info.get("commented") or 0)
+        raw_text = topic_info.get("content", {}).get("text", "")
+
+        url_status = "https://www.yuketang.cn/v/discussion/v2/student/comment/status/"
+        r_status = await self._request_json("GET", url_status, params={"classroom_id": cid, "leaf_id": leaf_id}, **kwargs)
+        completed = bool(r_status.get("data") or user_comment_num > 0)
+
+        discussions = await self.get_discussions(course)
+        target = next((item for item in discussions if item.id == str(leaf_id)), None)
+        title = target.name if target else f"讨论题 {leaf_id}"
+
+        return DiscussionTopicDetail(
+            course_id=str(course.id),
+            leaf_id=str(leaf_id),
+            topic_id=topic_id,
+            title=title,
+            prompt=html_to_md(raw_text),
+            comment_count=comment_count,
+            user_comment_num=user_comment_num,
+            completed=completed,
+        )
+
+    @override
+    async def submit_discussion(self, leaf_id: str | int, course: Course, content: str) -> DiscussionCommentResult:
+        cid = course.metadata["classroom_id"]
+        kwargs = self._get_course_kwargs(course)
+        url_unit = "https://www.yuketang.cn/v/discussion/v2/unit/discussion/"
+        r_unit = await self._request_json("GET", url_unit, params={"classroom_id": cid, "leaf_id": leaf_id}, **kwargs)
+        topic_info = r_unit.get("data", {})
+        topic_id = int(topic_info.get("id") or 0)
+        to_user = int(topic_info.get("user_id") or 0)
+
+        url_post = "https://www.yuketang.cn/v/discussion/v2/comment/"
+        payload = {
+            "to_user": to_user,
+            "topic_id": topic_id,
+            "content": {
+                "text": content,
+                "app_upload_images": [],
+            },
+        }
+        resp = await self.client.post(url_post, json=payload, **kwargs)
+        parsed = resp.json() if resp.text else {}
+        success = resp.status_code == 200 and parsed.get("success", False)
+        msg = parsed.get("msg") or parsed.get("data", {}).get("message") or "操作成功"
+        comment_id = parsed.get("data", {}).get("data", {}).get("id")
+        return DiscussionCommentResult(
+            course_id=str(course.id),
+            leaf_id=str(leaf_id),
+            topic_id=topic_id,
+            comment_id=int(comment_id) if comment_id else None,
+            success=success,
+            message=str(msg),
+        )

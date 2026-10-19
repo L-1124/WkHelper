@@ -7,8 +7,7 @@ from typing import Any, Protocol
 
 import niquests
 
-from wkhelper.cli.events import emit_event
-from wkhelper.core.config import MAX_WORKERS_HOMEWORK
+from wkhelper.core.events import emit_event
 from wkhelper.core.models import Course, HomeworkSubmitResult, JsonValue, QuestionSubmitOutcome, SubmitItem
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,10 @@ async def generic_submit_homework(
     client: niquests.AsyncSession,
     headers: HeaderMap | None = None,
     on_event: EventCallback | None = None,
+    concurrency: int = 1,
+    delay: float = 0.0,
+    delay_jitter: float = 0.0,
+    random_order: bool = False,
 ) -> HomeworkSubmitResult:
     """异步并发提交题目答案，返回结构化逐题记录与汇总。"""
 
@@ -56,7 +59,7 @@ async def generic_submit_homework(
     processed_count = 0
     items: list[SubmitItem] = []
 
-    semaphore = asyncio.Semaphore(MAX_WORKERS_HOMEWORK)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
     lock = asyncio.Lock()
 
     async def worker(idx: int, q: QuestionPayload, answer: list[str]) -> None:
@@ -76,6 +79,35 @@ async def generic_submit_homework(
             except (ValueError, TypeError):
                 item_record.error = f"题目ID格式无效: {problem_id}"
                 return
+            user_info = q.get("user") or {}
+            my_count = user_info.get("my_count") or 0
+            max_retry = q.get("max_retry", 1)
+            already_submitted = bool(user_info.get("answer") or user_info.get("my_answer") or my_count > 0)
+            already_correct = bool(user_info.get("is_right", False))
+
+            if already_submitted and already_correct:
+                item_record.submitted = True
+                item_record.is_correct = True
+                async with lock:
+                    success_count += 1
+                    correct_count += 1
+                return
+
+            if already_submitted and max_retry > 0 and my_count >= max_retry:
+                item_record.submitted = True
+                item_record.is_correct = already_correct
+                item_record.error = "作答次数已用尽"
+                if already_correct:
+                    async with lock:
+                        correct_count += 1
+                async with lock:
+                    success_count += 1
+                return
+            if delay > 0 and not already_submitted:
+                import random
+
+                actual_delay = max(0.05, delay + random.uniform(-delay_jitter, delay_jitter) if delay_jitter > 0 else delay)
+                await asyncio.sleep(actual_delay)
 
             async with semaphore:
                 result = await submit_func(pid_int, answer, course_info, client, headers)
@@ -91,9 +123,16 @@ async def generic_submit_homework(
                         correct_count += 1
                 else:
                     item_record.correct_answer = result.correct_answer
+            elif result.error_code == 80001 and already_submitted:
+                item_record.submitted = True
+                item_record.is_correct = already_correct
+                if already_correct:
+                    async with lock:
+                        correct_count += 1
+                async with lock:
+                    success_count += 1
             else:
-                item_record.error = "平台返回提交失败"
-
+                item_record.error = result.error or "平台返回提交失败"
         except Exception as e:
             item_record.error = str(e)
         finally:
@@ -109,8 +148,14 @@ async def generic_submit_homework(
                     },
                 )
 
+    pairs_to_process = list(enumerate(resolved_pairs, 1))
+    if random_order:
+        import random
+
+        random.shuffle(pairs_to_process)
+
     async with asyncio.TaskGroup() as tg:
-        for i, (q, answer) in enumerate(resolved_pairs, 1):
+        for i, (q, answer) in pairs_to_process:
             tg.create_task(worker(i, q, answer))
 
     items.sort(key=lambda x: x.index)
