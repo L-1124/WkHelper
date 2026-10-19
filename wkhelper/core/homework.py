@@ -16,6 +16,34 @@ logger = logging.getLogger(__name__)
 type QuestionPayload = dict[str, Any]
 type HeaderMap = dict[str, Any]
 
+_FILL_IN_TYPE = 4
+
+
+def question_type(question: QuestionPayload | None) -> int | None:
+    """题目题型：优先取 `content.ProblemType`（两平台实际字段），退回 `type`。
+
+    题型取值：1/6 单选判断、2 多选、3 投票、4 填空、5 主观题。
+    """
+    if not isinstance(question, dict):
+        return None
+    content = question.get("content")
+    raw: Any = None
+    if isinstance(content, dict):
+        raw = content.get("ProblemType")
+        if raw is None:
+            raw = content.get("Type")
+    if raw is None:
+        raw = question.get("type")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_fill_in_question(question: QuestionPayload | None) -> bool:
+    """是否为填空题型：必须走 `answers` 映射而不是 `answer` 列表。"""
+    return question_type(question) == _FILL_IN_TYPE
+
 
 class SubmitFunc(Protocol):
     """单题提交函数协议。"""
@@ -27,6 +55,7 @@ class SubmitFunc(Protocol):
         course_info: Course,
         client: niquests.AsyncSession,
         kwargs: HeaderMap | None,
+        question: QuestionPayload | None = None,
     ) -> QuestionSubmitOutcome: ...
 
 
@@ -105,7 +134,7 @@ async def generic_submit_homework(
                 await asyncio.sleep(actual_delay)
 
             async with semaphore:
-                result = await submit_func(pid_int, answer, course_info, client, headers)
+                result = await submit_func(pid_int, answer, course_info, client, headers, q)
 
             if result.success:
                 item_record.submitted = True

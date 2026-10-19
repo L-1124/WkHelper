@@ -12,6 +12,7 @@ from wkhelper.cli.envelope import CommandResult
 from wkhelper.core.entities import Homework
 from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
 from wkhelper.core.exporter import export_questions_to_markdown, html_to_md, localize_question_detail
+from wkhelper.core.homework import question_type
 from wkhelper.core.json_types import json_int
 from wkhelper.core.results import (
     ExportResult,
@@ -26,6 +27,12 @@ from wkhelper.core.results import (
 
 question_app = App(name="question", help="单题与按页题目检索")
 questions_app = App(name="questions", help="课程题目导出")
+
+
+def _type_text(question: dict[str, object]) -> str | None:
+    """题型对外展示：平台只在 `content.ProblemType` 给出题型。"""
+    raw = question_type(question)  # type: ignore[arg-type]
+    return str(raw) if raw is not None else None
 
 
 @question_app.command(name="list")
@@ -53,7 +60,7 @@ async def question_list_cmd(
                 QuestionSummary(
                     index=index,
                     id=str(question.get("problem_id") or question.get("id")),
-                    type=question.get("type"),
+                    type=_type_text(question),
                     prompt=body[:200] + ("..." if len(body) > 200 else ""),
                     content_truncated=len(body) > 200,
                     options=[OptionItem(key=option.get("key"), text=html_to_md(option.get("value", ""))) for option in options],
@@ -93,7 +100,7 @@ async def question_get_cmd(
         attempt_count = json_int(user_info.get("my_count"))
         detail = QuestionDetail(
             id=str(question),
-            type=target_question.get("type"),
+            type=_type_text(target_question),
             prompt=body,
             options=[OptionItem(key=option.get("key"), text=html_to_md(option.get("value", ""))) for option in options],
             submitted=bool(user_info.get("answer") or attempt_count > 0),

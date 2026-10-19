@@ -1,23 +1,24 @@
 """平台基础接口与课件树抽象。"""
 
 import asyncio
+import json
 import logging
-import math
 import random
-import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import niquests
 
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.events import EventCallback, emit_event, is_debug_enabled
-from wkhelper.core.exceptions import APIError
+from wkhelper.core.exceptions import APIError, AuthError, RiskControlError
 from wkhelper.core.homework import generic_submit_homework
 from wkhelper.core.json_types import JsonDict
+from wkhelper.core.markdown import html_to_md
+from wkhelper.core.qr_login import QrCodeSession
 from wkhelper.core.results import (
     ArticleItem,
     ArticleReadResult,
@@ -30,6 +31,7 @@ from wkhelper.core.results import (
     VideoProgress,
     VideoWatchResult,
 )
+from wkhelper.core.throttle import RateGate, RetryPolicy, parse_retry_hint
 from wkhelper.core.video import VideoWatchOptions, generic_watch_video, parse_progress_text
 
 logger = logging.getLogger(__name__)
@@ -37,13 +39,55 @@ logger = logging.getLogger(__name__)
 type LeafContext = tuple[dict[str, Any], str, str | None]
 
 
+def _page_nonce() -> str:
+    """页面编号后缀，算法对齐前端 `Math.floor(1048576*(1+random)).toString(36)`。"""
+    return _base36(int(1048576 * (1 + random.random())))
+
+
+def _base36(value: int) -> str:
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if value <= 0:
+        return "0"
+    out: list[str] = []
+    while value:
+        value, rem = divmod(value, 36)
+        out.append(digits[rem])
+    return "".join(reversed(out))
+
+
+def _as_int_or_str(value: Any) -> int | str:
+    """数字形态的 ID 保持数字，前端同样按 `parseInt` 语义传参。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+# 平台风控拦截码：命中后必须人工完成人机验证，自动重试只会加重处罚
+_RISK_CONTROL_CODE = "400403"
+
+
+def _looks_like_risk_control(body: str | dict[str, Any] | None) -> bool:
+    """识别风控人机验证响应（`error_code: 400403`）。"""
+    if isinstance(body, dict):
+        return str(body.get("error_code") or "") == _RISK_CONTROL_CODE
+    if isinstance(body, str):
+        return _RISK_CONTROL_CODE in body
+    return False
+
+
 @dataclass(frozen=True)
 class HeartbeatProfile:
-    """心跳报文中随平台变化的固定字段，由平台适配层显式提供。"""
+    """心跳报文中随平台变化的固定字段，由平台适配层显式提供。
 
-    origin: str
+    `lob` 是业务线标识（雨课堂 `ykt`、学堂在线 `xt`）；`n` 是 CDN 代号，
+    只有解析出播放源时才有意义，未知时留空；`sp` 为播放倍速。
+    """
+
     lob: str
-    fixed_duration: float = 4976.5
+    n: str = ""
+    sp: float = 1.0
+    interval: int = 5
 
 
 class BasePlatformParser:
@@ -109,6 +153,19 @@ class BasePlatformParser:
         return result
 
     @staticmethod
+    def parse_leaf_schedules(raw: Any) -> dict[int, float]:
+        """把 `leaf_schedules` 原始映射解析为 int 叶子 ID -> 进度。"""
+        if not isinstance(raw, dict):
+            return {}
+        schedules: dict[int, float] = {}
+        for leaf_id, progress in raw.items():
+            try:
+                schedules[int(leaf_id)] = float(progress)
+            except (TypeError, ValueError):
+                continue
+        return schedules
+
+    @staticmethod
     def parse_exercise_response(q_resp: dict[str, Any]) -> list[dict[str, Any]]:
         """解析习题 API 响应中的题目列表，兼容多种响应结构。"""
         if q_resp.get("success") is False:
@@ -128,45 +185,97 @@ class BasePlatformParser:
 class BasePlatform(ABC):
     """所有平台的抽象基类。"""
 
-    def __init__(self, client: niquests.AsyncSession) -> None:
+    # 平台 API 端点基址与路径前缀，供通用 URL 构造复用；子类以类属性声明。
+    api_base: ClassVar[str] = ""
+    api_prefix: ClassVar[str] = ""
+
+    def __init__(
+        self,
+        client: niquests.AsyncSession,
+        *,
+        gate: RateGate | None = None,
+        retry_policy: RetryPolicy | None = None,
+    ) -> None:
         self.client = client
         self.user: UserInfo | None = None
         self.current_cookies: dict[str, str] | None = None
+        self.gate = gate or RateGate()
+        self.retry_policy = retry_policy or RetryPolicy()
+
+    @staticmethod
+    def _trace_http(method: str, url: str, start: float, status_code: int | None, error: str | None = None) -> None:
+        """仅在调试模式下发射 HTTP 追踪事件，避免污染标准输出。"""
+        if not is_debug_enabled():
+            return
+        payload: JsonDict = {
+            "method": method.upper(),
+            "url": url,
+            "status_code": status_code,
+            "duration_ms": round((time.perf_counter() - start) * 1000, 2),
+        }
+        if error is not None:
+            payload["error"] = error
+        emit_event("http.trace", payload)
 
     async def _request_json(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
-        """通用的发起 HTTP 请求并解析 JSON 的方法，包含状态码检查。"""
+        """发起 HTTP 请求并解析 JSON；瞬时错误按退避与冷却策略重试。"""
+        policy = self.retry_policy
+        for attempt in range(1, policy.max_attempts + 1):
+            await self.gate.acquire()
+            try:
+                return await self._request_json_once(method, url, **kwargs)
+            except APIError as exc:
+                if not exc.retryable or attempt >= policy.max_attempts:
+                    raise
+                delay = exc.retry_after if exc.retry_after is not None else self.gate.backoff_delay(attempt, policy)
+                logger.debug(f"{method} {url} 第 {attempt} 次失败，{delay:.2f}s 后重试: {exc}")
+                if exc.retry_after is not None:
+                    await self.gate.cooldown(delay)
+                else:
+                    await asyncio.sleep(delay)
+        raise APIError(f"请求失败次数过多: {url}")  # 循环必然在内部返回或抛出
+
+    async def _request_json_once(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        """单次请求：HTTP 失败与限流提示统一收敛为带重试元数据的错误。"""
         start = time.perf_counter()
-        resp = None
         try:
             resp = await self.client.request(method, url, **kwargs)
+        except (niquests.ConnectionError, niquests.Timeout) as exc:
+            self._trace_http(method, url, start, None, str(exc))
+            raise APIError(f"网络请求失败: {url}") from exc
+
+        body = resp.text or ""
+        try:
             resp.raise_for_status()
-            if is_debug_enabled():
-                duration_ms = round((time.perf_counter() - start) * 1000, 2)
-                emit_event(
-                    "http.trace",
-                    {
-                        "method": method.upper(),
-                        "url": url,
-                        "status_code": resp.status_code,
-                        "duration_ms": duration_ms,
-                    },
-                )
-            return resp.json()
-        except Exception as exc:
-            if is_debug_enabled():
-                duration_ms = round((time.perf_counter() - start) * 1000, 2)
-                status_code = getattr(resp, "status_code", None)
-                emit_event(
-                    "http.trace",
-                    {
-                        "method": method.upper(),
-                        "url": url,
-                        "status_code": status_code,
-                        "duration_ms": duration_ms,
-                        "error": str(exc),
-                    },
-                )
-            raise
+        except niquests.HTTPError as exc:
+            self._trace_http(method, url, start, resp.status_code, str(exc))
+            if _looks_like_risk_control(body):
+                raise RiskControlError(f"触发平台风控人机验证，请先在浏览器完成验证后重试: {url}") from exc
+            if resp.status_code in (401, 403):
+                raise AuthError(f"平台拒绝访问（HTTP {resp.status_code}），登录态可能已失效: {url}") from exc
+            raise APIError(
+                f"平台请求失败（HTTP {resp.status_code}）: {url}",
+                status_code=resp.status_code,
+                retry_after=parse_retry_hint(body, resp.headers.get("Retry-After")),
+                retryable=resp.status_code == 429 or resp.status_code >= 500,
+            ) from exc
+
+        hint = parse_retry_hint(body, resp.headers.get("Retry-After"))
+        if hint is not None:
+            self._trace_http(method, url, start, resp.status_code, "rate limited")
+            raise APIError(f"平台限流，需等待 {hint:.0f}s: {url}", status_code=resp.status_code, retry_after=hint)
+
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            self._trace_http(method, url, start, resp.status_code, str(exc))
+            raise APIError(f"平台响应不是合法 JSON: {url}") from exc
+        self._trace_http(method, url, start, resp.status_code)
+        if not isinstance(payload, dict):
+            raise APIError(f"平台响应不是 JSON 对象: {url}")
+        if _looks_like_risk_control(payload):
+            raise RiskControlError(f"触发平台风控人机验证，请先在浏览器完成验证后重试: {url}")
+        return payload
 
     @staticmethod
     def parse_cookie_string(raw: str) -> dict[str, str]:
@@ -195,13 +304,85 @@ class BasePlatform(ABC):
     @abstractmethod
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo: ...
 
+    # 扫码登录协议差异点：平台只需实现下列钩子，轮询与收尾由基类统一完成。
+
+    qr_platform_name: ClassVar[str] = "雨课堂"
+
+    def _qr_ws_url(self) -> str:
+        return "wss://www.yuketang.cn/wsapp/"
+
+    def _qr_request_payload(self) -> dict[str, Any]:
+        return {"op": "requestlogin", "role": "web", "version": 1.4, "type": "qrcode"}
+
+    def _qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
+        """消息中携带的下次轮询超时提示；无提示时返回 None。"""
+        return None
+
+    async def _qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
+        """把本轮消息中的二维码展示给用户；默认无图像载荷。"""
+        return None
+
     @abstractmethod
+    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+        """用扫码回执换取会话 Cookie。"""
+
+    async def _qr_wait_for_scan(self, qr_session: QrCodeSession, timeout: int) -> dict[str, Any]:
+        """通用扫码轮询：连接 WebSocket，推送二维码并等待登录成功回执。"""
+        payload = json.dumps(self._qr_request_payload())
+        wait_limit = 60.0
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        async with niquests.AsyncSession(timeout=max(30.0, timeout + 15.0), verify=True) as ws_sess:
+            resp = await ws_sess.get(self._qr_ws_url())
+            if resp.extension is None:
+                raise AuthError("WebSocket 升级失败")
+            await resp.extension.send_payload(payload)
+            try:
+                while loop.time() < deadline:
+                    remain_time = max(1.0, deadline - loop.time())
+                    try:
+                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=min(wait_limit, remain_time))
+                    except TimeoutError:
+                        if loop.time() >= deadline:
+                            break
+                        await resp.extension.send_payload(payload)
+                        continue
+                    if raw is None:
+                        raise AuthError("WebSocket 连接已关闭")
+                    message = json.loads(raw)
+                    hint = self._qr_expire_seconds(message)
+                    if hint is not None:
+                        wait_limit = hint
+                    await self._qr_publish_image(message, qr_session, remain_time)
+                    if message.get("op") == "loginsuccess":
+                        return message
+            finally:
+                await resp.extension.close()
+        raise AuthError("扫码超时或未获得有效认证回执")
+
     async def _login_with_qrcode(
         self,
         display: str = "image",
         open_browser: bool = False,
         timeout: int = 120,
-    ) -> UserInfo: ...
+    ) -> UserInfo:
+        """扫码登录通用流程：展示二维码 → 等待回执 → 换取 Cookie → 校验身份。"""
+        qr_session = QrCodeSession(display=display, open_browser=open_browser, platform_name=self.qr_platform_name)
+        await qr_session.start()
+        try:
+            login_data = await self._qr_wait_for_scan(qr_session, timeout)
+            cookies = await self._qr_exchange_cookies(login_data)
+            user = await self._login_with_cookies(cookies)
+            qr_session.mark_success(name=user.name)
+            if qr_session.display == "browser":
+                await asyncio.sleep(1.2)
+            return user
+        except AuthError:
+            raise
+        except Exception as e:
+            raise AuthError(f"扫码通信失败: {e}") from e
+        finally:
+            await qr_session.close()
 
     @abstractmethod
     async def get_courses(self) -> list[Course]: ...
@@ -212,20 +393,33 @@ class BasePlatform(ABC):
     @abstractmethod
     async def _get_leaf_schedules(self, course: Course) -> dict[int, float]: ...
 
-    @abstractmethod
-    def _build_leaf_info_url(self, leaf_id: str | int, course: Course) -> str: ...
+    def _classroom_id(self, course: Course) -> str:
+        """课程所属课堂 ID，两个平台都以 `metadata['classroom_id']` 承载。"""
+        return str(course.metadata["classroom_id"])
+
+    def _build_leaf_info_url(self, leaf_id: str | int, course: Course) -> str:
+        """课件叶子详情接口，两个平台仅路径前缀不同。"""
+        return f"{self.api_base}/{self.api_prefix}/v1/lms/learn/leaf_info/{self._classroom_id(course)}/{leaf_id}/"
 
     def _get_leaf_info_params(self, leaf_id: str | int, course: Course) -> dict[str, Any] | None:
         return None
 
-    @abstractmethod
-    def _build_exercise_list_url(self, leaf_type_id: int | str) -> str: ...
+    def _build_exercise_list_url(self, leaf_type_id: int | str, sku_id: Any = None) -> str:
+        """习题列表接口；前端在学堂在线按 `{exercise_id}/{sku_id}/` 双段寻址。"""
+        return f"{self.api_base}/{self.api_prefix}/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
 
-    @abstractmethod
-    def _build_submit_url(self) -> str: ...
+    def _build_submit_url(self) -> str:
+        return f"{self.api_base}/{self.api_prefix}/v1/lms/exercise/problem_apply/"
 
-    @abstractmethod
-    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    def _build_submit_payload(
+        self,
+        problem_id: int,
+        answer: list[str],
+        submit_ctx: dict[str, Any] | None = None,
+        question: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """构建提交载荷；题型差异（如填空需 `answers` 映射）由平台实现处理。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现题目提交载荷")
 
     def _get_request_kwargs(self, course: Course) -> dict[str, Any] | None:
         return None
@@ -299,38 +493,26 @@ class BasePlatform(ABC):
         return videos
 
     async def get_homeworks(self, course: Course) -> list[Homework]:
-        """获取课程作业列表。"""
+        """获取课程作业列表。
+
+        截止时间直接取自章节树（`score_deadline`/`end_time`）；逐个叶子请求
+        leaf_info 既拿不到更准确的值，还会产生 N 次多余往返。
+        """
         data = await self._get_chapter_data(course)
         schedules = await self._get_leaf_schedules(course)
         homeworks: list[Homework] = []
-
         for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
-            leaf_type = leaf.get("leaf_type")
-            if leaf_type not in (5, 6, 7, 9) or not leaf.get("is_show", True):
+            if leaf.get("leaf_type") not in (5, 6, 7, 9) or not leaf.get("is_show", True):
                 continue
             leaf_id = leaf.get("id")
             if leaf_id is None:
                 continue
-
-            label = BasePlatformParser.format_leaf_label(leaf, chapter_name, section_name)
             is_completed = schedules.get(int(leaf_id), 0.0) >= 1.0
-
-            url = self._build_leaf_info_url(leaf_id, course)
-            params = self._get_leaf_info_params(leaf_id, course)
-            deadline = None
-
-            try:
-                resp = await self._request_json("GET", url, params=params)
-                leaf_info = resp.get("data", {}).get("content_info", {})
-                deadline = leaf_info.get("end") or leaf_info.get("deadline")
-            except Exception as e:
-                logger.debug(f"获取叶子节点 {leaf_id} 详情失败: {e}")
-
             homeworks.append(
                 Homework(
                     id=str(leaf_id),
-                    name=label,
-                    deadline=deadline,
+                    name=BasePlatformParser.format_leaf_label(leaf, chapter_name, section_name),
+                    deadline=leaf.get("score_deadline") or leaf.get("end_time") or None,
                     completed=is_completed,
                     metadata={"is_completed": is_completed},
                 )
@@ -354,7 +536,14 @@ class BasePlatform(ABC):
         return articles
 
     async def _mark_article_finish(self, leaf_id: str | int, course: Course) -> bool:
-        raise NotImplementedError
+        """标记资料节点已完成；平台差异仅在查询参数，由 `_article_finish_params` 提供。"""
+        url = f"{self.api_base}/{self.api_prefix}/v1/lms/learn/user_article_finish/{leaf_id}/"
+        kwargs = self._get_request_kwargs(course) or {}
+        resp = await self._request_json("GET", url, params=self._article_finish_params(course), **kwargs)
+        return bool(resp.get("success", False))
+
+    def _article_finish_params(self, course: Course) -> dict[str, Any] | None:
+        return None
 
     async def read_article(self, leaf_id: str | int, course: Course) -> ArticleReadResult:
         """标记指定资料/图文节点为已读已完成。"""
@@ -386,11 +575,66 @@ class BasePlatform(ABC):
             discussions.append(DiscussionItem(id=str(leaf_id), name=label, completed=is_completed))
         return discussions
 
+    async def _fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        """拉取讨论题单元信息；两个平台的讨论接口族完全不同，由平台实现。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现讨论题单元接口")
+
+    async def _discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
+        """讨论题是否已打卡；默认按本人评论数判断。"""
+        return int(topic_info.get("user_comment_num") or 0) > 0
+
     async def get_discussion_detail(self, leaf_id: str | int, course: Course) -> DiscussionTopicDetail:
-        raise NotImplementedError
+        """获取讨论题详情与打卡状态。"""
+        topic_info = await self._fetch_discussion_unit(leaf_id, course)
+        topic_id = int(topic_info["id"])
+        user_comment_num = int(topic_info.get("user_comment_num") or 0)
+        comment_count = int(topic_info.get("commented") or 0)
+        content = topic_info.get("content")
+        raw_text = str(content.get("text") or "") if isinstance(content, dict) else ""
+        completed = await self._discussion_completed(topic_info, course, leaf_id)
+
+        discussions = await self.get_discussions(course)
+        target = next((item for item in discussions if item.id == str(leaf_id)), None)
+        title = target.name if target else f"讨论题 {leaf_id}"
+
+        return DiscussionTopicDetail(
+            course_id=str(course.id),
+            leaf_id=str(leaf_id),
+            topic_id=topic_id,
+            title=title,
+            prompt=html_to_md(raw_text),
+            comment_count=comment_count,
+            user_comment_num=user_comment_num,
+            completed=completed,
+        )
 
     async def submit_discussion(self, leaf_id: str | int, course: Course, content: str) -> DiscussionCommentResult:
-        raise NotImplementedError
+        """提交讨论题发言并返回打卡结果。"""
+        topic_info = await self._fetch_discussion_unit(leaf_id, course)
+        topic_id = int(topic_info["id"])
+        parsed = await self._post_discussion_comment(topic_info, content, course, leaf_id)
+        data = parsed.get("data")
+        nested = data.get("data") if isinstance(data, dict) else None
+        msg = parsed.get("msg") or (data.get("message") if isinstance(data, dict) else None) or "操作成功"
+        comment_id = nested.get("id") if isinstance(nested, dict) else None
+        return DiscussionCommentResult(
+            course_id=str(course.id),
+            leaf_id=str(leaf_id),
+            topic_id=topic_id,
+            comment_id=int(comment_id) if comment_id else None,
+            success=bool(parsed.get("success", False)),
+            message=str(msg),
+        )
+
+    async def _post_discussion_comment(
+        self,
+        topic_info: dict[str, Any],
+        content: str,
+        course: Course,
+        leaf_id: str | int,
+    ) -> dict[str, Any]:
+        """发送讨论发言，返回平台原始响应。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现讨论发言接口")
 
     async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
         """获取指定叶子节点的习题列表。"""
@@ -398,24 +642,28 @@ class BasePlatform(ABC):
         params = self._get_leaf_info_params(leaf_id, course)
         kwargs = self._get_request_kwargs(course) or {}
         resp = await self._request_json("GET", url, params=params, **kwargs)
-        content_info = resp.get("data", {}).get("content_info", {})
-        leaf_type_id = content_info.get("leaf_type_id") or resp.get("data", {}).get("leaf_type_id")
+        data = resp.get("data")
+        content_info = data.get("content_info") if isinstance(data, dict) else None
+        leaf_type_id = (content_info.get("leaf_type_id") if isinstance(content_info, dict) else None) or (
+            data.get("leaf_type_id") if isinstance(data, dict) else None
+        )
         if not leaf_type_id:
             return []
+        sku_id = data.get("sku_id") if isinstance(data, dict) else None
 
-        ex_url = self._build_exercise_list_url(leaf_type_id)
+        ex_url = self._build_exercise_list_url(leaf_type_id, sku_id)
         q_resp = await self._request_json("GET", ex_url, **kwargs)
         questions = self._parse_exercise_response(q_resp)
-        data = q_resp.get("data", {})
-        if isinstance(data, dict):
-            font_url = data.get("font")
+        q_data = q_resp.get("data")
+        if isinstance(q_data, dict):
+            font_url = q_data.get("font")
             if font_url and questions:
                 try:
                     from wkhelper.core.deobfuscator import deobfuscate_questions
 
                     await deobfuscate_questions(questions, font_url, self.fetch_bytes)
                 except Exception as e:
-                    logger.debug(f"反混淆题目失败: {e}")
+                    logger.warning(f"题目反混淆失败，返回原文: {e}")
         return questions
 
     async def _submit_answer(
@@ -423,51 +671,51 @@ class BasePlatform(ABC):
         homework_name: str,
         problem_id: int,
         answer: list[str] | str,
-        client: niquests.AsyncSession,
         kwargs: dict[str, Any] | None = None,
         submit_ctx: dict[str, Any] | None = None,
         on_status: Callable[[str], None] | None = None,
+        question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
-        """提交单个题目答案，含限流重试。"""
+        """提交单个题目答案：统一走节流器，并按平台限流提示等待后重试。"""
         url = self._build_submit_url()
         if isinstance(answer, str):
             answer = [answer]
-        payload = self._build_submit_payload(problem_id, answer, submit_ctx=submit_ctx)
+        payload = self._build_submit_payload(problem_id, answer, submit_ctx=submit_ctx, question=question)
 
-        max_retries = 10
-        for _ in range(max_retries):
+        max_attempts = max(1, self.retry_policy.max_attempts) + 6
+        for attempt in range(1, max_attempts + 1):
+            await self.gate.acquire()
             req_start = time.perf_counter()
-            response = await client.post(url, json=payload, **(kwargs or {}))
-            if is_debug_enabled():
-                duration_ms = round((time.perf_counter() - req_start) * 1000, 2)
-                emit_event(
-                    "http.trace",
-                    {
-                        "method": "POST",
-                        "url": url,
-                        "problem_id": problem_id,
-                        "status_code": response.status_code,
-                        "duration_ms": duration_ms,
-                    },
-                )
-            if response.text:
-                match = re.search(r"Expected available in(.+?)second.", response.text)
-            else:
-                match = None
-            if match:
-                delay_time = float(match.group(1).strip())
-                remain = max(1, math.ceil(delay_time))
+            response = await self.client.post(url, json=payload, **(kwargs or {}))
+            body = response.text or ""
+            self._trace_http("POST", url, req_start, response.status_code)
+
+            hint = parse_retry_hint(body, response.headers.get("Retry-After"))
+            if hint is not None or response.status_code == 429:
+                wait = hint if hint is not None else self.gate.backoff_delay(attempt, self.retry_policy)
                 if on_status:
-                    on_status(f"限流等待 {remain}s")
-                await asyncio.sleep(remain)
+                    on_status(f"限流等待 {wait:.0f}s")
+                await self.gate.cooldown(wait)
                 continue
-            response.raise_for_status()
+
+            try:
+                response.raise_for_status()
+            except niquests.HTTPError as exc:
+                if response.status_code in (401, 403):
+                    raise AuthError(f"平台拒绝提交（HTTP {response.status_code}），登录态可能已失效") from exc
+                if response.status_code >= 500 and attempt < max_attempts:
+                    await asyncio.sleep(self.gate.backoff_delay(attempt, self.retry_policy))
+                    continue
+                raise APIError(
+                    f"题目 {problem_id} 提交失败（HTTP {response.status_code}）",
+                    status_code=response.status_code,
+                ) from exc
             parsed = response.json()
             if not isinstance(parsed, dict):
                 raise APIError(f"题目 {problem_id} 提交返回结构无法识别")
             return self._parse_submit_response(parsed)
 
-        raise RuntimeError(f"题目 {problem_id} 提交重试次数过多")
+        raise APIError(f"题目 {problem_id} 提交重试次数过多，平台持续限流", retryable=True)
 
     async def fetch_bytes(self, url: str) -> bytes:
         """下载远程资源字节。
@@ -494,35 +742,40 @@ class BasePlatform(ABC):
         user_id: int,
         course_id: int,
         sku_id: int,
-        video_frame: int,
-        i: int,
+        video_frame: float,
+        seq: int,
         timestamp: int,
+        cc: str,
+        duration: float,
     ) -> JsonDict:
-        """构建心跳请求载荷；平台差异经 `heartbeat_profile` 注入。"""
+        """构建单个心跳打点，字段语义对齐 Web 播放器（见前端 media-log 定义）。"""
         profile = self.heartbeat_profile
-        nonce = "".join(random.sample("abcdefghijklmnopqrstuvwxyz0123456789", 4))
+        nonce = _page_nonce()
         return {
-            "i": i,
+            "i": profile.interval,
             "et": "heartbeat",
             "p": "web",
-            "n": profile.origin,
+            "n": profile.n,
             "lob": profile.lob,
-            "cp": video_frame,
+            "cp": round(float(video_frame), 1),
             "fp": 0,
             "tp": 0,
-            "sp": 2,
-            "ts": str(timestamp),
+            "sp": profile.sp,
+            "ts": str(int(timestamp)),
             "u": int(user_id),
             "uip": "",
             "c": int(course_id),
-            "v": int(video_id),
-            "skuid": int(sku_id),
+            "v": _as_int_or_str(video_id),
+            "skuid": _as_int_or_str(sku_id),
             "classroomid": str(classroom_id),
-            "cc": str(video_id),
-            "d": profile.fixed_duration,
+            "cc": cc,
+            "d": round(float(duration), 1),
             "pg": f"{video_id}_{nonce}",
-            "sq": i,
+            "sq": seq,
             "t": "video",
+            "cards_id": 0,
+            "slide": 0,
+            "v_url": "",
         }
 
     async def do_video(
@@ -548,18 +801,22 @@ class BasePlatform(ABC):
             progress_url=ctx.progress_url,
             heartbeat_url=ctx.heartbeat_url,
             payload_gen=self._build_heartbeat_payload,
+            progress_params=ctx.progress_params,
             request_kwargs=ctx.request_kwargs,
             options=opts,
             on_event=on_event,
+            media_ccid=ctx.media_ccid,
+            video_duration=ctx.duration,
         )
 
     async def get_video_progress(self, video_id: str, course: Course) -> VideoProgress:
         """查询单视频服务端进度与完成标识。"""
         vctx = await self._prepare_video_context(video_id, course)
-        if vctx.request_kwargs is not None:
-            resp = await self.client.get(vctx.progress_url, **vctx.request_kwargs)
-        else:
-            resp = await self.client.get(vctx.progress_url)
+        resp = await self.client.get(
+            vctx.progress_url,
+            params=vctx.progress_params,
+            **(vctx.request_kwargs or {}),
+        )
         resp.raise_for_status()
         text = resp.text or ""
         rate, _ = parse_progress_text(text, str(video_id))
@@ -599,15 +856,20 @@ class BasePlatform(ABC):
                 resolved_pairs.append((q, answers[pid]))
 
         async def submit_func(
-            problem_id: int, answer: list[str], course_info: Course, client: niquests.AsyncSession, kwargs: dict[str, Any] | None
+            problem_id: int,
+            answer: list[str],
+            course_info: Course,
+            client: niquests.AsyncSession,
+            kwargs: dict[str, Any] | None,
+            question: dict[str, Any] | None = None,
         ) -> QuestionSubmitOutcome:
             return await self._submit_answer(
                 homework.name,
                 problem_id,
                 answer,
-                client,
                 kwargs=kwargs,
                 submit_ctx=submit_ctx,
+                question=question,
             )
 
         return await generic_submit_homework(
@@ -639,13 +901,25 @@ class BasePlatform(ABC):
         except (ValueError, TypeError):
             raise ValueError(f"题目 ID 必须为有效整数: {question_id}") from None
 
+        # 取题目原始结构：填空题必须按题型改用 answers 映射提交
+        question: dict[str, Any] | None = None
+        try:
+            questions = await self.get_leaf_questions(homework.id, course)
+        except (APIError, AuthError) as exc:
+            logger.debug(f"拉取题目结构失败，按默认题型提交: {exc}")
+            questions = []
+        for item in questions:
+            if str(item.get("problem_id") or item.get("id")) == str(pid):
+                question = item
+                break
+
         res = await self._submit_answer(
             homework.name,
             pid,
             ans_list,
-            self.client,
             kwargs=kwargs,
             submit_ctx=submit_ctx,
+            question=question,
         )
         return QuestionSubmitResult(
             question_id=str(question_id),

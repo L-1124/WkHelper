@@ -97,6 +97,8 @@ class VideoContext:
     heartbeat_url: str
     progress_params: dict[str, Any]  # 平台 query 参数，动态载荷
     request_kwargs: dict[str, Any] | None = None  # HTTP 附加参数，动态边界
+    media_ccid: str = ""  # CDN 存储 ID，心跳 cc 字段
+    duration: float = 0.0  # 视频真实时长，心跳 d 字段
 
 
 @dataclass

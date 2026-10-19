@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-import re
+import random
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
@@ -14,6 +14,7 @@ from wkhelper.core.events import EventCallback, notifier
 from wkhelper.core.json_types import json_float, parse_json_text
 from wkhelper.core.plan import VideoParameters, VideoStatus
 from wkhelper.core.results import VideoWatchResult
+from wkhelper.core.throttle import parse_retry_hint
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +23,23 @@ type RequestOptions = dict[str, Any]
 
 @dataclass
 class VideoWatchOptions:
-    """视频学习参数配置。"""
+    """视频学习参数配置。
+
+    心跳节奏对齐 Web 播放器：每 `sample_interval` 秒采一个打点，攒满 `batch_size`
+    个后集中上报一次（默认 5s × 6 = 30s 一批），避免高频零散请求形成脚本特征。
+    """
 
     learning_rate: float = 1.0
-    heartbeat_interval: float = 1.5
+    sample_interval: float = 5.0
+    batch_size: int = 6
+    heartbeat_interval: float = 30.0
     jitter: float = 0.2
-    progress_interval: float = 15.0
+    progress_interval: float = 60.0
     completion_threshold: float = 1.0
     video_timeout: float = 1800.0
     total_timeout: float = 3600.0
     stall_timeout: float = 180.0
-    max_heartbeats: int = 1000
+    max_heartbeats: int = 400
     max_retries: int = 2
     retry_backoff: float = 2.0
     video_delay: float = 3.0
@@ -58,7 +65,7 @@ class VideoWatchOptions:
 
 
 class PayloadGenerator(Protocol):
-    """生成心跳载荷的协议。"""
+    """生成单个心跳打点的协议。"""
 
     def __call__(
         self,
@@ -67,24 +74,36 @@ class PayloadGenerator(Protocol):
         user_id: int,
         course_id: int,
         sku_id: int,
-        video_frame: int,
-        i: int,
+        video_frame: float,
+        seq: int,
         timestamp: int,
+        cc: str,
+        duration: float,
     ) -> RequestOptions: ...
 
 
-def parse_progress_text(text: str, video_id: str) -> tuple[float, float]:
-    """从进度响应文本解析 (rate, watch_length)；结构不符时返回零值。"""
+def parse_progress_detail(text: str, video_id: str) -> tuple[float, float, float]:
+    """从进度响应文本解析 (rate, watch_length, video_length)；结构不符时返回零值。"""
     parsed = parse_json_text(text)
     if not isinstance(parsed, dict):
-        return (0.0, 0.0)
+        return (0.0, 0.0, 0.0)
     data = parsed.get("data")
     if not isinstance(data, dict):
-        return (0.0, 0.0)
+        return (0.0, 0.0, 0.0)
     entry = data.get(video_id)
     if not isinstance(entry, dict):
-        return (0.0, 0.0)
-    return (json_float(entry.get("rate")), json_float(entry.get("watch_length")))
+        return (0.0, 0.0, 0.0)
+    return (
+        json_float(entry.get("rate")),
+        json_float(entry.get("watch_length")),
+        json_float(entry.get("video_length")),
+    )
+
+
+def parse_progress_text(text: str, video_id: str) -> tuple[float, float]:
+    """从进度响应文本解析 (rate, watch_length)。"""
+    rate, watch_length, _ = parse_progress_detail(text, video_id)
+    return (rate, watch_length)
 
 
 async def generic_watch_video(
@@ -98,9 +117,12 @@ async def generic_watch_video(
     progress_url: str,
     heartbeat_url: str,
     payload_gen: PayloadGenerator,
+    progress_params: dict[str, Any] | None = None,
     request_kwargs: RequestOptions | None = None,
     options: VideoWatchOptions | None = None,
     on_event: EventCallback | None = None,
+    media_ccid: str = "",
+    video_duration: float = 0.0,
 ) -> VideoWatchResult:
     """通用视频观看循环：支持完整自定义参数、有界预算、停滞检测与结果复查。"""
     opts = options or VideoWatchOptions()
@@ -113,13 +135,15 @@ async def generic_watch_video(
     def _remaining_time() -> float:
         return max(0.05, deadline - loop.time())
 
+    def _progress_kwargs(limit: float = 10.0) -> RequestOptions:
+        """进度查询专用参数：平台 query 参数只对进度接口生效，不得污染心跳。"""
+        return {**(request_kwargs or {}), "params": progress_params or {}, "timeout": min(limit, _remaining_time())}
+
     # 1. 检查初始服务端进度
     initial_rate = 0.0
     video_frame = 0.0
     try:
-        req_kw = dict(request_kwargs or {})
-        req_kw["timeout"] = min(10.0, _remaining_time())
-        resp = await client.get(progress_url, **req_kw)
+        resp = await client.get(progress_url, **_progress_kwargs())
         if resp.text:
             if '"completed":1' in resp.text:
                 _notify("video.completed", {"video_id": video_id, "name": video_name, "rate": 1.0, "skipped": True})
@@ -134,7 +158,10 @@ async def generic_watch_video(
                     duration_seconds=0.0,
                     message="视频此前已全部完成，直接跳过",
                 )
-            initial_rate, video_frame = parse_progress_text(resp.text, video_id)
+            initial_rate, video_frame, reported_length = parse_progress_detail(resp.text, video_id)
+            if video_duration <= 0 and reported_length > 0:
+                # 平台未直接给出时长时，用服务端记录的 video_length 兜底
+                video_duration = reported_length
     except Exception as exc:
         logger.debug(f"获取初始进度异常: {exc}")
 
@@ -151,6 +178,9 @@ async def generic_watch_video(
     message = "已完成"
 
     rate_multiplier = float(opts.learning_rate)
+    sample_interval = max(0.01, float(opts.sample_interval))
+    batch_size = max(1, int(opts.batch_size))
+    seq = 1  # 前端 sq 在页面生命周期内从 1 单调自增，跨批次不重置
 
     while current_rate < opts.completion_threshold:
         now = loop.time()
@@ -166,28 +196,33 @@ async def generic_watch_video(
             message = f"服务端进度在 {opts.stall_timeout}s 内无变化，已停止"
             break
 
-        # 最大心跳数检查
+        # 最大心跳批次数检查
         if heartbeats_sent >= opts.max_heartbeats:
             status = "timed_out"
             message = f"已达最大心跳请求上限 ({opts.max_heartbeats})"
             break
 
-        # 构造心跳包，保持浮点累进
-        timestamp = int(time.time() * 1000)
-        heart_data = [
-            payload_gen(
-                video_id=video_id,
-                classroom_id=classroom_id,
-                user_id=user_id,
-                course_id=course_id,
-                sku_id=sku_id,
-                video_frame=int(round(video_frame + rate_multiplier * i)),
-                i=i,
-                timestamp=timestamp,
+        # 构造一批打点：时间戳按采样间隔递增，cp 随播放速率累进
+        batch_start_ms = int(time.time() * 1000)
+        batch: list[RequestOptions] = []
+        for offset in range(batch_size):
+            _seq = seq + offset
+            batch.append(
+                payload_gen(
+                    video_id=video_id,
+                    classroom_id=classroom_id,
+                    user_id=user_id,
+                    course_id=course_id,
+                    sku_id=sku_id,
+                    video_frame=round(video_frame + rate_multiplier * sample_interval * offset, 1),
+                    seq=_seq,
+                    timestamp=batch_start_ms + int(sample_interval * 1000) * offset,
+                    cc=media_ccid,
+                    duration=video_duration,
+                )
             )
-            for i in range(3)
-        ]
-        video_frame += rate_multiplier * 3
+        seq += batch_size
+        video_frame += rate_multiplier * sample_interval * batch_size
 
         # 发送心跳（带重试与预算扣除）
         attempt = 0
@@ -197,17 +232,15 @@ async def generic_watch_video(
             try:
                 post_kw = dict(request_kwargs or {})
                 post_kw["timeout"] = min(10.0, _remaining_time())
-                r = await client.post(heartbeat_url, json={"heart_data": heart_data}, **post_kw)
+                r = await client.post(heartbeat_url, json={"heart_data": batch}, **post_kw)
 
-                if r.text:
-                    match = re.search(r"Expected available in(.+?)second.", r.text)
-                    if match:
-                        delay_time = float(match.group(1).strip())
-                        remain = max(1, math.ceil(delay_time))
-                        _notify("video.status", {"video_id": video_id, "status": f"限流等待 {remain}s"})
-                        sleep_time = min(float(remain), _remaining_time())
-                        await asyncio.sleep(sleep_time)
-                        continue
+                body = r.text or ""
+                hint = parse_retry_hint(body, r.headers.get("Retry-After"))
+                if hint is not None or r.status_code == 429:
+                    remain = max(1, math.ceil(hint if hint is not None else opts.retry_backoff))
+                    _notify("video.status", {"video_id": video_id, "status": f"限流等待 {remain}s"})
+                    await asyncio.sleep(min(float(remain), _remaining_time()))
+                    continue
                 # 发送成功退出重试
                 break
             except Exception as exc:
@@ -216,13 +249,11 @@ async def generic_watch_video(
                     backoff = min(opts.retry_backoff * (2 ** (attempt - 1)), _remaining_time())
                     await asyncio.sleep(backoff)
 
-        # 心跳等待周期（带随机抖动），受总预算截断
-        base_interval = opts.heartbeat_interval
+        # 上报间隔（带随机抖动）：采样间隔只影响打点内容，不额外占用墙钟时间
+        base_interval = max(0.001, float(opts.heartbeat_interval))
         if opts.jitter > 0:
-            import random
-
             delta = base_interval * opts.jitter
-            effective_interval = max(0.2, base_interval + random.uniform(-delta, delta))
+            effective_interval = max(0.001, base_interval + random.uniform(-delta, delta))
         else:
             effective_interval = base_interval
         sleep_interval = min(effective_interval, _remaining_time())
@@ -232,9 +263,7 @@ async def generic_watch_video(
         if (loop.time() - last_progress_check_time) >= opts.progress_interval and loop.time() < deadline:
             last_progress_check_time = loop.time()
             try:
-                check_kw = dict(request_kwargs or {})
-                check_kw["timeout"] = min(10.0, _remaining_time())
-                resp = await client.get(progress_url, **check_kw)
+                resp = await client.get(progress_url, **_progress_kwargs())
                 if resp.text:
                     new_rate, _ = parse_progress_text(resp.text, video_id)
                     if new_rate > current_rate:
@@ -248,9 +277,7 @@ async def generic_watch_video(
     final_platform_completed = False
     if loop.time() < deadline:
         try:
-            final_kw = dict(request_kwargs or {})
-            final_kw["timeout"] = min(5.0, _remaining_time())
-            resp = await client.get(progress_url, **final_kw)
+            resp = await client.get(progress_url, **_progress_kwargs(5.0))
             if resp.text:
                 if '"completed":1' in resp.text:
                     final_platform_completed = True

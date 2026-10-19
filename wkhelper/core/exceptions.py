@@ -12,7 +12,28 @@ class AuthError(WKError):
 
 
 class APIError(WKError):
-    """API 请求失败。"""
+    """API 请求失败。
+
+    `status_code` 与 `retry_after` 供节流层判断是否值得重试以及等待多久；
+    `retryable` 为假表示客户端错误，重试没有意义。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = retryable
+
+
+class RiskControlError(WKError):
+    """触发平台风控（人机验证），需要人工介入后才能继续。"""
 
 
 class OutputExistsError(WKError):
