@@ -66,6 +66,18 @@ class _ExamMockPlatform(FakeAsyncPlatform):
         )
 
     @override
+    async def begin_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
+        return ExamStartResult(
+            course_id="1001",
+            exam_id=str(leaf_id),
+            title="期中考试测试卷",
+            started=True,
+            limit_minutes=90,
+            web_url="https://examination.test/exam/3001",
+            message="作答已开始，服务端计时已启动",
+        )
+
+    @override
     async def get_exam_answer_state(self, leaf_id: str | int, course: Course) -> tuple[list[str], list[str]]:
         return ["9001"], ["9001", "9002"]
 
@@ -473,13 +485,31 @@ def test_exam_session_roundtrip(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_exam_close_without_session(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """没有活跃会话时 exam close 返回未关闭而不是报错。"""
-    from wkhelper.cli.context import ctx
-
-    monkeypatch.setattr(ctx, "data_dir", str(tmp_path), raising=False)
     buf = StringIO()
     monkeypatch.setattr("sys.stdout", buf)
 
-    code = await async_main(["--format", "json", "exam", "close"])
+    code = await async_main(["--format", "json", "--data-dir", str(tmp_path), "exam", "close"])
     assert code == 0
     res = json.loads(buf.getvalue())
     assert res["data"]["closed"] is False
+
+
+@pytest.mark.asyncio
+async def test_exam_start_begin_creates_attempt(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--begin` 才真正开始作答，普通 --confirm 只建立考场会话。"""
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"])
+    assert code == 0
+    plain = json.loads(buf.getvalue())["data"]
+    assert plain["started"] is True
+    assert "考场会话已成功建立" in plain["message"]
+
+    buf.truncate(0)
+    buf.seek(0)
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--confirm", "--begin", "-p", "xtzx"])
+    assert code == 0
+    begun = json.loads(buf.getvalue())["data"]
+    assert begun["started"] is True
+    assert "作答已开始" in begun["message"]

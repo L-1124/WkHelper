@@ -32,8 +32,10 @@ from wkhelper.core.results import (
     ExamExportResult,
     ExamListData,
     ExamPaperData,
+    ExamResultData,
     ExamStartPreview,
     ExamStartResult,
+    ExamStatusData,
     ExamSubmitResult,
     ExportResult,
     HomeworkListData,
@@ -513,7 +515,7 @@ def _render_exam_list(data: ExamListData) -> list[str]:
             exam.name,
             _format_time_str(exam.start_time),
             _format_time_str(exam.deadline),
-            "已完成" if exam.completed else ("已缺考" if exam.overdue else "未完成"),
+            exam.status or ("已完成" if exam.completed else ("已缺考" if exam.overdue else "未完成")),
         ]
         for i, exam in enumerate(data.exams, 1)
     ]
@@ -642,4 +644,31 @@ def _render_exam_browser_close(data: ExamBrowserCloseResult) -> list[str]:
         f"- **关联考试**：{data.exam_id or '-'}",
         f"- **关闭状态**：{'已关闭' if data.closed else '未关闭'}",
         f"- **提示信息**：{data.message}",
+    ]
+
+
+@renderer(ExamResultData)
+def _render_exam_result(data: ExamResultData) -> list[str]:
+    return [
+        f"## 考试结果：`{data.exam_id}`",
+        "",
+        f"- **成绩**：{data.grade if data.grade is not None else '未公布'}",
+        f"- **用时（秒）**：{data.duration if data.duration is not None else '-'}",
+        f"- **作答题目数**：{data.problem_count}",
+        *([f"- **平台回执**：{data.message}"] if data.message else []),
+    ]
+
+
+@renderer(ExamStatusData)
+def _render_exam_status(data: ExamStatusData) -> list[str]:
+    return [
+        f"## 考场状态快照：`{data.exam_id}`",
+        "",
+        f"- **cover 状态**：{data.room_status or '-'}（raw: {data.room_status_raw}）",
+        f"- **LMS 封面状态 raw**：{data.lms_status if data.lms_status is not None else '-'}",
+        f"- **refresh_time**：{data.refresh_code} {data.refresh_message}".rstrip(),
+        f"- **暂存作答数**：{data.cached_count}",
+        *([f"- **暂存样例**：`{data.cached_sample}`"] if data.cached_sample else []),
+        f"- **problem_results**：{data.result_code} {data.result_message}".rstrip(),
+        *(["> **说明**：raw 2 表示已交卷待批阅，含主观题的试卷在批阅前不会返回结果"] if data.room_status_raw == 2 else []),
     ]

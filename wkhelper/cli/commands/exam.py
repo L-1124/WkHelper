@@ -1,6 +1,7 @@
 """考试查询、考场封面检索与进入考场命令。"""
 
-from typing import Annotated
+import json
+from typing import Annotated, Any
 
 from cyclopts import App, Parameter
 
@@ -8,7 +9,7 @@ from wkhelper.cli.context import PlatformCode, ctx
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult, NextAction
 from wkhelper.core.events import emit_event
-from wkhelper.core.exam_session import close_exam_browser, load_session, open_exam_browser
+from wkhelper.core.exam_session import browser_cookies, close_exam_browser, load_session, open_exam_browser
 from wkhelper.core.exceptions import ConfirmationRequiredError
 from wkhelper.core.exporter import export_exam_paper_to_markdown
 from wkhelper.core.json_types import JsonValue
@@ -19,8 +20,10 @@ from wkhelper.core.results import (
     ExamExportResult,
     ExamListData,
     ExamPaperData,
+    ExamResultData,
     ExamStartPreview,
     ExamStartResult,
+    ExamStatusData,
     ExamSubmitResult,
 )
 
@@ -50,6 +53,17 @@ def _warn_proctoring(cover: ExamCoverDetail) -> None:
     payload = proctoring_payload(cover)
     if payload is not None:
         emit_event("security.exam_proctoring", payload)
+
+
+async def _bind_browser_session(plat: Any, exam: str) -> None:
+    """有活跃考场浏览器会话时复用它：注入浏览器 Cookie，并禁止再换票。"""
+    session = load_session(ctx.data_dir)
+    if session is None or session.exam_id != str(exam):
+        return
+    cookies = await browser_cookies(session)
+    for name, value in cookies.items():
+        plat.client.cookies.set(name, value)
+    plat.bind_exam_room(session.host, session.eid, session.web_url)
 
 
 def _ensure_not_overdue(cover: ExamCoverDetail) -> None:
@@ -84,13 +98,25 @@ async def exam_inspect_cmd(
 ) -> CommandResult[ExamCoverDetail]:
     """查看考试封面、考试须知、满分、限时时长与考场状态。"""
     async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
+        room_status = await plat.get_exam_room_status(exam, matched)
+        if room_status is not None:
+            cover.status = room_status
         if cover.status == "已缺考":
             next_actions = [
                 NextAction(
                     reason="已缺考：截止时间已过且未参加考试，本场不可再进入",
                     argv=[],
                     description=f"考试 {exam} 已逾期，`exam start` 与 `exam submit` 均不会成功",
+                )
+            ]
+        elif cover.status == "已交卷":
+            next_actions = [
+                NextAction(
+                    reason="已交卷：本场作答已提交，无需再次进入",
+                    argv=[],
+                    description="如需查看成绩或试卷解析，请等待平台公布",
                 )
             ]
         else:
@@ -106,12 +132,13 @@ async def exam_start_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验并预览考场信息，不触发开始考试")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认进入考场并启动服务端考试计时")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认进入考场会话（不开始作答，需配合 --begin）")] = False,
     browser: Annotated[bool, Parameter(name=["--browser"], help="进入考场后拉起常驻浏览器保持考场页面（心跳与监考采集）")] = False,
+    begin: Annotated[bool, Parameter(name=["--begin"], help="调用 start_paper 真正开始作答并启动服务端计时")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamStartResult] | CommandResult[ExamStartPreview]:
-    """显式确认后向平台发起进入考场请求，启动考场会话与授权令牌。"""
+    """建立考场会话并返回考场直达地址；传入 `--begin` 才真正开始作答。"""
     if not confirm and not dry_run:
         raise ConfirmationRequiredError(
             f"进入考场将启动服务端限时倒计时，请传入 `--confirm` 确认进入，或使用 `--dry-run` 预览。\n目标考试 ID: {exam}",
@@ -144,7 +171,7 @@ async def exam_start_cmd(
             )
             return CommandResult[ExamStartPreview](data=preview)
 
-        result = await plat.start_exam(exam, matched)
+        result = await plat.start_exam(exam, matched) if not begin else await plat.begin_exam(exam, matched)
         result.notice = _CLI_NOTICE
         if browser:
             from urllib.parse import parse_qs, urlparse
@@ -177,6 +204,7 @@ async def exam_paper_cmd(
 ) -> CommandResult[ExamPaperData]:
     """读取考场子系统下发的整卷题目（只读，不提交答案）。"""
     async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
         paper = await plat.get_exam_paper(exam, matched)
         return CommandResult[ExamPaperData](data=paper)
 
@@ -192,6 +220,7 @@ async def exam_export_cmd(
 ) -> CommandResult[ExamExportResult]:
     """把考场试卷导出为 Markdown，可选下载配图，拒绝覆盖已有文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
         result = await export_exam_paper_to_markdown(
             plat,
             matched,
@@ -247,6 +276,7 @@ async def exam_answer_cmd(
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         _warn_proctoring(cover)
@@ -281,6 +311,7 @@ async def exam_submit_cmd(
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         _warn_proctoring(cover)
@@ -302,7 +333,7 @@ async def exam_submit_cmd(
         result = await plat.submit_exam(exam, matched)
         result.notice = _CLI_NOTICE
         session = load_session(ctx.data_dir)
-        if session is not None and session.exam_id == str(exam):
+        if result.submitted and session is not None and session.exam_id == str(exam):
             await close_exam_browser(session, data_dir=ctx.data_dir)
             emit_event("exam.browser_closed", {"exam_id": str(exam), "reason": "submit"})
         return CommandResult[ExamSubmitResult](data=result)
@@ -325,3 +356,59 @@ async def exam_close_cmd() -> CommandResult[ExamBrowserCloseResult]:
             message="考场浏览器已关闭" if closed else "会话文件已清理，但浏览器可能已提前退出",
         )
     )
+
+
+@exam_app.command(name="result")
+async def exam_result_cmd(
+    course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
+    exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
+    platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
+    account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
+) -> CommandResult[ExamResultData]:
+    """读取考场成绩与作答结果概览（只读）。"""
+    async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
+        raw = await plat.get_exam_result(exam, matched)
+        problems = raw.get("problem_results") if isinstance(raw.get("problem_results"), list) else []
+        grade = raw.get("grade")
+        duration = raw.get("duration")
+        return CommandResult[ExamResultData](
+            data=ExamResultData(
+                exam_id=str(exam),
+                grade=float(grade) if isinstance(grade, (int, float)) else None,
+                duration=int(duration) if isinstance(duration, (int, float)) else None,
+                problem_count=len(problems),
+                message=(
+                    "成绩待批阅（试卷含主观题，批阅前不返回结果）"
+                    if int(raw.get("errcode") or 0) == 10107
+                    else f"{raw.get('errmsg') or ''} (errcode: {raw.get('errcode')})".strip()
+                ),
+            )
+        )
+
+
+@exam_app.command(name="status")
+async def exam_status_cmd(
+    course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
+    exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
+    platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
+    account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
+) -> CommandResult[ExamStatusData]:
+    """汇总考场 cover/refresh_time/cache_results/problem_results 状态（只读诊断）。"""
+    async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
+        raw = await plat.get_exam_status_snapshot(exam, matched)
+        return CommandResult[ExamStatusData](
+            data=ExamStatusData(
+                exam_id=str(exam),
+                room_status=raw.get("room_status"),
+                room_status_raw=raw.get("room_status_raw") if isinstance(raw.get("room_status_raw"), int) else None,
+                lms_status=raw.get("lms_status") if isinstance(raw.get("lms_status"), int) else None,
+                refresh_code=raw.get("refresh_code") if isinstance(raw.get("refresh_code"), int) else None,
+                refresh_message=str(raw.get("refresh_message") or ""),
+                cached_count=int(raw.get("cached_count") or 0),
+                cached_sample=json.dumps(raw.get("cached_sample"), ensure_ascii=False) if raw.get("cached_sample") else "",
+                result_code=raw.get("result_code") if isinstance(raw.get("result_code"), int) else None,
+                result_message=str(raw.get("result_message") or ""),
+            )
+        )

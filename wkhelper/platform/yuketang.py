@@ -460,7 +460,7 @@ class YuketangPlatform(BasePlatform):
         cover_data = raw_cover.get("data", raw_cover) if isinstance(raw_cover, dict) else {}
 
         raw_status = cover_data.get("result", {}).get("status") if isinstance(cover_data.get("result"), dict) else None
-        if raw_status in (4, 5):
+        if raw_status in (2, 3, 4, 5):
             status = "已交卷"
         elif raw_status == 1:
             status = "答题中"
@@ -506,9 +506,10 @@ class YuketangPlatform(BasePlatform):
             identity_auth=identity_auth,
             max_retry=max_retry,
             is_offline=is_offline,
+            raw_status=raw_status if isinstance(raw_status, int) else None,
         )
 
-    async def _open_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
+    async def _mint_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
         """换取考场令牌并完成换票，返回 (exam_host, exam_id, 考场直达 URL)。"""
         cid = course.metadata["classroom_id"]
         kwargs = self._get_course_kwargs(course) or {}
@@ -541,7 +542,7 @@ class YuketangPlatform(BasePlatform):
     @override
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         cover = await self.get_exam_cover(leaf_id, course)
-        _host, _eid, login_url = await self._open_exam_room(leaf_id, course)
+        _host, _eid, login_url = await self._mint_exam_room(leaf_id, course)
         return ExamStartResult(
             course_id=str(course.id),
             exam_id=str(leaf_id),

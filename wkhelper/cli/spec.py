@@ -186,6 +186,14 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "description": "查看考试封面、考试须知、满分、限时时长与考场状态。",
         "examples": ["wkhelper exam inspect --course 1001 --exam 2001"],
     },
+    "exam status": {
+        "description": "汇总考场 cover/refresh_time/cache_results/problem_results 状态（只读诊断）。",
+        "examples": ["wkhelper exam status --course 1001 --exam 2001"],
+    },
+    "exam result": {
+        "description": "读取考场成绩与作答结果概览（只读）。",
+        "examples": ["wkhelper exam result --course 1001 --exam 2001"],
+    },
     "exam close": {
         "description": "关闭 exam start --browser 拉起的常驻考场浏览器会话。",
         "side_effects": "local_write",

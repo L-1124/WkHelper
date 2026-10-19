@@ -175,3 +175,31 @@ async def close_exam_browser(session: ExamBrowserSession, data_dir: str | Path |
 
     clear_session(session, data_dir)
     return closed
+
+
+async def browser_cookies(session: ExamBrowserSession) -> dict[str, str]:
+    """读取活跃浏览器会话的 Cookie，供 REST 调用复用（避免重新换票挤掉浏览器）。"""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{session.port}/json/list", timeout=1) as resp:
+            tabs = json.loads(resp.read())
+    except Exception:
+        return {}
+    page = next((t for t in tabs if isinstance(t, dict) and t.get("type") == "page" and t.get("webSocketDebuggerUrl")), None)
+    if not page:
+        return {}
+
+    cookies: dict[str, str] = {}
+    try:
+        async with AsyncSession() as client:
+            ws = await client.ws_connect(str(page["webSocketDebuggerUrl"]))
+            cdp = _CdpClient(ws)
+            try:
+                res = await cdp.call("Network.getCookies", {"urls": [session.web_url]})
+                for item in res.get("cookies", []):
+                    if isinstance(item, dict) and "name" in item and "value" in item:
+                        cookies[str(item["name"])] = str(item["value"])
+            finally:
+                await cdp.close()
+    except Exception as exc:
+        logger.debug(f"读取浏览器 Cookie 失败: {exc}")
+    return cookies

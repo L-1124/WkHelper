@@ -378,6 +378,7 @@ class ExamItem:
     deadline: EpochMillis | None
     completed: bool
     overdue: bool = False
+    status: str = ""
 
     def __post_init__(self) -> None:
         """未完成且已过截止时间即视为缺考。"""
@@ -415,6 +416,7 @@ class ExamCoverDetail:
     identity_auth: bool = False
     max_retry: int = 1
     is_offline: bool = False
+    raw_status: int | None = None
 
     def __post_init__(self) -> None:
         """平台限时为 0 表示不限时（无倒计时），仅受截止时间约束。"""
@@ -517,3 +519,30 @@ class ExamBrowserCloseResult:
     exam_id: str
     closed: bool
     message: str
+
+
+@dataclass
+class ExamResultData:
+    """考场成绩与作答结果概览。"""
+
+    exam_id: str
+    grade: float | None
+    duration: int | None
+    problem_count: int
+    message: str = ""
+
+
+@dataclass
+class ExamStatusData:
+    """考场服务端状态快照（只读诊断）。"""
+
+    exam_id: str
+    room_status: str | None
+    room_status_raw: int | None
+    lms_status: int | None
+    refresh_code: int | None
+    refresh_message: str
+    cached_count: int
+    cached_sample: str
+    result_code: int | None
+    result_message: str

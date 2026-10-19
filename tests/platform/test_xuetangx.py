@@ -414,3 +414,21 @@ async def test_exam_cover_proctoring_flags_are_distinct(monkeypatch) -> None:
         assert cover.face_auth is True
         assert cover.max_retry == -1
         assert cover.is_offline is False
+
+
+@pytest.mark.asyncio
+async def test_bound_exam_room_skips_token_mint(monkeypatch) -> None:
+    """绑定已有考场会话后不得再次换票，否则会把浏览器端挤下线。"""
+    async with AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+        platform.bind_exam_room("https://examination.test", 42, "https://examination.test/exam/42")
+
+        async def boom(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("不应重新换票")
+
+        monkeypatch.setattr(platform, "_mint_exam_room", boom)
+        assert await platform._open_exam_room("999", _sample_course()) == (
+            "https://examination.test",
+            42,
+            "https://examination.test/exam/42",
+        )
