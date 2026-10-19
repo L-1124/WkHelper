@@ -405,12 +405,16 @@ class YuketangPlatform(BasePlatform):
         cid = self._classroom_id(course)
         url = f"{self.api_base}/v/discussion/v2/unit/discussion/"
         kwargs = self._get_request_kwargs(course) or {}
-        resp = await self._request_json(
-            "GET",
-            url,
-            params={"classroom_id": cid, "leaf_id": str(leaf_id)},
-            **kwargs,
-        )
+        params: dict[str, Any] = {
+            "classroom_id": cid,
+            "leaf_id": str(leaf_id),
+            "topic_type": 4,
+            "channel": "xt",
+        }
+        sku_id = course.metadata.get("free_sku_id") or course.metadata.get("sku_id")
+        if sku_id is not None:
+            params["sku_id"] = sku_id
+        resp = await self._request_json("GET", url, params=params, **kwargs)
         data = resp.get("data")
         if not isinstance(data, dict) or "id" not in data:
             raise APIError(f"获取讨论题 {leaf_id} 详情失败")

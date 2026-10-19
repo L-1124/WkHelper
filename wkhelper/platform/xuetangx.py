@@ -295,7 +295,8 @@ class XuetangXPlatform(BasePlatform):
             "product_sign": course.metadata.get("sign"),
             "leaf_id": leaf_id,
             "classroom_id": self._classroom_id(course),
-            "topic_type": 1,
+            # 单元讨论固定 topic_type=4（1 为课程讨论区）
+            "topic_type": 4,
             "channel": "xt",
         }
         resp = await self._request_json("GET", url, params=params)
@@ -307,6 +308,12 @@ class XuetangXPlatform(BasePlatform):
     @override
     async def _discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
         return int(topic_info.get("user_comment_num") or 0) > 0
+
+    @override
+    async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
+        """学堂在线详情以本人评论数为准；列表按同一来源补查未完成项。"""
+        unit = await self._fetch_discussion_unit(leaf_id, course)
+        return int(unit.get("user_comment_num") or 0) > 0
 
     @override
     async def _post_discussion_comment(
