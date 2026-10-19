@@ -3,7 +3,6 @@
 [![Python Version](https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square)](https://www.python.org/)
 [![Package Manager](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square)](https://github.com/astral-sh/uv)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/Tests-68%20passed-success?style=flat-square)](tests/)
 
 面向 AI Agent 与自动化工作流的 Headless 网课自动化 CLI，支持**雨课堂**（`yuketang.cn` / 高校定制平台）与**学堂在线**（`xuetangx.com`）。
 
@@ -55,19 +54,23 @@ flowchart LR
 ### 环境要求
 
 - Python `>= 3.12`
-- [`uv`](https://github.com/astral-sh/uv)（推荐）
+- 包管理器任选其一：[`uv`](https://github.com/astral-sh/uv)（推荐）、[`pipx`](https://pipx.pypa.io/)、`pip`
 
 ### 安装
 
-```bash
-# 通过 uv 直接全局安装为独立 CLI 工具
-uv tool install --force git+https://github.com/L-1124/WkHelper.git
+项目尚未发布到 PyPI，请从 GitHub 仓库安装。
 
-# 或本地源码安装
-git clone https://github.com/L-1124/WkHelper.git
-cd WkHelper
-uv sync
-uv tool install --force .
+```bash
+uv tool install --force git+https://github.com/L-1124/WkHelper.git
+uvx --from git+https://github.com/L-1124/WkHelper.git wkhelper status
+pip install git+https://github.com/L-1124/WkHelper.git
+```
+
+安装后自检：
+
+```bash
+wkhelper --version     # 0.1.0
+wkhelper status        # 本地凭据后端与已存账号
 ```
 
 ---
