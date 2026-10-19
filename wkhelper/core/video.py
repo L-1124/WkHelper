@@ -201,8 +201,9 @@ async def generic_watch_video(
             message = f"已达最大心跳请求上限 ({opts.max_heartbeats})"
             break
 
-        # 构造一批打点：时间戳按采样间隔递增，cp 随播放速率累进
-        batch_start_ms = int(time.time() * 1000)
+        # 构造一批打点：前端是「边播放边入队、30s 后整批上报」，
+        # 批次内各点时间戳应落在刚刚过去的采样窗口内，最后一点≈当前时刻。
+        batch_end_ms = int(time.time() * 1000)
         batch: list[RequestOptions] = []
         for offset in range(batch_size):
             _seq = seq + offset
@@ -215,7 +216,7 @@ async def generic_watch_video(
                     sku_id=sku_id,
                     video_frame=round(video_frame + rate_multiplier * sample_interval * offset, 1),
                     seq=_seq,
-                    timestamp=batch_start_ms + int(sample_interval * 1000) * offset,
+                    timestamp=batch_end_ms - int(sample_interval * 1000) * (batch_size - 1 - offset),
                     cc=media_ccid,
                     duration=video_duration,
                 )
@@ -295,6 +296,31 @@ async def generic_watch_video(
     elif current_rate >= opts.completion_threshold:
         status = "threshold_reached"
         message = f"达到设定阈值 ({opts.completion_threshold})"
+
+    # 前端在播放结束时立即补发 videoend，用于平台消费完播事件
+    if status == "completed" and loop.time() < deadline:
+        try:
+            final_frame = min(video_frame, video_duration) if video_duration > 0 else video_frame
+            final_point = dict(
+                payload_gen(
+                    video_id=video_id,
+                    classroom_id=classroom_id,
+                    user_id=user_id,
+                    course_id=course_id,
+                    sku_id=sku_id,
+                    video_frame=final_frame,
+                    seq=seq,
+                    timestamp=int(time.time() * 1000),
+                    cc=media_ccid,
+                    duration=video_duration,
+                )
+            )
+            final_point["et"] = "videoend"
+            post_kw = dict(request_kwargs or {})
+            post_kw["timeout"] = min(10.0, _remaining_time())
+            await client.post(heartbeat_url, json={"heart_data": [final_point]}, **post_kw)
+        except Exception as exc:
+            logger.debug(f"videoend 上报失败: {exc}")
 
     _notify(
         "video.finished",

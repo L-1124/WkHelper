@@ -9,6 +9,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
@@ -1246,10 +1247,14 @@ class BasePlatform(ABC):
         timestamp: int,
         cc: str,
         duration: float,
+        page_nonce: str | None = None,
     ) -> JsonDict:
-        """构建单个心跳打点，字段语义对齐 Web 播放器（见前端 media-log 定义）。"""
+        """构建单个心跳打点，字段语义对齐 Web 播放器（见前端 media-log 定义）。
+
+        `pg` 在同一次观看会话内固定（前端播放器实例生命周期内只生成一次）。
+        """
         profile = self.heartbeat_profile
-        nonce = _page_nonce()
+        nonce = page_nonce or _page_nonce()
         return {
             "i": profile.interval,
             "et": "heartbeat",
@@ -1288,6 +1293,7 @@ class BasePlatform(ABC):
         """观看单个视频。"""
         ctx = await self._prepare_video_context(video_id, course)
         opts = options or VideoWatchOptions()
+        page_nonce = _page_nonce()
         try:
             return await generic_watch_video(
                 client=self.client,
@@ -1299,7 +1305,7 @@ class BasePlatform(ABC):
                 sku_id=ctx.sku_id,
                 progress_url=ctx.progress_url,
                 heartbeat_url=ctx.heartbeat_url,
-                payload_gen=self._build_heartbeat_payload,
+                payload_gen=partial(self._build_heartbeat_payload, page_nonce=page_nonce),
                 progress_params=ctx.progress_params,
                 request_kwargs=ctx.request_kwargs,
                 options=opts,

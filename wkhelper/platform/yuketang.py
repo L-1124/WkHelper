@@ -354,7 +354,6 @@ class YuketangPlatform(BasePlatform):
             "video_type": "video",
             "vtype": "rate",
             "video_id": vid_str,
-            "snapshot": "1",
         }
         kwargs = self._get_course_kwargs(course)
 
@@ -372,7 +371,7 @@ class YuketangPlatform(BasePlatform):
             if isinstance(content_info, dict):
                 media = content_info.get("media")
                 if isinstance(media, dict):
-                    media_ccid = str(media.get("ccid") or "")
+                    media_ccid = str(media.get("ccid") or media.get("ccurl") or "")
                     if media.get("duration") is not None:
                         try:
                             duration = float(media["duration"])
