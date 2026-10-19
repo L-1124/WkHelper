@@ -2,6 +2,7 @@
 
 import logging
 from typing import Any, override
+from urllib.parse import quote
 
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
@@ -9,6 +10,7 @@ from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
 from wkhelper.core.qr_login import QrCodeSession
 from wkhelper.core.results import ExamCoverDetail, ExamStartResult
+from wkhelper.core.time_types import epoch_millis
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +468,10 @@ class YuketangPlatform(BasePlatform):
         else:
             status = str(raw_status) if raw_status is not None else "未知"
 
+        deadline = epoch_millis(cover_data.get("deadline") or (data.get("deadline") if isinstance(data, dict) else None))
+        if status in ("未开始", "答题中", "未知") and self._is_exam_overdue(deadline):
+            status = "已缺考"
+
         face_auth_status = cover_data.get("face_auth_status")
         face_auth = bool(cover_data.get("identity_auth") or (isinstance(face_auth_status, dict) and face_auth_status.get("online_proctor")))
         capture_screen = bool(cover_data.get("capture_screen") or cover_data.get("app_capture_screen"))
@@ -477,8 +483,8 @@ class YuketangPlatform(BasePlatform):
             problem_count=int(cover_data.get("problem_count") or 0),
             total_score=float(cover_data.get("total_score") or 0.0),
             limit_minutes=int(cover_data.get("limit") or 0),
-            start_time=cover_data.get("start_time") or (data.get("start_time") if isinstance(data, dict) else None),
-            deadline=cover_data.get("deadline") or (data.get("deadline") if isinstance(data, dict) else None),
+            start_time=epoch_millis(cover_data.get("start_time") or (data.get("start_time") if isinstance(data, dict) else None)),
+            deadline=deadline,
             status=status,
             description=str(cover_data.get("description") or ""),
             face_auth=face_auth,
@@ -512,11 +518,8 @@ class YuketangPlatform(BasePlatform):
         exam_host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
         user_id = str(token_data.get("user_id") or (self.user.id if self.user else ""))
 
-        import urllib.parse
-
         login_url = (
-            f"{exam_host}/login?exam_id={eid}&user_id={user_id}&crypt={urllib.parse.quote(crypt)}"
-            f"&next={exam_host}/exam/{eid}?isFrom=0&language=zh"
+            f"{exam_host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={exam_host}/exam/{eid}?isFrom=0&language=zh"
         )
         await self.client.get(login_url, allow_redirects=True)
 

@@ -24,9 +24,12 @@ from wkhelper.core.results import (
     DiscussionCommentResult,
     DiscussionItem,
     DiscussionTopicDetail,
+    ExamAnswerResult,
     ExamCoverDetail,
     ExamItem,
+    ExamPaperData,
     ExamStartResult,
+    ExamSubmitResult,
     HomeworkSubmitResult,
     NextAction,
     QuestionSubmitOutcome,
@@ -35,6 +38,7 @@ from wkhelper.core.results import (
     VideoWatchResult,
 )
 from wkhelper.core.throttle import RateGate, RetryPolicy, parse_retry_hint
+from wkhelper.core.time_types import epoch_millis
 from wkhelper.core.transport import (
     AsyncSession,
     HttpMethod,
@@ -443,9 +447,9 @@ class BasePlatform(ABC):
         lid = str(leaf_id)
         if "xuetangx" in self.api_base:
             sign = str(course.metadata.get("sign") or "")
-            return f"https://www.xuetangx.com/learn/{sign}/{cid}/{lid}/{task_type}"
+            return f"https://www.xuetangx.com/learn/{sign}/{course.id}/{cid}/{task_type}/{lid}"
         if "yuketang" in self.api_base:
-            return f"https://www.yuketang.cn/v2/web/studentLog/{cid}"
+            return f"https://www.yuketang.cn/v2/web/studentLog/{cid}/{lid}"
         return None
 
     def _get_request_kwargs(self, course: Course) -> dict[str, Any] | None:
@@ -561,17 +565,26 @@ class BasePlatform(ABC):
             if leaf_id is None:
                 continue
             is_completed = schedules.get(int(leaf_id), 0.0) >= 1.0
+            deadline = epoch_millis(leaf.get("score_deadline") or leaf.get("end_time"))
             label = BasePlatformParser.format_leaf_label(leaf, chapter_name, section_name)
             exams.append(
                 ExamItem(
                     id=str(leaf_id),
                     name=label,
-                    start_time=leaf.get("start_time") or None,
-                    deadline=leaf.get("score_deadline") or leaf.get("end_time") or None,
+                    start_time=epoch_millis(leaf.get("start_time")),
+                    deadline=deadline,
                     completed=is_completed,
                 )
             )
         return exams
+
+    @staticmethod
+    def _is_exam_overdue(deadline: Any) -> bool:
+        """截止时间已过（毫秒时间戳）即视为逾期。"""
+        try:
+            return deadline is not None and int(deadline) < int(time.time() * 1000)
+        except (TypeError, ValueError):
+            return False
 
     async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
         """获取考试封面与考场元数据。"""
@@ -580,6 +593,28 @@ class BasePlatform(ABC):
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         """进入考场并申请考试授权令牌。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现进入考场接口")
+
+    async def get_exam_paper(self, leaf_id: str | int, course: Course) -> ExamPaperData:
+        """拉取考场试卷题目；未接入考场子系统的平台直接拒绝。"""
+        raise APIError(f"{type(self).__name__} 未接入考场试卷接口", retryable=False)
+
+    async def get_exam_answer_state(self, leaf_id: str | int, course: Course) -> tuple[list[str], list[str]]:
+        """返回 (已作答题目 ID, 试卷题目 ID)；顺序与试卷一致。"""
+        raise APIError(f"{type(self).__name__} 未接入考场作答状态接口", retryable=False)
+
+    async def answer_exam_problem(
+        self,
+        leaf_id: str | int,
+        course: Course,
+        problem_id: str,
+        answer: list[str],
+    ) -> ExamAnswerResult:
+        """提交考试单题答案。"""
+        raise APIError(f"{type(self).__name__} 未接入考场作答接口", retryable=False)
+
+    async def submit_exam(self, leaf_id: str | int, course: Course) -> ExamSubmitResult:
+        """交卷。"""
+        raise APIError(f"{type(self).__name__} 未接入考场交卷接口", retryable=False)
 
     async def get_articles(self, course: Course) -> list[ArticleItem]:
         """获取课程资料/图文节点列表。"""
@@ -705,6 +740,13 @@ class BasePlatform(ABC):
         kwargs = self._get_request_kwargs(course) or {}
         resp = await self._request_json("GET", url, params=params, **kwargs)
         data = resp.get("data")
+        leaf_type = data.get("leaf_type") if isinstance(data, dict) else None
+        if leaf_type in (5, 6, 7, 9):
+            raise APIError(
+                f"节点 {leaf_id} 是考试（leaf_type={leaf_type}），普通习题接口不提供考试题目；"
+                "请使用 `exam inspect` 查看考试信息，并在浏览器中完成考试",
+                retryable=False,
+            )
         content_info = data.get("content_info") if isinstance(data, dict) else None
         leaf_type_id = (content_info.get("leaf_type_id") if isinstance(content_info, dict) else None) or (
             data.get("leaf_type_id") if isinstance(data, dict) else None
@@ -718,12 +760,38 @@ class BasePlatform(ABC):
             q_resp = await self._request_json("GET", ex_url, **kwargs)
         except RiskControlError as exc:
             web_url = self._format_web_task_url(course, leaf_id, "exercise")
-            next_actions = (
-                [NextAction(reason="在浏览器打开该任务页面完成滑块人机验证后重试", argv=list(sys.argv), description=web_url or "")]
-                if web_url
-                else None
-            )
-            raise RiskControlError(f"获取题目列表触发平台风控人机验证: {ex_url}", web_url=web_url, next_actions=next_actions) from exc
+            from wkhelper.core.browser_cdp import find_chromium_browser, solve_captcha_interactive
+
+            if web_url and find_chromium_browser():
+                cookie_domain = ".xuetangx.com" if "xuetangx" in self.api_base else ".yuketang.cn"
+                current_cookies = {k: v for k, v in self.client.cookies.items()}
+                try:
+                    q_resp, new_cookies = await solve_captcha_interactive(
+                        web_url=web_url,
+                        target_api_pattern=f"get_exercise_list/{leaf_type_id}",
+                        cookies=current_cookies,
+                        cookie_domain=cookie_domain,
+                    )
+                    if new_cookies:
+                        for k, v in new_cookies.items():
+                            self.client.cookies.set(k, v)
+                except RiskControlError:
+                    raise
+                except Exception as inner_e:
+                    logger.warning(f"交互式滑块穿透异常: {inner_e}")
+                    next_actions = [
+                        NextAction(reason="在浏览器打开该任务页面完成滑块人机验证后重试", argv=list(sys.argv), description=web_url)
+                    ]
+                    raise RiskControlError(
+                        f"获取题目列表触发平台风控人机验证: {ex_url}", web_url=web_url, next_actions=next_actions
+                    ) from exc
+            else:
+                next_actions = (
+                    [NextAction(reason="在浏览器打开该任务页面完成滑块人机验证后重试", argv=list(sys.argv), description=web_url or "")]
+                    if web_url
+                    else None
+                )
+                raise RiskControlError(f"获取题目列表触发平台风控人机验证: {ex_url}", web_url=web_url, next_actions=next_actions) from exc
         questions = self._parse_exercise_response(q_resp)
         q_data = q_resp.get("data")
         if isinstance(q_data, dict):
