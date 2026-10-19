@@ -537,7 +537,9 @@ class YuketangPlatform(BasePlatform):
             status = "已交卷"
         elif raw_status == 1:
             status = "答题中"
-        elif raw_status in (0, 6):
+        elif raw_status == 6:
+            status = "已缺考"
+        elif raw_status == 0:
             status = "未开始"
         else:
             status = str(raw_status) if raw_status is not None else "未知"
@@ -564,7 +566,8 @@ class YuketangPlatform(BasePlatform):
             title=str(cover_data.get("title") or (data.get("name") if isinstance(data, dict) else None) or f"考试 {leaf_id}"),
             problem_count=int(cover_data.get("problem_count") or 0),
             total_score=float(cover_data.get("total_score") or 0.0),
-            limit_minutes=int(cover_data.get("limit") or 0),
+            # 考场子系统 limit 单位为秒（前端 limit/60 展示分钟），0 表示不限时
+            limit_minutes=int(cover_data.get("limit") or 0) // 60,
             start_time=epoch_millis(cover_data.get("start_time") or (data.get("start_time") if isinstance(data, dict) else None)),
             deadline=deadline,
             status=status,
@@ -582,7 +585,7 @@ class YuketangPlatform(BasePlatform):
             raw_status=raw_status if isinstance(raw_status, int) else None,
         )
 
-    async def _mint_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
+    async def _mint_exam_room(self, leaf_id: str | int, course: Course, status: int | None = None) -> tuple[str, int, str]:
         """换取考场令牌并完成换票，返回 (exam_host, exam_id, 考场直达 URL)。"""
         cid = course.metadata["classroom_id"]
         kwargs = self._get_course_kwargs(course) or {}
@@ -617,7 +620,10 @@ class YuketangPlatform(BasePlatform):
             )
         host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
         user_id = str(token_data.get("user_id") or (self.user.id if self.user else ""))
-        next_url = f"{host}/exam/{eid}?isFrom=2"
+        target = "exam"
+        if status is not None:
+            target = "result" if status > 1 else ("start" if status == 0 else "exam")
+        next_url = f"{host}/{target}/{eid}?isFrom=2"
         login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={quote(next_url, safe='')}&language=zh"
         login_resp = await self.client.get(login_url, allow_redirects=True)
         if login_resp.status_code >= 400:
@@ -630,7 +636,11 @@ class YuketangPlatform(BasePlatform):
     @override
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         cover = await self.get_exam_cover(leaf_id, course)
-        _host, _eid, login_url = await self._mint_exam_room(leaf_id, course)
+        binding = getattr(self, "_exam_room_binding", None)
+        if binding is not None:
+            _host, _eid, login_url = binding
+        else:
+            _host, _eid, login_url = await self._mint_exam_room(leaf_id, course, cover.raw_status)
         return ExamStartResult(
             course_id=str(course.id),
             exam_id=str(leaf_id),
