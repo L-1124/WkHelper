@@ -447,6 +447,7 @@ class YuketangPlatform(BasePlatform):
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params, **kwargs)
         data = resp.get("data") or {}
+        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
         ci = data.get("content_info") if isinstance(data, dict) else {}
         eid = (
             (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
@@ -521,6 +522,7 @@ class YuketangPlatform(BasePlatform):
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params, **kwargs)
         data = resp.get("data") or {}
+        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
         ci = data.get("content_info") if isinstance(data, dict) else {}
         raw_eid = (
             (ci.get("leaf_type_id") if isinstance(ci, dict) else None)

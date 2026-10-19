@@ -130,6 +130,7 @@ uv run pytest -q
 ## NOTES
 
 - 计划文件契约见 `core/plan.py::VideoPlan.from_mapping`；未知字段一律报错。
+- 叶节点分类以平台前端为准：`5=考试`、`6=作业`、`7=课件`、`8=线下课堂`、`9=随堂测验`、`10=公告`；协议与实测见 `.agents/work/protocol-js-audit.md`。
 - 导出目标已存在时返回 `FILE_EXISTS`（退出码 5），不覆盖既有文件。
 - 全局 `--cookie-file` 仅与 `--credential-mode session` 搭配，且必须显式 `--platform`；置于子命令之后时归属该命令的同名选项（如 `auth login --cookie-file`）。
 - meta 启动器内对子命令的调用是嵌套调用，Cyclopts 会强制 `result_action="return_value"`，因此 `dispatch()` 必须显式调用 `unified_result_action` 完成渲染与退出码换算。

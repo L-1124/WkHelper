@@ -14,3 +14,6 @@ DEFAULT_HEADERS = {
 
 # 题目抓取并发上限：批量导出时并发拉取题目。
 MAX_WORKERS_DOWNLOAD = 10
+
+# 讨论发言状态查询并发上限：逐节点查 comment/status 时的并发。
+MAX_WORKERS_STATUS = 5

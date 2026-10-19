@@ -336,6 +336,7 @@ class XuetangXPlatform(BasePlatform):
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params)
         data = resp.get("data") or {}
+        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
         ci = data.get("content_info") if isinstance(data, dict) else {}
         eid = (
             (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
@@ -404,6 +405,7 @@ class XuetangXPlatform(BasePlatform):
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params)
         data = resp.get("data") or {}
+        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
         ci = data.get("content_info") if isinstance(data, dict) else {}
         raw_eid = (
             (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
@@ -413,12 +415,27 @@ class XuetangXPlatform(BasePlatform):
         eid = int(raw_eid)
 
         gen = await self._request_json("POST", f"{self.api_base}/api/v1/lms/exam/gen_token", json={"exam_id": eid})
-        token_data = (gen.get("data") or {}).get("data") or {}
+        if gen.get("errcode") or gen.get("success") is False:
+            reason = str(gen.get("errmsg") or gen.get("msg") or "平台未返回原因")
+            raise APIError(f"考场令牌申请被拒绝: {reason}", retryable=False)
+        gen_data = gen.get("data") if isinstance(gen.get("data"), dict) else {}
+        token_data = gen_data.get("data") if isinstance(gen_data.get("data"), dict) else {}
         crypt = str(token_data.get("crypt") or token_data.get("token") or "")
+        if not crypt:
+            raise APIError(
+                f"平台未返回考场令牌（节点 {leaf_id} 可能并非考试或当前账号无考试权限），已中止建立考场会话",
+                retryable=False,
+            )
         host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
         user_id = str((self.user.id if self.user else None) or token_data.get("user_id") or "")
-        login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={host}/exam/{eid}?isFrom=0&language=zh"
-        await self.client.get(login_url, allow_redirects=True)
+        next_url = f"{host}/exam/{eid}?isFrom=2"
+        login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={quote(next_url, safe='')}&language=zh"
+        login_resp = await self.client.get(login_url, allow_redirects=True)
+        if login_resp.status_code >= 400:
+            raise APIError(
+                f"考场登录被拒绝（HTTP {login_resp.status_code}），令牌可能已失效或账号无权限",
+                retryable=False,
+            )
         return host, eid, login_url
 
     @override
@@ -432,5 +449,5 @@ class XuetangXPlatform(BasePlatform):
             started=True,
             limit_minutes=cover.limit_minutes,
             web_url=login_url,
-            message="考场会话已成功建立，已启动服务端计时与令牌授权",
+            message="考场会话已建立并完成令牌授权；如需启动服务端计时请改用 `exam start --begin`",
         )
