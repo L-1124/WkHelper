@@ -142,6 +142,30 @@ async def _overdue_cover(self, leaf_id: str | int, course: Course) -> ExamCoverD
     )
 
 
+async def _proctored_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
+    return ExamCoverDetail(
+        course_id="1001",
+        exam_id=str(leaf_id),
+        title="监考测试卷",
+        problem_count=10,
+        total_score=40.0,
+        limit_minutes=60,
+        start_time=None,
+        deadline=EpochMillis(4102444800000),
+        status="未开始",
+        description="",
+        face_auth=True,
+        capture_screen=True,
+        online_proctor=True,
+        app_capture_screen=True,
+        front_random_snap=True,
+        screen_cuts=True,
+        max_screen_cuts=3,
+        identity_auth=True,
+        max_retry=1,
+    )
+
+
 @pytest.fixture
 def mock_exam_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -345,3 +369,117 @@ async def test_exam_start_and_submit_blocked_when_overdue(mock_exam_env: None, m
     assert await async_main(["exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
     assert await async_main(["exam", "submit", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
     assert await async_main(["exam", "submit", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"]) == 6
+
+
+def test_proctoring_payload_detects_flags() -> None:
+    """监考事件载荷只在任一监考项开启时生成。"""
+    from wkhelper.cli.commands.exam import proctoring_payload
+
+    quiet = ExamCoverDetail(
+        course_id="1001",
+        exam_id="3001",
+        title="普通考试",
+        problem_count=10,
+        total_score=40.0,
+        limit_minutes=0,
+        start_time=None,
+        deadline=None,
+        status="未开始",
+        description="",
+        face_auth=False,
+        capture_screen=False,
+    )
+    assert proctoring_payload(quiet) is None
+
+    proctored = ExamCoverDetail(
+        course_id="1001",
+        exam_id="3001",
+        title="监考考试",
+        problem_count=10,
+        total_score=40.0,
+        limit_minutes=60,
+        start_time=None,
+        deadline=None,
+        status="未开始",
+        description="",
+        face_auth=True,
+        capture_screen=True,
+        online_proctor=True,
+        app_capture_screen=True,
+        front_random_snap=True,
+        screen_cuts=True,
+        max_screen_cuts=3,
+        identity_auth=True,
+        max_retry=1,
+    )
+    payload = proctoring_payload(proctored)
+    assert payload is not None
+    assert payload["exam_id"] == "3001"
+    assert payload["capture_screen"] is True
+    assert payload["max_retry"] == 1
+
+
+@pytest.mark.asyncio
+async def test_exam_start_dry_run_emits_proctoring_event(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """考试写操作前必须输出监考事件。"""
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _proctored_cover)
+    out, err = StringIO(), StringIO()
+    monkeypatch.setattr("sys.stdout", out)
+    monkeypatch.setattr("sys.stderr", err)
+
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
+    assert code == 0
+    events = [json.loads(line) for line in err.getvalue().strip().splitlines() if line.strip()]
+    assert any(event["event"] == "security.exam_proctoring" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_exam_write_results_carry_cli_notice(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """考试写命令必须在结果里明确提示：CLI 不产生心跳/截屏/切屏上报。"""
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
+    assert code == 0
+    notice = json.loads(buf.getvalue())["data"]["notice"]
+    assert "不会产生考场心跳" in notice
+
+    buf.truncate(0)
+    buf.seek(0)
+    code = await async_main(["--format", "json", "exam", "submit", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
+    assert code == 0
+    assert "不会产生考场心跳" in json.loads(buf.getvalue())["data"]["notice"]
+
+
+def test_exam_session_roundtrip(tmp_path) -> None:
+    """会话文件可持久化、读取与清理。"""
+    from wkhelper.core.exam_session import ExamBrowserSession, clear_session, load_session, save_session
+
+    session = ExamBrowserSession(
+        exam_id="3001",
+        platform="XuetangXPlatform",
+        host="https://examination.test",
+        eid=42,
+        port=1,
+        profile=str(tmp_path / "profile"),
+        web_url="https://examination.test/exam/42",
+    )
+    save_session(session, tmp_path)
+    assert load_session(tmp_path, verify=False) == session
+    clear_session(session, tmp_path)
+    assert load_session(tmp_path, verify=False) is None
+
+
+@pytest.mark.asyncio
+async def test_exam_close_without_session(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """没有活跃会话时 exam close 返回未关闭而不是报错。"""
+    from wkhelper.cli.context import ctx
+
+    monkeypatch.setattr(ctx, "data_dir", str(tmp_path), raising=False)
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "close"])
+    assert code == 0
+    res = json.loads(buf.getvalue())
+    assert res["data"]["closed"] is False

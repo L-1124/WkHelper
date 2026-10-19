@@ -4,13 +4,17 @@ from typing import Annotated
 
 from cyclopts import App, Parameter
 
-from wkhelper.cli.context import PlatformCode
+from wkhelper.cli.context import PlatformCode, ctx
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult, NextAction
+from wkhelper.core.events import emit_event
+from wkhelper.core.exam_session import close_exam_browser, load_session, open_exam_browser
 from wkhelper.core.exceptions import ConfirmationRequiredError
 from wkhelper.core.exporter import export_exam_paper_to_markdown
+from wkhelper.core.json_types import JsonValue
 from wkhelper.core.results import (
     ExamAnswerResult,
+    ExamBrowserCloseResult,
     ExamCoverDetail,
     ExamExportResult,
     ExamListData,
@@ -21,6 +25,31 @@ from wkhelper.core.results import (
 )
 
 exam_app = App(name="exam", help="考试查询与考场管理")
+
+_CLI_NOTICE = "CLI 经 REST 接口写入，不会产生考场心跳、桌面截屏与切屏上报；如需完整监考记录，请同时保持浏览器考场页面开启"
+
+
+def proctoring_payload(cover: ExamCoverDetail) -> dict[str, JsonValue] | None:
+    """把监考规则收敛为事件载荷；未开启监考时返回 None。"""
+    if not (cover.online_proctor or cover.capture_screen or cover.app_capture_screen or cover.screen_cuts):
+        return None
+    return {
+        "exam_id": cover.exam_id,
+        "online_proctor": cover.online_proctor,
+        "capture_screen": cover.capture_screen,
+        "app_capture_screen": cover.app_capture_screen,
+        "screen_cuts": cover.screen_cuts,
+        "max_screen_cuts": cover.max_screen_cuts,
+        "max_retry": cover.max_retry,
+        "note": "该考试开启监考：桌面截屏与切屏上报由考场网页执行，CLI 作答不会产生截图与心跳记录",
+    }
+
+
+def _warn_proctoring(cover: ExamCoverDetail) -> None:
+    """考试写操作前通过 NDJSON 事件提示监考规则。"""
+    payload = proctoring_payload(cover)
+    if payload is not None:
+        emit_event("security.exam_proctoring", payload)
 
 
 def _ensure_not_overdue(cover: ExamCoverDetail) -> None:
@@ -78,6 +107,7 @@ async def exam_start_cmd(
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验并预览考场信息，不触发开始考试")] = False,
     confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认进入考场并启动服务端考试计时")] = False,
+    browser: Annotated[bool, Parameter(name=["--browser"], help="进入考场后拉起常驻浏览器保持考场页面（心跳与监考采集）")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamStartResult] | CommandResult[ExamStartPreview]:
@@ -100,6 +130,7 @@ async def exam_start_cmd(
     async with _open_course(course, platform, account) as (plat, matched):
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
+        _warn_proctoring(cover)
 
         if dry_run:
             preview = ExamStartPreview(
@@ -109,10 +140,31 @@ async def exam_start_cmd(
                 title=cover.title,
                 limit_minutes=cover.limit_minutes,
                 note="预览模式不会向平台申请考试令牌，确认进入考场请传入 `--confirm`",
+                notice=_CLI_NOTICE,
             )
             return CommandResult[ExamStartPreview](data=preview)
 
         result = await plat.start_exam(exam, matched)
+        result.notice = _CLI_NOTICE
+        if browser:
+            from urllib.parse import parse_qs, urlparse
+
+            parsed = urlparse(result.web_url)
+            eid = int(parse_qs(parsed.query).get("exam_id", ["0"])[0])
+            session = await open_exam_browser(
+                exam_id=str(exam),
+                platform=plat.__class__.__name__,
+                host=f"{parsed.scheme}://{parsed.netloc}",
+                eid=eid,
+                web_url=result.web_url,
+                cookies={k: v for k, v in plat.client.cookies.items()},
+                data_dir=ctx.data_dir,
+            )
+            result.browser_port = session.port
+            emit_event(
+                "exam.browser_opened",
+                {"exam_id": str(exam), "port": session.port, "web_url": session.web_url},
+            )
         return CommandResult[ExamStartResult](data=result)
 
 
@@ -190,11 +242,16 @@ async def exam_answer_cmd(
                 answer=keys,
                 saved=False,
                 message="预览模式不会写入平台",
+                notice=_CLI_NOTICE,
             )
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
+        cover = await plat.get_exam_cover(exam, matched)
+        _ensure_not_overdue(cover)
+        _warn_proctoring(cover)
         result = await plat.answer_exam_problem(exam, matched, question, keys)
+        result.notice = _CLI_NOTICE
         return CommandResult[ExamAnswerResult](data=result)
 
 
@@ -224,7 +281,9 @@ async def exam_submit_cmd(
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
-        _ensure_not_overdue(await plat.get_exam_cover(exam, matched))
+        cover = await plat.get_exam_cover(exam, matched)
+        _ensure_not_overdue(cover)
+        _warn_proctoring(cover)
         if dry_run:
             answered, all_ids = await plat.get_exam_answer_state(exam, matched)
             unanswered = [pid for pid in all_ids if pid not in set(answered)]
@@ -236,8 +295,33 @@ async def exam_submit_cmd(
                     unanswered=unanswered,
                     submitted=False,
                     message="预览模式不会交卷",
+                    notice=_CLI_NOTICE,
                 )
             )
 
         result = await plat.submit_exam(exam, matched)
+        result.notice = _CLI_NOTICE
+        session = load_session(ctx.data_dir)
+        if session is not None and session.exam_id == str(exam):
+            await close_exam_browser(session, data_dir=ctx.data_dir)
+            emit_event("exam.browser_closed", {"exam_id": str(exam), "reason": "submit"})
         return CommandResult[ExamSubmitResult](data=result)
+
+
+@exam_app.command(name="close")
+async def exam_close_cmd() -> CommandResult[ExamBrowserCloseResult]:
+    """关闭 `exam start --browser` 拉起的考场浏览器会话。"""
+    session = load_session(ctx.data_dir)
+    if session is None:
+        return CommandResult[ExamBrowserCloseResult](
+            data=ExamBrowserCloseResult(exam_id="", closed=False, message="没有活跃的考场浏览器会话")
+        )
+    closed = await close_exam_browser(session, data_dir=ctx.data_dir)
+    emit_event("exam.browser_closed", {"exam_id": session.exam_id, "reason": "manual"})
+    return CommandResult[ExamBrowserCloseResult](
+        data=ExamBrowserCloseResult(
+            exam_id=session.exam_id,
+            closed=closed,
+            message="考场浏览器已关闭" if closed else "会话文件已清理，但浏览器可能已提前退出",
+        )
+    )

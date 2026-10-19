@@ -407,6 +407,14 @@ class ExamCoverDetail:
     face_auth: bool
     capture_screen: bool
     has_limit: bool = False
+    app_capture_screen: bool = False
+    front_random_snap: bool = False
+    screen_cuts: bool = False
+    max_screen_cuts: int = 0
+    online_proctor: bool = False
+    identity_auth: bool = False
+    max_retry: int = 1
+    is_offline: bool = False
 
     def __post_init__(self) -> None:
         """平台限时为 0 表示不限时（无倒计时），仅受截止时间约束。"""
@@ -423,6 +431,7 @@ class ExamStartPreview:
     title: str
     limit_minutes: int
     note: str
+    notice: str = ""
 
 
 @dataclass
@@ -436,6 +445,8 @@ class ExamStartResult:
     limit_minutes: int
     web_url: str
     message: str
+    notice: str = ""
+    browser_port: int | None = None
 
 
 @dataclass
@@ -483,6 +494,7 @@ class ExamAnswerResult:
     answer: list[str]
     saved: bool
     message: str
+    notice: str = ""
 
 
 @dataclass
@@ -494,4 +506,14 @@ class ExamSubmitResult:
     answered_count: int
     unanswered: list[str]
     submitted: bool
+    message: str
+    notice: str = ""
+
+
+@dataclass
+class ExamBrowserCloseResult:
+    """考场浏览器会话关闭回执。"""
+
+    exam_id: str
+    closed: bool
     message: str
