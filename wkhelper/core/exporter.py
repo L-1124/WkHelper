@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlparse
 from wkhelper.core.base_platform import BasePlatform
 from wkhelper.core.config import MAX_WORKERS_DOWNLOAD
 from wkhelper.core.entities import Course, Homework
-from wkhelper.core.exceptions import OutputExistsError
+from wkhelper.core.exceptions import APIError, OutputExistsError
 from wkhelper.core.markdown import WkhelperConverter, html_to_md  # noqa: F401  (对外沿用 exporter.html_to_md 入口)
 from wkhelper.core.results import ExamExportResult, ExportResult, OptionItem, QuestionDetail
 from wkhelper.core.transport import Fetcher
@@ -158,6 +158,7 @@ async def export_questions_to_markdown(
 
     semaphore = asyncio.Semaphore(MAX_WORKERS_DOWNLOAD)
     hw_questions: dict[str, list[dict[str, Any]]] = {}
+    failures: list[str] = []
 
     async def _fetch(hw: Homework) -> None:
         try:
@@ -165,14 +166,16 @@ async def export_questions_to_markdown(
                 questions = await platform.get_leaf_questions(hw.id, course)
             hw_questions[hw.name] = questions
         except Exception as e:
-            logger.debug(f"获取作业 {hw.name} 题目失败: {e}")
+            failures.append(f"{hw.name} (ID:{hw.id}): {e}")
+            logger.warning(f"获取作业 {hw.name} 题目失败: {e}")
 
     async with asyncio.TaskGroup() as tg:
         for hw in homeworks:
             tg.create_task(_fetch(hw))
 
     if not hw_questions or not any(hw_questions.values()):
-        raise RuntimeError("未能从任何作业中成功抓取题目，已中止导出以防覆盖已有文件")
+        detail = "；".join(failures[:5]) or "所有作业均未返回题目"
+        raise APIError(f"未能从任何作业中抓取题目（共 {len(homeworks)} 份，已中止导出以防覆盖已有文件）: {detail}")
 
     total_questions = 0
     downloaded_resources_total = 0

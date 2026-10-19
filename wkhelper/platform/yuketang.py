@@ -404,6 +404,10 @@ class YuketangPlatform(BasePlatform):
     async def _discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
         if int(topic_info.get("user_comment_num") or 0) > 0:
             return True
+        return bool(await self._discussion_leaf_completed(leaf_id, course))
+
+    @override
+    async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
         cid = self._classroom_id(course)
         url = f"{self.api_base}/v/discussion/v2/student/comment/status/"
         kwargs = self._get_request_kwargs(course) or {}
@@ -531,12 +535,26 @@ class YuketangPlatform(BasePlatform):
             json={"exam_id": eid, "classroom_id": cid},
             **kwargs,
         )
+        if r_gen.get("errcode") or r_gen.get("success") is False:
+            reason = str(r_gen.get("errmsg") or r_gen.get("msg") or "平台未返回原因")
+            raise APIError(f"考场令牌申请被拒绝: {reason}", retryable=False)
         token_data = r_gen.get("data") if isinstance(r_gen.get("data"), dict) else {}
         crypt = str(token_data.get("token") or token_data.get("crypt") or "")
+        if not crypt:
+            raise APIError(
+                f"平台未返回考场令牌（节点 {leaf_id} 可能并非考试或当前账号无考试权限），已中止建立考场会话",
+                retryable=False,
+            )
         host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
         user_id = str(token_data.get("user_id") or (self.user.id if self.user else ""))
-        login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={host}/exam/{eid}?isFrom=0&language=zh"
-        await self.client.get(login_url, allow_redirects=True)
+        next_url = f"{host}/exam/{eid}?isFrom=2"
+        login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={quote(next_url, safe='')}&language=zh"
+        login_resp = await self.client.get(login_url, allow_redirects=True)
+        if login_resp.status_code >= 400:
+            raise APIError(
+                f"考场登录被拒绝（HTTP {login_resp.status_code}），令牌可能已失效或账号无权限",
+                retryable=False,
+            )
         return host, eid, login_url
 
     @override
@@ -550,5 +568,5 @@ class YuketangPlatform(BasePlatform):
             started=True,
             limit_minutes=cover.limit_minutes,
             web_url=login_url,
-            message="考场会话已成功建立，已启动服务端计时与令牌授权",
+            message="考场会话已建立并完成令牌授权；如需启动服务端计时请改用 `exam start --begin`",
         )
