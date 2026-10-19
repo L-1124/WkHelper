@@ -137,10 +137,10 @@ wkhelper questions export -c 1966245:31318907 -o ./questions.md
 # 查看单道题目的完整反混淆题干、选项与作答结果
 wkhelper question get -c 1966245:31318907 -w 84704898 -q 73577720
 
-# 模拟人类作答节奏提交作业（单线程 + 随机间隔 1.0~2.0 秒）
+# 模拟真实人类作答节奏提交作业（单线程 + 依据题目难易度动态浮动间隔）
 wkhelper homework submit -c 1966245:31318907 -w 84704898 \
   --answers '{"73577720": ["C"], "73577724": ["B"]}' \
-  --concurrency 1 --delay 1.5 --delay-jitter 0.5 --confirm
+  --concurrency 1 --delay 8.0 --delay-jitter 3.0 --random-order --confirm
 ```
 ### 5. 资料阅读与图文题 (`article`)
 
@@ -189,9 +189,11 @@ wkhelper schema --path "homework submit" --full
 | **全局** | `--data-dir <dir>` | 平台默认目录 | 凭据元数据与检查点数据目录 |
 | **全局** | `--cookie-file <path>` | 无 | 会话 Cookie 文件，需配合 `--credential-mode session` |
 | **作业提交** | `--concurrency <N>` | `1` | 严格限制并发提交数，默认单线程顺序提交 |
-| **作业提交** | `--delay <sec>` | `1.5` | 单题作答基础间隔秒数，模拟人工思考 |
-| **作业提交** | `--delay-jitter <sec>`| `0.5` | 提交间隔浮动范围，实际间隔为 `delay ± jitter` |
+| **作业提交** | `--delay <sec>` | `8.0` | 单题作答基础间隔秒数，建议依据题目难易度动态调整（客观题 5~15s，多选 15~35s，主观题 45~90s） |
+| **作业提交** | `--delay-jitter <sec>`| `3.0` | 提交间隔浮动范围，实际间隔为 `delay ± jitter`，消除固定周期机械特征 |
 | **作业提交** | `--random-order` | `false` | 随机打乱题目提交次序，打破从第 1 题顺序作答的机械规律 |
+| **单题/考试** | `--delay <sec>` | `0.0` | 提交或作答前思考等待秒数，建议依据难度动态传入（简单题 5~15s，多选/计算 15~35s，主观题 45~90s） |
+| **单题/考试** | `--delay-jitter <sec>`| `0.0` | 思考等待随机浮动范围，消除固定机器节奏 |
 | **视频学习** | `--jitter <ratio>` | `0.2` | 心跳间隔随机浮动比例（如 `1.5s ± 20%`） |
 | **视频学习** | `--video-delay <sec>` | `3.0` | 批量学习时视频切换之间的冷却等待秒数 |
 
