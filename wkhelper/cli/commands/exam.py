@@ -155,6 +155,7 @@ async def exam_start_cmd(
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
+        await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         _warn_proctoring(cover)

@@ -363,7 +363,9 @@ class XuetangXPlatform(BasePlatform):
             status = "已交卷"
         elif raw_status == 1:
             status = "答题中"
-        elif raw_status in (0, 6):
+        elif raw_status == 6:
+            status = "已缺考"
+        elif raw_status == 0:
             status = "未开始"
         else:
             status = str(raw_status) if raw_status is not None else "未知"
@@ -409,7 +411,7 @@ class XuetangXPlatform(BasePlatform):
             raw_status=raw_status if isinstance(raw_status, int) else None,
         )
 
-    async def _mint_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
+    async def _mint_exam_room(self, leaf_id: str | int, course: Course, status: int | None = None) -> tuple[str, int, str]:
         """换取考场令牌并完成换票，返回 (exam_host, exam_id, 考场直达 URL)。"""
         url = self._build_leaf_info_url(leaf_id, course)
         params = self._get_leaf_info_params(leaf_id, course)
@@ -438,7 +440,11 @@ class XuetangXPlatform(BasePlatform):
             )
         host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
         user_id = str((self.user.id if self.user else None) or token_data.get("user_id") or "")
-        next_url = f"{host}/exam/{eid}?isFrom=2"
+        target = "exam"
+        if status is not None:
+            target = "result" if status > 1 else ("start" if status == 0 else "exam")
+        # 学堂在线 Web 换票固定 isFrom=0（雨课堂为 2）
+        next_url = f"{host}/{target}/{eid}?isFrom=0"
         login_url = f"{host}/login?exam_id={eid}&user_id={user_id}&crypt={quote(crypt)}&next={quote(next_url, safe='')}&language=zh"
         login_resp = await self.client.get(login_url, allow_redirects=True)
         if login_resp.status_code >= 400:
@@ -451,7 +457,11 @@ class XuetangXPlatform(BasePlatform):
     @override
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         cover = await self.get_exam_cover(leaf_id, course)
-        _host, _eid, login_url = await self._mint_exam_room(leaf_id, course)
+        binding = getattr(self, "_exam_room_binding", None)
+        if binding is not None:
+            _host, _eid, login_url = binding
+        else:
+            _host, _eid, login_url = await self._mint_exam_room(leaf_id, course, cover.raw_status)
         return ExamStartResult(
             course_id=str(course.id),
             exam_id=str(leaf_id),

@@ -712,12 +712,14 @@ class BasePlatform(ABC):
 
     @staticmethod
     def _exam_status_text(raw: Any) -> str:
-        """考场 result.status 归一：1 答题中，2-5 已交卷，0/6 未开始，其余原样。"""
+        """考场 result.status 归一：1 答题中，2-5 已交卷，6 已缺考，0 未开始，其余原样。"""
         if raw in (2, 3, 4, 5):
             return "已交卷"
         if raw == 1:
             return "答题中"
-        if raw in (0, 6):
+        if raw == 6:
+            return "已缺考"
+        if raw == 0:
             return "未开始"
         return str(raw) if raw is not None else "未知"
 
@@ -782,7 +784,7 @@ class BasePlatform(ABC):
         host, eid, login_url = await self._open_exam_room(leaf_id, course)
         resp = await self._request_json("POST", f"{host}/exam_room/start_paper", json={"exam_id": eid})
         ok = int(resp.get("errcode") or 0) == 0
-        cover = await self.get_exam_cover(eid, course)
+        cover = await self.get_exam_cover(leaf_id, course)
         message = "作答已开始，服务端计时已启动" if ok else f"开始作答失败: {resp.get('errmsg') or '未知错误'}"
         return ExamStartResult(
             course_id=str(course.id),
@@ -816,7 +818,7 @@ class BasePlatform(ABC):
         paper = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         raw_problems = paper.get("problems") if isinstance(paper.get("problems"), list) else []
         problems = [self._parse_exam_problem(item, index) for index, item in enumerate(raw_problems, 1)]
-        cover = await self.get_exam_cover(eid, course)
+        cover = await self.get_exam_cover(leaf_id, course)
         return ExamPaperData(
             course_id=str(course.id),
             exam_id=str(leaf_id),

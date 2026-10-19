@@ -86,4 +86,4 @@ async def test_mint_exam_room_encodes_login_url(monkeypatch: pytest.MonkeyPatch)
     assert host == "https://exam.test"
     assert eid == 777
     assert "crypt=tok%2B1" in login_url
-    assert "next=https%3A%2F%2Fexam.test%2Fexam%2F777%3FisFrom%3D2" in login_url
+    assert "next=https%3A%2F%2Fexam.test%2Fexam%2F777%3FisFrom%3D0" in login_url
