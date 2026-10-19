@@ -2,7 +2,7 @@
 
 import pytest
 
-from wkhelper.cli.app import _load_course
+from wkhelper.cli.deps import _load_course
 from wkhelper.core.models import Course
 
 

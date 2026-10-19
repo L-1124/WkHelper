@@ -66,6 +66,8 @@ def test_parameter_layering_precedence() -> None:
     assert options.completion_threshold == 0.5  # 目标级覆盖计划默认
     assert options.video_timeout == 90.0  # 目标级
     assert options.heartbeat_interval == 1.5  # 内建默认
+    assert options.jitter == 0.2  # 内建默认
+    assert options.video_delay == 3.0  # 内建默认
 
 
 @pytest.mark.parametrize(
@@ -76,6 +78,9 @@ def test_parameter_layering_precedence() -> None:
         {"completion_threshold": 1.5},
         {"completion_threshold": 0},
         {"max_heartbeats": 0},
+        {"jitter": 1.5},
+        {"jitter": -0.1},
+        {"video_delay": -1},
         {"unknown_param": 1},
     ],
 )
