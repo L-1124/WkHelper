@@ -145,7 +145,7 @@ class BasePlatformParser:
             raw_name = section_name
 
         parts = [chapter_name]
-        if section_name and section_name != chapter_name:
+        if section_name and section_name not in (chapter_name, raw_name):
             parts.append(section_name)
         parts.append(raw_name)
         return f"{' / '.join(parts)} (ID:{leaf.get('id')})"
@@ -177,7 +177,9 @@ class BasePlatformParser:
             if isinstance(children, list) and children:
                 for sub in children:
                     if isinstance(sub, dict):
-                        yield from _traverse(sub, ch_name, sub.get("name"))
+                        sub_children = sub.get("section_leaf_list") or sub.get("section_list") or sub.get("leaf_list") or sub.get("units")
+                        section_name = sub.get("name") if isinstance(sub_children, list) and sub_children else None
+                        yield from _traverse(sub, ch_name, section_name)
             elif "leaf_type" in root_item:
                 yield root_item, ch_name, None
 
@@ -584,7 +586,8 @@ class BasePlatform(ABC):
         videos: dict[int, str] = {}
         completed_video_ids: set[int] = set()
         for leaf, chapter_name, section_name in BasePlatformParser.iter_leaves_with_context(data):
-            if leaf.get("leaf_type") not in (0, 1, 2, 8) or not leaf.get("is_show", True):
+            # 8=线下课堂没有媒资与心跳流，只保留视频/音频/直播
+            if leaf.get("leaf_type") not in (0, 1, 2) or not leaf.get("is_show", True):
                 continue
             leaf_id = leaf.get("id")
             if leaf_id is None:

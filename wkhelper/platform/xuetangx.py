@@ -114,41 +114,47 @@ class XuetangXPlatform(BasePlatform):
 
     @override
     async def get_courses(self) -> list[Course]:
-        """分页拉取全部课程；接口返回 `pages` 字段，单页固定 20 条。"""
+        """分页拉取正在上课与已结课课程；接口返回 `pages` 字段，单页固定 20 条。"""
         url = f"{self.api_base}/api/v1/lms/user/user-courses/"
-        courses: list[Course] = []
-        page = 1
-        while True:
-            resp = await self._request_json("GET", url, params={"status": "1", "page": str(page)})
-            if not resp.get("success"):
-                raise APIError("获取课程列表失败")
-            data = resp.get("data")
-            if not isinstance(data, dict):
-                raise APIError("课程列表响应结构异常")
-            product_list = data.get("product_list")
-            if not isinstance(product_list, list):
-                raise APIError("课程列表响应缺少 product_list")
-            for c in product_list:
-                if not isinstance(c, dict):
-                    continue
-                courses.append(
-                    Course(
-                        id=str(c.get("course_id") or c.get("product_id") or c.get("classroom_id")),
-                        name=str(c.get("name") or "未命名课程"),
-                        platform_id="xtzx",
-                        metadata={
-                            "classroom_id": c.get("classroom_id"),
-                            "sign": c.get("sign"),
-                            "product_id": c.get("product_id"),
-                            "sku_id": c.get("sku_id"),
-                        },
+        courses: dict[str, Course] = {}
+        # status：1=正在上课、3=已结课；2=即将开课无学习内容，4=已退课
+        for status in ("1", "3"):
+            page = 1
+            while True:
+                resp = await self._request_json("GET", url, params={"status": status, "page": str(page)})
+                if not resp.get("success"):
+                    raise APIError("获取课程列表失败")
+                data = resp.get("data")
+                if not isinstance(data, dict):
+                    raise APIError("课程列表响应结构异常")
+                product_list = data.get("product_list")
+                if not isinstance(product_list, list):
+                    raise APIError("课程列表响应缺少 product_list")
+                for c in product_list:
+                    if not isinstance(c, dict):
+                        continue
+                    course_id = str(c.get("course_id") or c.get("product_id") or c.get("classroom_id"))
+                    # 同一 product_id 可能有多个学期课堂，去重键必须包含 classroom_id
+                    dedupe_key = f"{course_id}:{c.get('classroom_id')}"
+                    courses.setdefault(
+                        dedupe_key,
+                        Course(
+                            id=course_id,
+                            name=str(c.get("name") or "未命名课程"),
+                            platform_id="xtzx",
+                            metadata={
+                                "classroom_id": c.get("classroom_id"),
+                                "sign": c.get("sign"),
+                                "product_id": c.get("product_id"),
+                                "sku_id": c.get("sku_id"),
+                            },
+                        ),
                     )
-                )
-            total_pages = json_int(data.get("pages"), 1)
-            if page >= total_pages or not product_list:
-                break
-            page += 1
-        return courses
+                total_pages = json_int(data.get("pages"), 1)
+                if page >= total_pages or not product_list:
+                    break
+                page += 1
+        return list(courses.values())
 
     @override
     async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:

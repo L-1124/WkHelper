@@ -29,6 +29,10 @@ class _LeafTreePlatform(FakeAsyncPlatform):
                     {"id": 4, "name": "随堂测验", "leaf_type": 9, "is_show": True},
                     {"id": 5, "name": "公告", "leaf_type": 10, "is_show": True},
                     {"id": 6, "name": "三件好事讨论", "leaf_type": 4, "is_show": True},
+                    {"id": 7, "name": "线下课堂", "leaf_type": 8, "is_show": True},
+                    {"id": 8, "name": "视频", "leaf_type": 0, "is_show": True},
+                    {"id": 9, "name": "音频", "leaf_type": 1, "is_show": True},
+                    {"id": 10, "name": "直播", "leaf_type": 2, "is_show": True},
                 ],
             }
         ]
@@ -65,6 +69,12 @@ async def test_homework_and_exam_lists_split_by_leaf_type() -> None:
 
     assert [hw.id for hw in homeworks] == ["2"]
     assert [exam.id for exam in exams] == ["1"]
+
+    videos = await platform.get_videos(course)
+    discussions = await platform.get_discussions(course)
+
+    assert set(videos) == {8, 9, 10}  # 仅视频/音频/直播，线下课堂被排除
+    assert [d.id for d in discussions] == ["6"]  # 公告不混入讨论
 
 
 @pytest.mark.asyncio
