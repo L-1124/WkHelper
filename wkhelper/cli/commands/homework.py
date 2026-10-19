@@ -14,6 +14,7 @@ from wkhelper.cli.deps import (
 from wkhelper.cli.envelope import CommandResult
 from wkhelper.core.entities import Homework
 from wkhelper.core.exceptions import ConfirmationRequiredError, PartialFailureError
+from wkhelper.core.homework import normalize_judgement_answer
 from wkhelper.core.homework_runner import run_homework_submit
 from wkhelper.core.json_types import parse_json_text
 from wkhelper.core.results import (
@@ -150,6 +151,8 @@ async def homework_submit_cmd(
             question = questions_by_id.get(question_id)
             if question is None:
                 raise ValueError(f"题目 ID '{question_id}' 不属于作业 '{homework}'，可用题目 ID: {sorted(questions_by_id)}")
+            answer_choices = normalize_judgement_answer(question, answer_choices)
+            answers_map[question_id] = answer_choices
             options = question.get("content", {}).get("Options") or []
             valid_keys = {str(option.get("key")) for option in options if option.get("key")}
             if valid_keys:

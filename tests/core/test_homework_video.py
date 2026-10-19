@@ -259,3 +259,179 @@ async def test_generic_watch_video_stalled():
 
     assert res.status == "stalled"
     assert "无变化" in res.message
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_batch_timestamps_cover_past_window():
+    """批量心跳的 ts 必须落在刚刚过去的采样窗口，最后一点接近当前时刻。"""
+    import time
+
+    captured: dict[str, list[dict[str, Any]]] = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.get_count = 0
+
+        async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.get_count += 1
+            rate = 0.2 if self.get_count == 1 else 0.95
+            return FakeResponse(f'{{"data": {{"v1": {{"rate": {rate}, "watch_length": 100}}}}}}')
+
+        async def post(self, url: str, **kwargs: Any) -> FakeResponse:
+            captured.setdefault("batch", kwargs["json"]["heart_data"])
+            return FakeResponse('{"success": true}')
+
+    def fake_payload_gen(
+        video_id: str,
+        classroom_id: str,
+        user_id: int,
+        course_id: int,
+        sku_id: int,
+        video_frame: float,
+        seq: int,
+        timestamp: int,
+        cc: str,
+        duration: float,
+    ) -> dict[str, Any]:
+        return {"ts": timestamp, "cp": video_frame, "sq": seq}
+
+    opts = VideoWatchOptions(
+        learning_rate=1.0,
+        heartbeat_interval=0.01,
+        progress_interval=0.01,
+        completion_threshold=0.9,
+        video_timeout=5.0,
+        sample_interval=5.0,
+        batch_size=6,
+    )
+
+    before = int(time.time() * 1000)
+    await generic_watch_video(
+        client=FakeSession(),  # type: ignore[arg-type]
+        video_id="v1",
+        video_name="时间戳测试",
+        classroom_id="c1",
+        user_id=1,
+        course_id=1,
+        sku_id=1,
+        progress_url="http://fake/progress",
+        heartbeat_url="http://fake/heartbeat",
+        payload_gen=fake_payload_gen,
+        options=opts,
+    )
+    after = int(time.time() * 1000)
+
+    stamps = [point["ts"] for point in captured["batch"]]
+    assert stamps == sorted(stamps)
+    assert stamps[-1] <= after
+    assert stamps[-1] >= before - 1000
+    assert stamps[-1] - stamps[0] == 25_000
+
+
+@pytest.mark.asyncio
+async def test_submit_respects_unlimited_retry_count():
+    """user.count=0 表示不限次，已答但未对时必须允许再次提交。"""
+    submitted: list[int] = []
+
+    async def fake_submit(
+        problem_id: int,
+        answer: list[str],
+        course_info: Course,
+        client: AsyncSession,
+        kwargs: dict[str, Any] | None,
+        question: dict[str, Any] | None = None,
+    ) -> QuestionSubmitOutcome:
+        submitted.append(problem_id)
+        return QuestionSubmitOutcome(success=True, is_correct=True, correct_answer=["A"])
+
+    pairs = [
+        (
+            {"id": 7, "content": {"ProblemType": "1"}, "user": {"my_count": 3, "count": 0, "answer": ["B"], "is_correct": False}},
+            ["A"],
+        )
+    ]
+    course = Course(id="1", name="测试课程", platform_id="test")
+    async with AsyncSession() as client:
+        await generic_submit_homework(pairs, fake_submit, course, client)
+
+    assert submitted == [7]
+
+
+def test_judgement_answer_normalization() -> None:
+    """判断题答案必须归一为平台约定的 true/false。"""
+    from wkhelper.core.homework import normalize_judgement_answer
+
+    question = {"content": {"ProblemType": "6"}}
+    assert normalize_judgement_answer(question, ["A"]) == ["true"]
+    assert normalize_judgement_answer(question, ["错"]) == ["false"]
+    assert normalize_judgement_answer({"content": {"ProblemType": "1"}}, ["A"]) == ["A"]
+
+
+@pytest.mark.asyncio
+async def test_completed_video_sends_videoend_event():
+    """平台确认完播后必须补发 et=videoend，供服务端消费完播事件。"""
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.get_count = 0
+            self.posts: list[list[dict[str, Any]]] = []
+
+        async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.get_count += 1
+            rate = 0.2 if self.get_count == 1 else 1.0
+            return FakeResponse(f'{{"data": {{"v1": {{"rate": {rate}, "watch_length": 100}}}}}}')
+
+        async def post(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.posts.append(kwargs["json"]["heart_data"])
+            return FakeResponse('{"success": true}')
+
+    def fake_payload_gen(
+        video_id: str,
+        classroom_id: str,
+        user_id: int,
+        course_id: int,
+        sku_id: int,
+        video_frame: float,
+        seq: int,
+        timestamp: int,
+        cc: str,
+        duration: float,
+    ) -> dict[str, Any]:
+        return {"et": "heartbeat", "ts": timestamp}
+
+    client = FakeSession()
+    await generic_watch_video(
+        client=client,  # type: ignore[arg-type]
+        video_id="v1",
+        video_name="完播测试",
+        classroom_id="c1",
+        user_id=1,
+        course_id=1,
+        sku_id=1,
+        progress_url="http://fake/progress",
+        heartbeat_url="http://fake/heartbeat",
+        payload_gen=fake_payload_gen,
+        options=VideoWatchOptions(
+            learning_rate=1.0,
+            heartbeat_interval=0.01,
+            progress_interval=0.01,
+            completion_threshold=0.9,
+            video_timeout=5.0,
+        ),
+    )
+
+    assert client.posts[-1][0]["et"] == "videoend"

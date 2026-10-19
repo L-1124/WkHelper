@@ -7,7 +7,7 @@ from urllib.parse import quote
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.homework import is_fill_in_question
+from wkhelper.core.homework import is_fill_in_question, normalize_judgement_answer
 from wkhelper.core.json_types import json_int
 from wkhelper.core.markdown import html_to_md
 from wkhelper.core.qr_login import QrCodeSession
@@ -326,8 +326,8 @@ class YuketangPlatform(BasePlatform):
             "classroom_id": classroom_id,
             "problem_id": problem_id,
         }
+        answer = normalize_judgement_answer(question, answer)
         if is_fill_in_question(question):
-            payload["answer"] = ""
             payload["answers"] = {str(i + 1): v for i, v in enumerate(answer)}
         else:
             payload["answer"] = answer
