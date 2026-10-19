@@ -19,12 +19,12 @@ def _sample_course() -> Course:
 class MockPlatform(BasePlatform):
     @property
     def heartbeat_profile(self) -> HeartbeatProfile:
-        return HeartbeatProfile(origin="test.local", lob="test")
+        return HeartbeatProfile(lob="test")
 
     def _build_submit_url(self) -> str:
         return ""
 
-    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx=None):
+    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx=None, question=None):
         return {}
 
     async def _prepare_submit_context(self, homework, course):
@@ -35,6 +35,10 @@ class MockPlatform(BasePlatform):
 
     async def _login_with_cookies(self, cookies):
         raise NotImplementedError
+
+    async def _qr_exchange_cookies(self, login_data):
+
+        return {}
 
     async def _login_with_qrcode(self, display="image", open_browser=False, timeout=120):
         raise NotImplementedError
@@ -72,7 +76,7 @@ class MockPlatform(BasePlatform):
     def _get_leaf_info_params(self, leaf_id, course):
         return {}
 
-    def _build_exercise_list_url(self, leaf_type_id):
+    def _build_exercise_list_url(self, leaf_type_id, sku_id=None):
         return ""
 
     async def _mark_article_finish(self, leaf_id: str | int, course: Course) -> bool:

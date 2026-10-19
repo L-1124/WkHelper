@@ -1,7 +1,6 @@
 """题目导出功能。"""
 
 import asyncio
-import html
 import logging
 import os
 import re
@@ -10,42 +9,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from markdownify import MarkdownConverter
-
 from wkhelper.core.base_platform import BasePlatform
 from wkhelper.core.config import MAX_WORKERS_DOWNLOAD
 from wkhelper.core.entities import Course, Homework
 from wkhelper.core.exceptions import OutputExistsError
+from wkhelper.core.markdown import WkhelperConverter, html_to_md  # noqa: F401  (对外沿用 exporter.html_to_md 入口)
 from wkhelper.core.results import ExportResult, OptionItem, QuestionDetail
 from wkhelper.core.transport import Fetcher
 
 logger = logging.getLogger(__name__)
 
 
-class WkhelperConverter(MarkdownConverter):
-    def convert_img(self, el: Any, text: str, *args: Any, **kwargs: Any) -> str:
-        latex = el.get("data-latex") or el.get("data-formula") or el.get("data-math") or el.get("data-tex") or el.get("math-latex")
-        if not latex:
-            alt = str(el.get("alt") or "").strip()
-            if any(c in alt for c in ("\\", "$", "^", "_", "{", "}")) and not alt.lower().endswith(
-                (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
-            ):
-                latex = alt
-
-        if latex:
-            latex_code = html.unescape(latex).strip()
-            if (latex_code.startswith("$$") and latex_code.endswith("$$")) or (latex_code.startswith("$") and latex_code.endswith("$")):
-                return latex_code
-            is_block = el.get("data-display") == "block" or "display" in str(el.get("class", ""))
-            return f"$${latex_code}$$" if is_block else f"${latex_code}$"
-
-        return super().convert_img(el, text, *args, **kwargs)  # type: ignore[misc]
-
-
-def html_to_md(html_str: str) -> str:
-    if not html_str:
-        return ""
-    return WkhelperConverter().convert(html_str).strip()
+__all__ = ["WkhelperConverter", "export_questions_to_markdown", "html_to_md", "localize_question_detail"]
 
 
 _IMG_PATTERN = re.compile(r"!\[(.*?)\]\((https?://[^\s\)\"\']+)\)")

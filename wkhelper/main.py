@@ -17,6 +17,7 @@ from wkhelper.core.exceptions import (
     ConfirmationRequiredError,
     OutputExistsError,
     PartialFailureError,
+    RiskControlError,
     WKError,
 )
 from wkhelper.core.json_types import JsonDict
@@ -55,6 +56,8 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
         )
     if isinstance(exc, AuthError):
         return create_error_envelope(code="AUTH_EXPIRED", message=str(exc), retryable=False, details=details), 3
+    if isinstance(exc, RiskControlError):
+        return create_error_envelope(code="RISK_CONTROL_REQUIRED", message=str(exc), retryable=False, details=details), 6
     if isinstance(exc, (FileNotFoundError, KeyError)):
         return create_error_envelope(code="NOT_FOUND", message=str(exc), retryable=False, details=details), 4
     if isinstance(exc, ValueError):

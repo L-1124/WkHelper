@@ -21,7 +21,7 @@ def _sample_course() -> Course:
 
 @pytest.mark.asyncio
 async def test_xuetangx_login_with_cookies_success(monkeypatch) -> None:
-    """验证 Cookie 包含有效 csrftoken 与 sessionid 时正确解析用户资料。"""
+    """验证 Cookie 包含有效 csrftoken 与 sessionid 时正确解析用户资料及指纹头。"""
     async with niquests.AsyncSession() as client:
         platform = XuetangXPlatform(client)
 
@@ -39,6 +39,13 @@ async def test_xuetangx_login_with_cookies_success(monkeypatch) -> None:
         assert user.name == "学堂用户"
         assert user.school == "清华大学"
         assert client.headers.get("X-CSRFToken") == "token123"
+        assert client.headers.get("app-name") == "xtzx"
+        assert client.headers.get("terminal-type") == "web"
+        assert client.headers.get("django-language") == "zh"
+        assert client.headers.get("Accept-Language") == "zh"
+        assert client.headers.get("xtbz") == "xt"
+        assert client.headers.get("x-client") == "web"
+        assert platform.heartbeat_profile.lob == "xt"
 
 
 @pytest.mark.asyncio
@@ -107,10 +114,10 @@ async def test_xuetangx_get_chapter_and_schedule(monkeypatch) -> None:
 
         async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
             if "course/chapter" in url:
-                assert "cid=2001" in url
-                assert "sign=mock-sign-123" in url
+                assert kwargs.get("params") == {"cid": "2001", "sign": "mock-sign-123"}
                 return {"data": {"course_chapter": [{"id": 1, "name": "第一章"}]}}
             if "course/schedule" in url:
+                assert kwargs.get("params") == {"cid": "2001", "sign": "mock-sign-123"}
                 return {
                     "success": True,
                     "data": {
@@ -164,10 +171,22 @@ async def test_xuetangx_submit_payload_and_context(monkeypatch) -> None:
         assert payload["classroom_id"] == 2001
         assert payload["problem_id"] == 1234
         assert payload["answer"] == ["A"]
+        assert payload["answers"] == {}
         assert payload["exercise_id"] == 7777
         assert payload["leaf_id"] == "5001"
         assert payload["sign"] == "mock-sign-123"
+
+        # 填空题验证
+        fill_payload = platform._build_submit_payload(1234, ["ans1", "ans2"], submit_ctx=ctx, question={"type": 4})
+        assert fill_payload["answer"] == ""
+        assert fill_payload["answers"] == {"1": "ans1", "2": "ans2"}
+
         assert platform._build_submit_url() == "https://www.xuetangx.com/api/v1/lms/exercise/problem_apply/"
+        assert (
+            platform._build_exercise_list_url(7777, sku_id=222)
+            == "https://www.xuetangx.com/api/v1/lms/exercise/get_exercise_list/7777/222/"
+        )
+        assert platform._build_exercise_list_url(7777) == "https://www.xuetangx.com/api/v1/lms/exercise/get_exercise_list/7777/"
 
 
 @pytest.mark.asyncio
@@ -184,6 +203,14 @@ async def test_xuetangx_video_context(monkeypatch) -> None:
                     "user_id": 111,
                     "sku_id": 222,
                     "course_id": 333,
+                    "classroom_id": "2001",
+                    "university_id": "999",
+                    "content_info": {
+                        "media": {
+                            "ccid": "ccid_123",
+                            "duration": 120.5,
+                        }
+                    },
                 }
             }
 
@@ -198,3 +225,45 @@ async def test_xuetangx_video_context(monkeypatch) -> None:
         assert ctx.progress_url == "https://www.xuetangx.com/video-log/get_video_watch_progress/"
         assert ctx.heartbeat_url == "https://www.xuetangx.com/video-log/heartbeat/"
         assert ctx.progress_params["cid"] == 333
+        assert ctx.media_ccid == "ccid_123"
+        assert ctx.duration == 120.5
+        assert ctx.request_kwargs == {
+            "headers": {
+                "uv-id": "999",
+                "university-id": "999",
+                "classroom-id": "2001",
+            }
+        }
+
+
+@pytest.mark.asyncio
+async def test_xuetangx_article_and_discussions(monkeypatch) -> None:
+    """验证学堂在线图文参数与讨论题接口 hook。"""
+    course = _sample_course()
+    course.metadata["sku_id"] = "sku_888"
+    async with niquests.AsyncSession() as client:
+        platform = XuetangXPlatform(client)
+
+        assert platform._article_finish_params(course) == {"cid": "2001", "sid": "sku_888"}
+
+        async def fake_request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            if "forum/unit/discussion" in url:
+                assert kwargs.get("params", {}).get("channel") == "xt"
+                return {"data": {"id": 101, "user_id": 555, "user_comment_num": 1}}
+            if "forum/comment" in url:
+                assert method == "POST"
+                assert kwargs.get("params", {}).get("classroom_id") == "2001"
+                assert kwargs.get("json", {}).get("topic_id") == 101
+                assert kwargs.get("json", {}).get("content", {}).get("text") == "hello"
+                return {"success": True, "data": {"id": 202}}
+            raise NotImplementedError(url)
+
+        monkeypatch.setattr(platform, "_request_json", fake_request_json)
+
+        unit = await platform._fetch_discussion_unit("leaf_456", course)
+        assert unit["id"] == 101
+        assert await platform._discussion_completed(unit, course, "leaf_456") is True
+        assert await platform._discussion_completed({"user_comment_num": 0}, course, "leaf_456") is False
+
+        resp = await platform._post_discussion_comment(unit, "hello", course, "leaf_456")
+        assert resp["success"] is True

@@ -1,18 +1,14 @@
 """学堂在线平台实现。"""
 
-import asyncio
-import json
 import logging
 from typing import Any, override
 
-import niquests
-
-from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
+from wkhelper.core.base_platform import BasePlatform, BasePlatformParser, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.exporter import html_to_md
-from wkhelper.core.results import DiscussionCommentResult, DiscussionTopicDetail
-from wkhelper.platform.login_helper import QrCodeSession
+from wkhelper.core.homework import is_fill_in_question
+from wkhelper.core.json_types import json_int
+from wkhelper.core.qr_login import QrCodeSession
 
 logger = logging.getLogger(__name__)
 
@@ -20,15 +16,14 @@ logger = logging.getLogger(__name__)
 class XuetangXPlatform(BasePlatform):
     """学堂在线平台。"""
 
+    api_base = "https://www.xuetangx.com"
+    api_prefix = "api"
+
     @property
     @override
     def heartbeat_profile(self) -> HeartbeatProfile:
-        """学堂在线心跳报文固定字段。
-
-        现网沿用雨课堂报文格式（仅请求 URL 不同），因此此处保持与雨课堂一致的取值；
-        若平台侧协议变化，只需在此覆写，不再改动 `core`。
-        """
-        return HeartbeatProfile(origin="ali-cdn.xuetangx.com", lob="ykt")
+        """学堂在线心跳报文固定字段。"""
+        return HeartbeatProfile(lob="xt")
 
     @override
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
@@ -42,7 +37,12 @@ class XuetangXPlatform(BasePlatform):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Content-Type": "application/json",
                 "X-CSRFToken": csrftoken,
-                "Xtbz": "xt",
+                "app-name": "xtzx",
+                "terminal-type": "web",
+                "django-language": "zh",
+                "Accept-Language": "zh",
+                "xtbz": "xt",
+                "x-client": "web",
             }
         )
         self.client.cookies.update({"csrftoken": csrftoken, "sessionid": sessionid})
@@ -56,15 +56,15 @@ class XuetangXPlatform(BasePlatform):
         self.current_cookies = cookies
         return self.user
 
+    qr_platform_name = "学堂在线"
+
     @override
-    async def _login_with_qrcode(
-        self,
-        display: str = "image",
-        open_browser: bool = False,
-        timeout: int = 120,
-    ) -> UserInfo:
-        login_data: dict[str, Any] = {}
-        request_payload = {
+    def _qr_ws_url(self) -> str:
+        return "wss://www.xuetangx.com/wsapp/"
+
+    @override
+    def _qr_request_payload(self) -> dict[str, Any]:
+        return {
             "op": "requestlogin",
             "role": "web",
             "version": "1.4",
@@ -73,155 +73,140 @@ class XuetangXPlatform(BasePlatform):
             "x-client": "web",
         }
 
-        qr_session = QrCodeSession(
-            display=display,
-            open_browser=open_browser,
-            platform_name="学堂在线",
-        )
-        await qr_session.start()
-
+    @override
+    def _qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
+        raw = message.get("expire_seconds")
+        if raw is None:
+            return None
         try:
-            async with niquests.AsyncSession(timeout=max(30.0, timeout + 15.0), verify=True) as ws_sess:
-                resp = await ws_sess.get("wss://www.xuetangx.com/wsapp/")
-                if resp.extension is None:
-                    raise AuthError("WebSocket 升级失败")
-                await resp.extension.send_payload(json.dumps(request_payload))
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
-                loop = asyncio.get_running_loop()
-                deadline = loop.time() + timeout
-                timeout_seconds = 60.0
+    @override
+    async def _qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
+        ticket = message.get("ticket")
+        if not ticket:
+            return
+        ticket_resp = await self.client.get(str(ticket))
+        if ticket_resp.content:
+            qr_session.create_image(ticket_resp.content)
+            qr_session.emit_challenge(expires_in=expires_in)
 
-                while loop.time() < deadline:
-                    remain_time = max(1.0, deadline - loop.time())
-                    try:
-                        raw = await asyncio.wait_for(resp.extension.next_payload(), timeout=min(timeout_seconds, remain_time))
-                        if raw is None:
-                            raise AuthError("WebSocket 连接已关闭")
-                        message = json.loads(raw)
-
-                        if "expire_seconds" in message:
-                            timeout_seconds = float(message["expire_seconds"])
-
-                        if "ticket" in message and message["ticket"]:
-                            ticket_resp = await self.client.get(message["ticket"])
-                            if ticket_resp.content:
-                                qr_session.create_image(ticket_resp.content)
-                                qr_session.emit_challenge(expires_in=remain_time)
-
-                        if message.get("op") == "loginsuccess":
-                            login_data.update(message)
-                            qr_session.mark_success()
-                            break
-                    except TimeoutError:
-                        if loop.time() >= deadline:
-                            break
-                        await resp.extension.send_payload(json.dumps(request_payload))
-
-                await resp.extension.close()
-
-            token_val = login_data.get("token") or login_data.get("s_s")
-            if not token_val:
-                raise AuthError("扫码超时或未获得有效认证回执")
-
-            response = await self.client.post(
-                "https://www.xuetangx.com/api/v1/u/login/wx/",
-                json={"s_s": str(token_val)},
+    @override
+    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+        token_val = login_data.get("token") or login_data.get("s_s")
+        if not token_val:
+            raise AuthError("扫码回执缺少 token 或 s_s")
+        response = await self.client.post(
+            f"{self.api_base}/api/v1/u/login/wx/",
+            json={"s_s": str(token_val)},
+        )
+        cookies = {
+            "csrftoken": response.cookies.get("csrftoken") or self.client.cookies.get("csrftoken") or "",
+            "sessionid": response.cookies.get("sessionid") or self.client.cookies.get("sessionid") or "",
+        }
+        if not cookies["csrftoken"] or not cookies["sessionid"]:
+            raise AuthError(
+                f"登录凭据换取失败: status={response.status_code}, text={response.text[:200]}, "
+                f"cookies={dict(response.cookies)}, client_cookies={dict(self.client.cookies)}"
             )
-            cookies = {
-                "csrftoken": response.cookies.get("csrftoken") or self.client.cookies.get("csrftoken") or "",
-                "sessionid": response.cookies.get("sessionid") or self.client.cookies.get("sessionid") or "",
-            }
-
-            if not cookies["csrftoken"] or not cookies["sessionid"]:
-                raise AuthError(
-                    f"登录凭据换取失败: status={response.status_code}, text={response.text[:200]}, "
-                    f"cookies={dict(response.cookies)}, client_cookies={dict(self.client.cookies)}"
-                )
-
-            user = await self._login_with_cookies(cookies)
-            qr_session.mark_success(name=user.name)
-            if qr_session.display == "browser":
-                await asyncio.sleep(1.2)
-            return user
-        except Exception as e:
-            if isinstance(e, AuthError):
-                raise
-            raise AuthError(f"扫码通信失败: {e}") from e
-        finally:
-            await qr_session.close()
+        return cookies
 
     @override
     async def get_courses(self) -> list[Course]:
-        url = "https://www.xuetangx.com/api/v1/lms/user/user-courses/"
-        resp = await self._request_json("GET", url, params={"status": "1", "page": "1"})
-        if not resp.get("success"):
-            raise APIError("获取课程列表失败")
-
-        return [
-            Course(
-                id=str(c.get("course_id") or c.get("product_id") or c.get("classroom_id")),
-                name=c["name"],
-                platform_id="xtzx",
-                metadata={
-                    "classroom_id": c["classroom_id"],
-                    "sign": c["sign"],
-                    "product_id": c.get("product_id"),
-                    "sku_id": c.get("sku_id"),
-                },
-            )
-            for c in resp["data"]["product_list"]
-        ]
+        """分页拉取全部课程；接口返回 `pages` 字段，单页固定 20 条。"""
+        url = f"{self.api_base}/api/v1/lms/user/user-courses/"
+        courses: list[Course] = []
+        page = 1
+        while True:
+            resp = await self._request_json("GET", url, params={"status": "1", "page": str(page)})
+            if not resp.get("success"):
+                raise APIError("获取课程列表失败")
+            data = resp.get("data")
+            if not isinstance(data, dict):
+                raise APIError("课程列表响应结构异常")
+            product_list = data.get("product_list")
+            if not isinstance(product_list, list):
+                raise APIError("课程列表响应缺少 product_list")
+            for c in product_list:
+                if not isinstance(c, dict):
+                    continue
+                courses.append(
+                    Course(
+                        id=str(c.get("course_id") or c.get("product_id") or c.get("classroom_id")),
+                        name=str(c.get("name") or "未命名课程"),
+                        platform_id="xtzx",
+                        metadata={
+                            "classroom_id": c.get("classroom_id"),
+                            "sign": c.get("sign"),
+                            "product_id": c.get("product_id"),
+                            "sku_id": c.get("sku_id"),
+                        },
+                    )
+                )
+            total_pages = json_int(data.get("pages"), 1)
+            if page >= total_pages or not product_list:
+                break
+            page += 1
+        return courses
 
     @override
     async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
-        cid = course.metadata["classroom_id"]
-        sign = course.metadata["sign"]
-        url = f"https://www.xuetangx.com/api/v1/lms/learn/course/chapter?cid={cid}&sign={sign}"
-        resp = await self._request_json("GET", url)
-        return resp["data"]["course_chapter"]
+        resp = await self._request_json(
+            "GET",
+            f"{self.api_base}/api/v1/lms/learn/course/chapter",
+            params={"cid": self._classroom_id(course), "sign": course.metadata["sign"]},
+        )
+        data = resp.get("data")
+        chapters = data.get("course_chapter") if isinstance(data, dict) else None
+        if not isinstance(chapters, list):
+            raise APIError("章节大纲响应结构异常")
+        return chapters
 
     @override
     async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
-        cid = course.metadata["classroom_id"]
-        sign = course.metadata["sign"]
-        url = f"https://www.xuetangx.com/api/v1/lms/learn/course/schedule?cid={cid}&sign={sign}"
-        resp = await self._request_json("GET", url)
+        resp = await self._request_json(
+            "GET",
+            f"{self.api_base}/api/v1/lms/learn/course/schedule",
+            params={"cid": self._classroom_id(course), "sign": course.metadata["sign"]},
+        )
         if not resp.get("success"):
             return {}
-
-        raw = resp.get("data", {}).get("leaf_schedules", {})
-        schedules: dict[int, float] = {}
-        for leaf_id, progress in raw.items():
-            try:
-                schedules[int(leaf_id)] = float(progress)
-            except (TypeError, ValueError):
-                continue
-        return schedules
-
-    @override
-    def _build_leaf_info_url(self, leaf_id: str | int, course: Course) -> str:
-        cid = course.metadata["classroom_id"]
-        return f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/"
+        data = resp.get("data")
+        return BasePlatformParser.parse_leaf_schedules(data.get("leaf_schedules") if isinstance(data, dict) else None)
 
     @override
     def _get_leaf_info_params(self, leaf_id: str | int, course: Course) -> dict[str, Any] | None:
         return {"sign": course.metadata["sign"]}
 
     @override
-    def _build_exercise_list_url(self, leaf_type_id: int | str) -> str:
-        return f"https://www.xuetangx.com/api/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
+    def _build_exercise_list_url(self, leaf_type_id: int | str, sku_id: Any = None) -> str:
+        if sku_id is not None:
+            return f"{self.api_base}/api/v1/lms/exercise/get_exercise_list/{leaf_type_id}/{sku_id}/"
+        return f"{self.api_base}/api/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
 
     @override
-    def _build_submit_url(self) -> str:
-        return "https://www.xuetangx.com/api/v1/lms/exercise/problem_apply/"
-
-    @override
-    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _build_submit_payload(
+        self,
+        problem_id: int,
+        answer: list[str],
+        submit_ctx: dict[str, Any] | None = None,
+        question: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         ctx = submit_ctx or {}
+        if is_fill_in_question(question):
+            ans_val: Any = ""
+            answers_val: dict[str, Any] = {str(i + 1): v for i, v in enumerate(answer)}
+        else:
+            ans_val = list(answer)
+            answers_val = {}
+
         return {
             "classroom_id": ctx.get("classroom_id"),
             "problem_id": problem_id,
-            "answer": answer,
+            "answer": ans_val,
+            "answers": answers_val,
             "exercise_id": ctx.get("exercise_id"),
             "leaf_id": ctx.get("leaf_id"),
             "sign": ctx.get("sign"),
@@ -229,125 +214,116 @@ class XuetangXPlatform(BasePlatform):
 
     @override
     async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
-        cid = course.metadata["classroom_id"]
-        sign = course.metadata["sign"]
-
+        cid = self._classroom_id(course)
         resp = await self._request_json(
             "GET",
-            f"https://www.xuetangx.com/api/v1/lms/learn/leaf_info/{cid}/{video_id}/",
-            params={"sign": sign},
+            self._build_leaf_info_url(video_id, course),
+            params=self._get_leaf_info_params(video_id, course),
         )
-        data = resp["data"]
+        data = resp.get("data")
+        if not isinstance(data, dict) or "user_id" not in data:
+            raise APIError(f"视频 {video_id} 上下文响应结构异常")
 
         user_id = int(data["user_id"])
-        sku_id = int(data["sku_id"])
-        course_id = int(data["course_id"])
+        sku_id = int(data.get("sku_id") or 0)
+        course_id = int(data.get("course_id") or 0)
+        classroom_id = str(data.get("classroom_id") or cid)
+        university_id = str(data.get("university_id") or course.metadata.get("university_id") or "")
+
+        content_info = data.get("content_info")
+        media = content_info.get("media") if isinstance(content_info, dict) and isinstance(content_info.get("media"), dict) else {}
+        media_ccid = str(media.get("ccid") or media.get("ccurl") or "")
+        duration = float(media.get("duration") or 0.0)
 
         progress_params = {
             "cid": course_id,
             "user_id": user_id,
-            "classroom_id": cid,
+            "classroom_id": classroom_id,
             "video_type": "video",
             "vtype": "rate",
-            "video_id": video_id,
+            "video_id": str(video_id),
         }
+        # 浏览器仅在解析出 uv 标识时才带这两个头，空值会形成异常指纹
+        headers = {"classroom-id": classroom_id}
+        if university_id and university_id != "0":
+            headers["uv-id"] = university_id
+            headers["university-id"] = university_id
+        request_kwargs = {"headers": headers}
 
         return VideoContext(
             video_id=str(video_id),
-            classroom_id=str(cid),
+            classroom_id=classroom_id,
             user_id=user_id,
             course_id=course_id,
             sku_id=sku_id,
             progress_url="https://www.xuetangx.com/video-log/get_video_watch_progress/",
             heartbeat_url="https://www.xuetangx.com/video-log/heartbeat/",
             progress_params=progress_params,
-            request_kwargs={"params": progress_params},
+            request_kwargs=request_kwargs,
+            media_ccid=media_ccid,
+            duration=duration,
         )
 
     @override
     async def _prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
-        cid = course.metadata["classroom_id"]
-        sign = course.metadata["sign"]
-
-        url = self._build_leaf_info_url(homework.id, course)
-        params = self._get_leaf_info_params(homework.id, course)
-        resp = await self._request_json("GET", url, params=params)
-        data = resp.get("data", {})
-        leaf_type_id = data.get("content_info", {}).get("leaf_type_id") or data.get("leaf_type_id")
+        resp = await self._request_json(
+            "GET",
+            self._build_leaf_info_url(homework.id, course),
+            params=self._get_leaf_info_params(homework.id, course),
+        )
+        data = resp.get("data")
+        leaf_type_id = None
+        if isinstance(data, dict):
+            content_info = data.get("content_info")
+            leaf_type_id = (content_info.get("leaf_type_id") if isinstance(content_info, dict) else None) or data.get("leaf_type_id")
 
         return {
             "leaf_id": homework.id,
             "exercise_id": leaf_type_id,
-            "sign": sign,
-            "classroom_id": cid,
+            "sign": course.metadata["sign"],
+            "classroom_id": course.metadata["classroom_id"],
         }
 
     @override
-    async def _mark_article_finish(self, leaf_id: str | int, course: Course) -> bool:
-        cid = course.metadata["classroom_id"]
-        sign = course.metadata["sign"]
-        url = f"https://www.xuetangx.com/api/v1/lms/learn/user_article_finish/{leaf_id}/"
-        resp = await self._request_json("GET", url, params={"sign": sign, "cid": cid})
-        return bool(resp.get("success", False))
+    def _article_finish_params(self, course: Course) -> dict[str, Any] | None:
+        return {"cid": self._classroom_id(course), "sid": course.metadata.get("sku_id")}
 
     @override
-    async def get_discussion_detail(self, leaf_id: str | int, course: Course) -> DiscussionTopicDetail:
-        cid = course.metadata["classroom_id"]
-        url_unit = "https://www.xuetangx.com/v/discussion/v2/unit/discussion/"
-        r_unit = await self._request_json("GET", url_unit, params={"classroom_id": cid, "leaf_id": leaf_id})
-        topic_info = r_unit.get("data", {})
-        topic_id = int(topic_info.get("id") or 0)
-        user_comment_num = int(topic_info.get("user_comment_num") or 0)
-        comment_count = int(topic_info.get("commented") or 0)
-        raw_text = topic_info.get("content", {}).get("text", "")
-
-        url_status = "https://www.xuetangx.com/v/discussion/v2/student/comment/status/"
-        r_status = await self._request_json("GET", url_status, params={"classroom_id": cid, "leaf_id": leaf_id})
-        completed = bool(r_status.get("data") or user_comment_num > 0)
-
-        discussions = await self.get_discussions(course)
-        target = next((item for item in discussions if item.id == str(leaf_id)), None)
-        title = target.name if target else f"讨论题 {leaf_id}"
-
-        return DiscussionTopicDetail(
-            course_id=str(course.id),
-            leaf_id=str(leaf_id),
-            topic_id=topic_id,
-            title=title,
-            prompt=html_to_md(raw_text),
-            comment_count=comment_count,
-            user_comment_num=user_comment_num,
-            completed=completed,
-        )
+    async def _fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        url = f"{self.api_base}/api/v1/lms/forum/unit/discussion/"
+        params = {
+            "product_sign": course.metadata.get("sign"),
+            "leaf_id": leaf_id,
+            "classroom_id": self._classroom_id(course),
+            "topic_type": 1,
+            "channel": "xt",
+        }
+        resp = await self._request_json("GET", url, params=params)
+        data = resp.get("data")
+        if not isinstance(data, dict) or "id" not in data:
+            raise APIError(f"讨论题单元 {leaf_id} 响应结构异常")
+        return data
 
     @override
-    async def submit_discussion(self, leaf_id: str | int, course: Course, content: str) -> DiscussionCommentResult:
-        cid = course.metadata["classroom_id"]
-        url_unit = "https://www.xuetangx.com/v/discussion/v2/unit/discussion/"
-        r_unit = await self._request_json("GET", url_unit, params={"classroom_id": cid, "leaf_id": leaf_id})
-        topic_info = r_unit.get("data", {})
-        topic_id = int(topic_info.get("id") or 0)
-        to_user = int(topic_info.get("user_id") or 0)
+    async def _discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
+        return int(topic_info.get("user_comment_num") or 0) > 0
 
-        url_post = "https://www.xuetangx.com/v/discussion/v2/comment/"
+    @override
+    async def _post_discussion_comment(
+        self,
+        topic_info: dict[str, Any],
+        content: str,
+        course: Course,
+        leaf_id: str | int,
+    ) -> dict[str, Any]:
+        url = f"{self.api_base}/api/v1/lms/forum/comment/"
+        params = {"classroom_id": self._classroom_id(course), "leaf_id": leaf_id}
         payload = {
-            "to_user": to_user,
-            "topic_id": topic_id,
+            "to_user": int(topic_info.get("user_id") or 0),
+            "topic_id": int(topic_info["id"]),
             "content": {
                 "text": content,
-                "app_upload_images": [],
+                "upload_images": [],
             },
         }
-        resp = await self.client.post(url_post, json=payload)
-        parsed = resp.json() if resp.text else {}
-        success = resp.status_code == 200 and parsed.get("success", False)
-        msg = parsed.get("msg") or parsed.get("data", {}).get("message") or "操作成功"
-        comment_id = parsed.get("data", {}).get("data", {}).get("id")
-        return DiscussionCommentResult(
-            course_id=str(course.id),
-            leaf_id=str(leaf_id),
-            topic_id=topic_id,
-            comment_id=int(comment_id) if comment_id else None,
-            success=success,
-            message=str(msg),
-        )
+        return await self._request_json("POST", url, params=params, json=payload)

@@ -59,7 +59,7 @@ def test_parameter_layering_precedence() -> None:
     assert options.learning_rate == 4.0  # 命令行覆盖计划默认
     assert options.completion_threshold == 0.5  # 目标级覆盖计划默认
     assert options.video_timeout == 90.0  # 目标级
-    assert options.heartbeat_interval == 1.5  # 内建默认
+    assert options.heartbeat_interval == 30.0  # 内建默认：每 30 秒批量上报一次
     assert options.jitter == 0.2  # 内建默认
     assert options.video_delay == 3.0  # 内建默认
 

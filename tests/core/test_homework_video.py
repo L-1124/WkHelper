@@ -21,6 +21,7 @@ async def test_generic_submit_homework_submits_and_returns_summary():
         course_info: Course,
         client: niquests.AsyncSession,
         kwargs: dict[str, Any] | None,
+        question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
         if problem_id == 1:
             return QuestionSubmitOutcome(success=True, is_correct=True, correct_answer=["A"])
@@ -55,6 +56,7 @@ async def test_generic_submit_homework_already_submitted_and_platform_error():
         course_info: Course,
         client: niquests.AsyncSession,
         kwargs: dict[str, Any] | None,
+        question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
         called_ids.append(problem_id)
         if problem_id == 2:
@@ -107,6 +109,7 @@ async def test_generic_submit_homework_anti_risk_options():
         course_info: Course,
         client: niquests.AsyncSession,
         kwargs: dict[str, Any] | None,
+        question: dict[str, Any] | None = None,
     ) -> QuestionSubmitOutcome:
         order.append(problem_id)
         return QuestionSubmitOutcome(success=True, is_correct=True, correct_answer=answer)
@@ -138,6 +141,9 @@ async def test_generic_watch_video_threshold_reached():
     """验证视频达到设定阈值时正常退出并报告 threshold_reached。"""
 
     class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
         def __init__(self, text: str):
             self.text = text
 
@@ -159,9 +165,11 @@ async def test_generic_watch_video_threshold_reached():
         user_id: int,
         course_id: int,
         sku_id: int,
-        video_frame: int,
-        i: int,
+        video_frame: float,
+        seq: int,
         timestamp: int,
+        cc: str,
+        duration: float,
     ) -> dict[str, Any]:
         return {}
 
@@ -198,6 +206,9 @@ async def test_generic_watch_video_stalled():
     """验证服务端进度停滞时触发 stall_timeout 停止。"""
 
     class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
         def __init__(self, text: str):
             self.text = text
 
@@ -214,9 +225,11 @@ async def test_generic_watch_video_stalled():
         user_id: int,
         course_id: int,
         sku_id: int,
-        video_frame: int,
-        i: int,
+        video_frame: float,
+        seq: int,
         timestamp: int,
+        cc: str,
+        duration: float,
     ) -> dict[str, Any]:
         return {}
 

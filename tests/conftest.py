@@ -12,13 +12,13 @@ from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 class FakeAsyncPlatform(BasePlatform):
     """通用的异步平台假实现。"""
 
-    def __init__(self, client: niquests.AsyncSession) -> None:
-        super().__init__(client)
+    def __init__(self, client: niquests.AsyncSession, **kwargs: Any) -> None:
+        super().__init__(client, **kwargs)
 
     @property
     @override
     def heartbeat_profile(self) -> HeartbeatProfile:
-        return HeartbeatProfile(origin="fake.local", lob="fake")
+        return HeartbeatProfile(lob="fake")
 
     @override
     async def login(
@@ -48,7 +48,7 @@ class FakeAsyncPlatform(BasePlatform):
         return ""
 
     @override
-    def _build_exercise_list_url(self, leaf_type_id: int | str) -> str:
+    def _build_exercise_list_url(self, leaf_type_id: int | str, sku_id: Any = None) -> str:
         return ""
 
     @override
@@ -56,7 +56,9 @@ class FakeAsyncPlatform(BasePlatform):
         return ""
 
     @override
-    def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _build_submit_payload(
+        self, problem_id: int, answer: list[str], submit_ctx: dict[str, Any] | None = None, question: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return {"problem_id": problem_id, "answer": answer}
 
     @override
@@ -80,6 +82,10 @@ class FakeAsyncPlatform(BasePlatform):
     async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         self.user = UserInfo(id="1", name="tester")
         return self.user
+
+    @override
+    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+        return {"csrf": "stub", "session": "stub"}
 
     @override
     async def _login_with_qrcode(

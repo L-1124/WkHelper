@@ -77,12 +77,12 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
     class DummyPlatform(BasePlatform):
         @property
         def heartbeat_profile(self) -> HeartbeatProfile:
-            return HeartbeatProfile(origin="test.local", lob="test")
+            return HeartbeatProfile(lob="test")
 
         def _build_submit_url(self) -> str:
             return ""
 
-        def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx=None):
+        def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx=None, question=None):
             return {}
 
         async def _prepare_submit_context(self, homework, course):
@@ -93,6 +93,10 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
 
         async def _login_with_cookies(self, cookies):
             raise NotImplementedError
+
+        async def _qr_exchange_cookies(self, login_data):
+
+            return {}
 
         async def _login_with_qrcode(self, display="image", open_browser=False, timeout=120):
             raise NotImplementedError
@@ -112,7 +116,7 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
         def _get_leaf_info_params(self, leaf_id, course):
             return {}
 
-        def _build_exercise_list_url(self, leaf_type_id):
+        def _build_exercise_list_url(self, leaf_type_id, sku_id=None):
             return ""
 
     try:
@@ -123,6 +127,8 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
             # 模拟假响应
             class FakeResp:
                 status_code = 200
+                text = ""
+                headers: dict[str, str] = {}
 
                 def raise_for_status(self):
                     pass
