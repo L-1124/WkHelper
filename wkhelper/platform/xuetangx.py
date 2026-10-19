@@ -9,6 +9,7 @@ from wkhelper.core.exceptions import APIError, AuthError
 from wkhelper.core.homework import is_fill_in_question
 from wkhelper.core.json_types import json_int
 from wkhelper.core.qr_login import QrCodeSession
+from wkhelper.core.results import ExamCoverDetail, ExamStartResult
 
 logger = logging.getLogger(__name__)
 
@@ -326,3 +327,87 @@ class XuetangXPlatform(BasePlatform):
             },
         }
         return await self._request_json("POST", url, params=params, json=payload)
+
+    @override
+    async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
+        url = self._build_leaf_info_url(leaf_id, course)
+        params = self._get_leaf_info_params(leaf_id, course)
+        resp = await self._request_json("GET", url, params=params)
+        data = resp.get("data") or {}
+        ci = data.get("content_info") if isinstance(data, dict) else {}
+        eid = (
+            (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
+            or (data.get("leaf_type_id") if isinstance(data, dict) else None)
+            or leaf_id
+        )
+
+        c_resp = await self._request_json("GET", f"{self.api_base}/api/v1/lms/exam/cover", params={"exam_id": eid})
+        raw_cover = c_resp.get("data") or {}
+        cover_data = raw_cover.get("data", raw_cover) if isinstance(raw_cover, dict) else {}
+
+        raw_status = cover_data.get("result", {}).get("status") if isinstance(cover_data.get("result"), dict) else None
+        if raw_status in (4, 5):
+            status = "已交卷"
+        elif raw_status == 1:
+            status = "答题中"
+        elif raw_status in (0, 6):
+            status = "未开始"
+        else:
+            status = str(raw_status) if raw_status is not None else "未知"
+
+        face_auth_status = cover_data.get("face_auth_status")
+        face_auth = bool(cover_data.get("identity_auth") or (isinstance(face_auth_status, dict) and face_auth_status.get("online_proctor")))
+        capture_screen = bool(cover_data.get("capture_screen") or cover_data.get("app_capture_screen"))
+
+        return ExamCoverDetail(
+            course_id=str(course.id),
+            exam_id=str(leaf_id),
+            title=str(cover_data.get("title") or (data.get("name") if isinstance(data, dict) else None) or f"考试 {leaf_id}"),
+            problem_count=int(cover_data.get("problem_count") or 0),
+            total_score=float(cover_data.get("total_score") or 0.0),
+            limit_minutes=int(cover_data.get("limit") or 0),
+            start_time=cover_data.get("start_time") or (data.get("start_time") if isinstance(data, dict) else None),
+            deadline=cover_data.get("deadline") or (data.get("deadline") if isinstance(data, dict) else None),
+            status=status,
+            description=str(cover_data.get("description") or ""),
+            face_auth=face_auth,
+            capture_screen=capture_screen,
+        )
+
+    @override
+    async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
+        cover = await self.get_exam_cover(leaf_id, course)
+        url = self._build_leaf_info_url(leaf_id, course)
+        params = self._get_leaf_info_params(leaf_id, course)
+        resp = await self._request_json("GET", url, params=params)
+        data = resp.get("data") or {}
+        ci = data.get("content_info") if isinstance(data, dict) else {}
+        eid = (
+            (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
+            or (data.get("leaf_type_id") if isinstance(data, dict) else None)
+            or leaf_id
+        )
+
+        r_gen = await self._request_json("POST", f"{self.api_base}/api/v1/lms/exam/gen_token", json={"exam_id": eid})
+        token_data = r_gen.get("data", {}).get("data", {}) if isinstance(r_gen.get("data"), dict) else {}
+        crypt = str(token_data.get("crypt") or token_data.get("token") or "")
+        exam_host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
+        user_id = str((self.user.id if self.user else None) or token_data.get("user_id") or "")
+
+        import urllib.parse
+
+        login_url = (
+            f"{exam_host}/login?exam_id={eid}&user_id={user_id}&crypt={urllib.parse.quote(crypt)}"
+            f"&next={exam_host}/exam/{eid}?isFrom=0&language=zh"
+        )
+        await self.client.get(login_url, allow_redirects=True)
+
+        return ExamStartResult(
+            course_id=str(course.id),
+            exam_id=str(leaf_id),
+            title=cover.title,
+            started=True,
+            limit_minutes=cover.limit_minutes,
+            web_url=login_url,
+            message="考场会话已成功建立，已启动服务端计时与令牌授权",
+        )

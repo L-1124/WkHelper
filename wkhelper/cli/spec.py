@@ -178,6 +178,23 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper discussion reply --course 1001 --discussion 3001 --content '心得体会...' --confirm",
         ],
     },
+    "exam list": {
+        "description": "有界分页列出指定课程的期中/期末考试、开考时间与截止时间。",
+        "examples": ["wkhelper exam list --course 1001"],
+    },
+    "exam inspect": {
+        "description": "查看考试封面、考试须知、满分、限时时长与考场状态。",
+        "examples": ["wkhelper exam inspect --course 1001 --exam 2001"],
+    },
+    "exam start": {
+        "description": "显式确认后向平台发起进入考场请求，启动考场会话与授权令牌。",
+        "side_effects": "remote_write",
+        "requires_confirm": True,
+        "examples": [
+            "wkhelper exam start --course 1001 --exam 2001 --dry-run",
+            "wkhelper exam start --course 1001 --exam 2001 --confirm",
+        ],
+    },
 }
 
 

@@ -365,3 +365,62 @@ class QuestionSubmitPreview:
     homework_id: str
     question_id: str
     answer: list[str]
+
+
+@dataclass
+class ExamItem:
+    """考试节点简要信息。"""
+
+    id: str
+    name: str
+    start_time: int | None
+    deadline: int | None
+    completed: bool
+
+
+@dataclass
+class ExamListData:
+    exams: list[ExamItem]
+
+
+@dataclass
+class ExamCoverDetail:
+    """考试封面元数据与考场须知详情。"""
+
+    course_id: str
+    exam_id: str
+    title: str
+    problem_count: int
+    total_score: float
+    limit_minutes: int
+    start_time: int | None
+    deadline: int | None
+    status: str
+    description: str
+    face_auth: bool
+    capture_screen: bool
+
+
+@dataclass
+class ExamStartPreview:
+    """进入考场预检回执。"""
+
+    dry_run: bool
+    course_id: str
+    exam_id: str
+    title: str
+    limit_minutes: int
+    note: str
+
+
+@dataclass
+class ExamStartResult:
+    """进入考场正式回执。"""
+
+    course_id: str
+    exam_id: str
+    title: str
+    started: bool
+    limit_minutes: int
+    web_url: str
+    message: str
