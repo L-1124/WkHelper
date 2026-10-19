@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 import niquests
 
-from wkhelper.cli.events import emit_event
+from wkhelper.core.events import emit_event
 from wkhelper.core.models import JsonValue, VideoParameters, VideoStatus, VideoWatchResult, json_float, parse_json_text
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ class VideoWatchOptions:
 
     learning_rate: float = 1.0
     heartbeat_interval: float = 1.5
+    jitter: float = 0.2
     progress_interval: float = 15.0
     completion_threshold: float = 1.0
     video_timeout: float = 1800.0
@@ -34,6 +35,7 @@ class VideoWatchOptions:
     max_heartbeats: int = 1000
     max_retries: int = 2
     retry_backoff: float = 2.0
+    video_delay: float = 3.0
 
     def with_parameters(self, parameters: VideoParameters | None) -> "VideoWatchOptions":
         """返回叠加了显式参数的新配置；未指定字段保持原值。"""
@@ -43,6 +45,7 @@ class VideoWatchOptions:
             self,
             learning_rate=parameters.learning_rate if parameters.learning_rate is not None else self.learning_rate,
             heartbeat_interval=(parameters.heartbeat_interval if parameters.heartbeat_interval is not None else self.heartbeat_interval),
+            jitter=parameters.jitter if parameters.jitter is not None else self.jitter,
             progress_interval=(parameters.progress_interval if parameters.progress_interval is not None else self.progress_interval),
             completion_threshold=(
                 parameters.completion_threshold if parameters.completion_threshold is not None else self.completion_threshold
@@ -50,6 +53,7 @@ class VideoWatchOptions:
             video_timeout=parameters.video_timeout if parameters.video_timeout is not None else self.video_timeout,
             stall_timeout=parameters.stall_timeout if parameters.stall_timeout is not None else self.stall_timeout,
             max_heartbeats=parameters.max_heartbeats if parameters.max_heartbeats is not None else self.max_heartbeats,
+            video_delay=parameters.video_delay if parameters.video_delay is not None else self.video_delay,
         )
 
 
@@ -216,11 +220,18 @@ async def generic_watch_video(
                     backoff = min(opts.retry_backoff * (2 ** (attempt - 1)), _remaining_time())
                     await asyncio.sleep(backoff)
 
-        # 心跳等待周期，受总预算截断
-        sleep_interval = min(opts.heartbeat_interval, _remaining_time())
+        # 心跳等待周期（带随机抖动），受总预算截断
+        base_interval = opts.heartbeat_interval
+        if opts.jitter > 0:
+            import random
+
+            delta = base_interval * opts.jitter
+            effective_interval = max(0.2, base_interval + random.uniform(-delta, delta))
+        else:
+            effective_interval = base_interval
+        sleep_interval = min(effective_interval, _remaining_time())
         if sleep_interval > 0:
             await asyncio.sleep(sleep_interval)
-
         # 进度复查周期
         if (loop.time() - last_progress_check_time) >= opts.progress_interval and loop.time() < deadline:
             last_progress_check_time = loop.time()

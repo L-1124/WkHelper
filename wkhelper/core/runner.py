@@ -8,7 +8,8 @@ from typing import Any
 
 import msgspec
 
-from wkhelper.cli.events import emit_event
+from wkhelper.core.base_platform import BasePlatform
+from wkhelper.core.events import emit_event
 from wkhelper.core.models import (
     Course,
     Homework,
@@ -22,7 +23,6 @@ from wkhelper.core.models import (
     parse_json_text,
 )
 from wkhelper.core.video import VideoWatchOptions
-from wkhelper.platform.base import BasePlatform
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +197,16 @@ class Runner:
                         _save_checkpoint()
                         if record.status in ("failed", "timed_out", "stalled") and on_error == "stop":
                             stop_flag = True
+
+                    # 跨视频切换冷却延迟（带随机抖动）
+                    if merged.video_delay > 0 and not stop_flag and len(results) < len(deduped_targets):
+                        import random
+
+                        actual_delay = merged.video_delay
+                        if merged.jitter > 0:
+                            delta = actual_delay * merged.jitter
+                            actual_delay = max(0.5, actual_delay + random.uniform(-delta, delta))
+                        await asyncio.sleep(actual_delay)
                 except Exception as exc:
                     async with lock:
                         results.append(self._failed_result(target, str(exc)))
@@ -221,10 +231,22 @@ class Runner:
         course: Course,
         homework: Homework,
         answers: dict[str, list[str]],
+        concurrency: int = 1,
+        delay: float = 0.0,
+        delay_jitter: float = 0.0,
+        random_order: bool = False,
     ) -> HomeworkSubmitResult:
         """执行作业答案提交。"""
         emit_event("homework.started", {"course_id": str(course.id), "homework_id": str(homework.id), "name": homework.name})
-        result = await self.platform.do_homework(homework, course, answers=answers)
+        result = await self.platform.do_homework(
+            homework,
+            course,
+            answers=answers,
+            concurrency=concurrency,
+            delay=delay,
+            delay_jitter=delay_jitter,
+            random_order=random_order,
+        )
         emit_event(
             "homework.finished",
             {
