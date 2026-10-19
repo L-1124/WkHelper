@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from wkhelper.core.config import MAX_WORKERS_STATUS
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.events import EventCallback, emit_event, is_debug_enabled
 from wkhelper.core.exceptions import APIError, AuthError, RiskControlError
@@ -603,6 +604,15 @@ class BasePlatform(ABC):
         """获取考试封面与考场元数据。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现考试封面接口")
 
+    @staticmethod
+    def _ensure_exam_leaf(leaf_id: str | int, leaf_type: Any) -> None:
+        """考试命令只允许作用于 leaf_type=5；响应缺字段时放行以兼容精简接口。"""
+        if leaf_type is not None and leaf_type != 5:
+            raise APIError(
+                f"节点 {leaf_id} 的 leaf_type={leaf_type} 不是考试（5=考试）；章节作业请改用 `homework` / `question` 命令",
+                retryable=False,
+            )
+
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         """进入考场并申请考试授权令牌。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现进入考场接口")
@@ -896,12 +906,17 @@ class BasePlatform(ABC):
 
         pending = [item for item in discussions if not item.completed]
         if pending:
-            statuses = await asyncio.gather(
-                *(self._discussion_leaf_completed(item.id, course) for item in pending),
-                return_exceptions=True,
-            )
+            semaphore = asyncio.Semaphore(MAX_WORKERS_STATUS)
+
+            async def _status(item: DiscussionItem) -> bool | None:
+                async with semaphore:
+                    return await self._discussion_leaf_completed(item.id, course)
+
+            statuses = await asyncio.gather(*(_status(item) for item in pending), return_exceptions=True)
             for item, status in zip(pending, statuses, strict=True):
-                if status is True:
+                if isinstance(status, BaseException):
+                    logger.debug(f"讨论 {item.id} 发言状态查询失败，回退章节进度: {status}")
+                elif status is True:
                     item.completed = True
         return discussions
 

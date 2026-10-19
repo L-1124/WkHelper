@@ -25,6 +25,21 @@ def _platform(client: AsyncSession) -> YuketangPlatform:
 
 
 @pytest.mark.asyncio
+async def test_exam_cover_rejects_homework_leaf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非考试节点不得返回全零封面，必须指引到作业命令。"""
+    async with AsyncSession() as client:
+        platform = _platform(client)
+
+        async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+            return {"success": True, "data": {"leaf_type": 6, "content_info": {"leaf_type_id": 9001}}}
+
+        monkeypatch.setattr(platform, "_request_json", fake_request)
+
+        with pytest.raises(APIError, match="不是考试"):
+            await platform.get_exam_cover("1", _course())
+
+
+@pytest.mark.asyncio
 async def test_mint_exam_room_rejects_empty_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """令牌为空时不得继续拼登录地址并报告成功。"""
     async with AsyncSession() as client:
@@ -49,7 +64,7 @@ async def test_mint_exam_room_rejects_business_error(monkeypatch: pytest.MonkeyP
 
         async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
             if "leaf_info" in url:
-                return {"success": True, "data": {"leaf_type": 6, "content_info": {"leaf_type_id": 888}}}
+                return {"success": True, "data": {"leaf_type": 5, "content_info": {"leaf_type_id": 888}}}
             return {"success": False, "errcode": 500, "errmsg": "非考试节点"}
 
         monkeypatch.setattr(platform, "_request_json", fake_request)
