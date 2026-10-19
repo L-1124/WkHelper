@@ -2,14 +2,8 @@
 
 import pytest
 
-from wkhelper.core.models import (
-    ExecutionOverrides,
-    ExecutionSettings,
-    JsonValue,
-    VideoParameters,
-    VideoPlan,
-    VideoTarget,
-)
+from wkhelper.core.json_types import JsonValue
+from wkhelper.core.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
 from wkhelper.core.video import VideoWatchOptions
 
 

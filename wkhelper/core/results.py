@@ -1,0 +1,367 @@
+"""命令输出契约模型（信封 data 字段的强类型定义）。"""
+
+from dataclasses import dataclass, field
+from typing import Any
+
+import msgspec
+
+from wkhelper.core.entities import AccountSummary, StorageStatus
+from wkhelper.core.json_types import JsonDict
+from wkhelper.core.plan import _VIDEO_STATUSES, ExecutionSettings, VideoStatus, VideoTarget
+
+
+@dataclass(frozen=True)
+class NextAction:
+    """自引导下一步动作的强类型契约。"""
+
+    reason: str
+    argv: list[str]
+    description: str = ""
+
+    def to_dict(self) -> JsonDict:
+        payload: JsonDict = {
+            "reason": self.reason,
+            "argv": list(self.argv),
+        }
+        if self.description:
+            payload["description"] = self.description
+        return payload
+
+
+@dataclass
+class CourseItem:
+    id: str
+    name: str
+    platform: str
+    classroom_id: int | str | None = None
+
+
+@dataclass
+class CourseDetail:
+    id: str
+    name: str
+    platform: str
+    metadata: JsonDict
+
+
+@dataclass
+class VideoItem:
+    id: str
+    name: str
+    completed: bool
+
+
+@dataclass
+class HomeworkItem:
+    id: str
+    name: str
+    deadline: str | int | None = None
+    completed: bool = False
+
+
+@dataclass
+class ArticleItem:
+    id: str
+    name: str
+    completed: bool
+
+
+@dataclass
+class DiscussionItem:
+    id: str
+    name: str
+    completed: bool
+
+
+@dataclass
+class OptionItem:
+    key: str
+    text: str
+
+
+@dataclass
+class QuestionSummary:
+    index: int
+    id: str
+    type: str | None
+    prompt: str
+    content_truncated: bool
+    options: list[OptionItem]
+    submitted: bool
+    is_correct: bool | None
+
+
+@dataclass
+class QuestionDetail:
+    id: str
+    type: str | None
+    prompt: str
+    options: list[OptionItem]
+    submitted: bool
+    user_answer: list[str] | str | None
+    is_correct: bool | None
+    score: str | float | None
+    attempt_count: int
+    library_id: int | str | None
+    version: str | None
+    resources: list[str] = field(default_factory=list)
+
+
+@dataclass
+class QuestionOutline:
+    index: int
+    id: str
+    type: str | None
+    library_id: int | str | None
+
+
+@dataclass
+class HomeworkOutline:
+    course_id: str
+    homework_id: str
+    total_questions: int
+    questions_summary: list[QuestionOutline]
+
+
+@dataclass
+class VideoProgress:
+    course_id: str
+    video_id: str
+    current_rate: float
+    completed: bool
+
+
+@dataclass
+class StatusData:
+    credential_storage: StorageStatus
+    accounts_count: int
+    accounts: list[AccountSummary]
+
+
+@dataclass
+class AccountListData:
+    accounts: list[AccountSummary]
+
+
+@dataclass
+class CourseListData:
+    courses: list[CourseItem]
+
+
+@dataclass
+class VideoListData:
+    videos: list[VideoItem]
+
+
+@dataclass
+class HomeworkListData:
+    homeworks: list[HomeworkItem]
+
+
+@dataclass
+class QuestionListData:
+    questions: list[QuestionSummary]
+
+
+@dataclass
+class ArticleListData:
+    articles: list[ArticleItem]
+
+
+@dataclass
+class ArticleReadResult:
+    course_id: str
+    leaf_id: str
+    name: str
+    success: bool
+    completed: bool
+
+
+@dataclass
+class DiscussionListData:
+    discussions: list[DiscussionItem]
+
+
+@dataclass
+class DiscussionTopicDetail:
+    course_id: str
+    leaf_id: str
+    topic_id: int
+    title: str
+    prompt: str
+    comment_count: int
+    user_comment_num: int
+    completed: bool
+
+
+@dataclass
+class DiscussionCommentResult:
+    course_id: str
+    leaf_id: str
+    topic_id: int
+    comment_id: int | None
+    success: bool
+    message: str
+
+
+@dataclass
+class AuthStatusResult:
+    platform: str
+    user_id: str
+    name: str
+    valid: bool
+
+
+@dataclass
+class LoginResult:
+    platform: str
+    user_id: str
+    name: str
+    school: str | None
+    persisted: bool
+
+
+@dataclass
+class RemoveResult:
+    platform: str
+    account: str
+    deleted: bool
+
+
+@dataclass
+class OutputFileResult:
+    output_file: str
+    written: bool
+
+
+@dataclass
+class ExportResult:
+    file_path: str | None
+    homeworks_count: int
+    questions_count: int
+    resources_count: int = 0
+
+
+@dataclass
+class VideoWatchResult:
+    """单视频学习结果。"""
+
+    video_id: str
+    video_name: str = ""
+    status: VideoStatus = "completed"
+    platform_completed: bool = False
+    initial_rate: float = 0.0
+    final_rate: float = 0.0
+    heartbeats_sent: int = 0
+    duration_seconds: float = 0.0
+    message: str = ""
+
+    def with_course_id(self, course_id: str) -> "VideoTargetResult":
+        """附加课程 ID，转换为计划级结果。"""
+        return VideoTargetResult(
+            video_id=self.video_id,
+            video_name=self.video_name,
+            status=self.status,
+            platform_completed=self.platform_completed,
+            initial_rate=self.initial_rate,
+            final_rate=self.final_rate,
+            heartbeats_sent=self.heartbeats_sent,
+            duration_seconds=self.duration_seconds,
+            message=self.message,
+            course_id=course_id,
+        )
+
+
+@dataclass
+class VideoTargetResult(VideoWatchResult):
+    """计划级单目标结果（含课程归属）。"""
+
+    course_id: str = ""
+
+    @classmethod
+    def from_mapping(cls, raw: Any, context: str = "检查点结果") -> "VideoTargetResult":
+        """从检查点 JSON 值恢复结果，字段非法时抛出 ValueError。"""
+        if not isinstance(raw, dict):
+            raise ValueError(f"{context} 必须为 JSON 对象")
+        try:
+            res = msgspec.convert(raw, cls)
+        except (msgspec.ValidationError, TypeError) as exc:
+            raise ValueError(f"{context} 格式错误: {exc}") from exc
+        if res.status not in _VIDEO_STATUSES:
+            raise ValueError(f"{context} 字段 'status' 非法: {res.status}")
+        return res
+
+
+@dataclass
+class VideoPlanSummary:
+    total: int
+    completed: int
+    failed: int
+    results: list[VideoTargetResult]
+
+
+@dataclass
+class SubmitItem:
+    index: int
+    question_id: str
+    submitted: bool
+    is_correct: bool
+    correct_answer: list[str] | None = None
+    error: str | None = None
+
+
+@dataclass
+class HomeworkSubmitResult:
+    total: int
+    submitted_count: int
+    correct_count: int
+    items: list[SubmitItem]
+
+
+@dataclass
+class QuestionSubmitOutcome:
+    """平台单题提交回执。"""
+
+    success: bool
+    is_correct: bool
+    correct_answer: list[str]
+    error: str | None = None
+    error_code: int | None = None
+
+
+@dataclass
+class QuestionSubmitResult:
+    question_id: str
+    submitted_answer: list[str]
+    success: bool
+    is_correct: bool
+    correct_answer: list[str]
+    error: str | None = None
+
+
+@dataclass
+class VideoLearnPreview:
+    dry_run: bool
+    targets_count: int
+    targets: list[VideoTarget]
+    requested_config: ExecutionSettings
+    effective_config: ExecutionSettings
+    note: str
+
+
+@dataclass
+class HomeworkSubmitPreview:
+    dry_run: bool
+    course_id: str
+    homework_id: str
+    answers_count: int
+    validated: bool
+
+
+@dataclass
+class QuestionSubmitPreview:
+    dry_run: bool
+    course_id: str
+    homework_id: str
+    question_id: str
+    answer: list[str]

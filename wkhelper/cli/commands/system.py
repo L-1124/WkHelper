@@ -7,7 +7,8 @@ from cyclopts import Parameter
 from wkhelper.cli.context import ctx
 from wkhelper.cli.envelope import CommandResult, NextAction
 from wkhelper.cli.spec import get_command_schema
-from wkhelper.core.models import JsonDict, StatusData
+from wkhelper.core.json_types import JsonDict
+from wkhelper.core.results import StatusData
 
 
 async def status_cmd() -> CommandResult[StatusData]:

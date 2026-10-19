@@ -8,13 +8,8 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _open_platform, _paginate
 from wkhelper.cli.envelope import CommandResult, NextAction
-from wkhelper.core.models import (
-    CourseDetail,
-    CourseItem,
-    CourseListData,
-    course_reference,
-    dedupe_courses,
-)
+from wkhelper.core.entities import course_reference, dedupe_courses
+from wkhelper.core.results import CourseDetail, CourseItem, CourseListData
 
 course_app = App(name="course", help="课程查询")
 

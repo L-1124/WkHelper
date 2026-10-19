@@ -5,19 +5,19 @@ import logging
 import math
 import re
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 import niquests
 
-from wkhelper.core.events import emit_event
-from wkhelper.core.models import JsonValue, VideoParameters, VideoStatus, VideoWatchResult, json_float, parse_json_text
+from wkhelper.core.events import EventCallback, notifier
+from wkhelper.core.json_types import json_float, parse_json_text
+from wkhelper.core.plan import VideoParameters, VideoStatus
+from wkhelper.core.results import VideoWatchResult
 
 logger = logging.getLogger(__name__)
 
 type RequestOptions = dict[str, Any]
-type EventCallback = Callable[[str, dict[str, JsonValue]], None]
 
 
 @dataclass
@@ -108,11 +108,7 @@ async def generic_watch_video(
     start_time = loop.time()
     deadline = start_time + opts.video_timeout
 
-    def _notify(event: str, payload: dict[str, JsonValue]) -> None:
-        if on_event:
-            on_event(event, payload)
-        else:
-            emit_event(event, payload)
+    _notify = notifier(on_event)
 
     def _remaining_time() -> float:
         return max(0.05, deadline - loop.time())

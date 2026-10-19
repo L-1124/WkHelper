@@ -13,8 +13,9 @@ from threading import Lock
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
 
+from wkhelper.core.entities import AccountSummary, StorageStatus, UserInfo
 from wkhelper.core.exceptions import AuthError
-from wkhelper.core.models import AccountSummary, StorageStatus, UserInfo, parse_json_text
+from wkhelper.core.json_types import parse_json_text
 
 logger = logging.getLogger(__name__)
 

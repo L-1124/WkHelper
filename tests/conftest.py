@@ -5,8 +5,8 @@ from typing import Any, override
 import niquests
 import pytest_asyncio
 
-from wkhelper.core.models import Course, Homework, UserInfo, VideoContext
-from wkhelper.platform.base import BasePlatform
+from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
+from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 
 
 class FakeAsyncPlatform(BasePlatform):
@@ -14,6 +14,11 @@ class FakeAsyncPlatform(BasePlatform):
 
     def __init__(self, client: niquests.AsyncSession) -> None:
         super().__init__(client)
+
+    @property
+    @override
+    def heartbeat_profile(self) -> HeartbeatProfile:
+        return HeartbeatProfile(origin="fake.local", lob="fake")
 
     @override
     async def login(

@@ -14,7 +14,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from cyclopts import App
 
-from wkhelper.core.models import JsonDict, JsonValue
+from wkhelper.core.json_types import JsonDict, JsonValue
 
 
 @dataclass

@@ -12,7 +12,5 @@ DEFAULT_HEADERS = {
     "Content-Type": "application/json",
 }
 
-# 作业提交并发上限：单次批量提交时的最大并发数。
-MAX_WORKERS_HOMEWORK = 5
 # 题目抓取并发上限：批量导出时并发拉取题目。
 MAX_WORKERS_DOWNLOAD = 10

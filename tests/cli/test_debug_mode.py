@@ -7,9 +7,9 @@ from io import StringIO
 import niquests
 import pytest
 
+from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.events import is_debug_enabled, set_debug_enabled
 from wkhelper.main import async_main
-from wkhelper.platform.base import BasePlatform
 
 
 @pytest.mark.asyncio
@@ -75,6 +75,10 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
     monkeypatch.setattr("sys.stderr", stderr_buf)
 
     class DummyPlatform(BasePlatform):
+        @property
+        def heartbeat_profile(self) -> HeartbeatProfile:
+            return HeartbeatProfile(origin="test.local", lob="test")
+
         def _build_submit_url(self) -> str:
             return ""
 

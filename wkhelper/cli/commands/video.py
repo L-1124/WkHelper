@@ -7,23 +7,12 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _load_plan, _open_course, _open_platform, _paginate
 from wkhelper.cli.envelope import CommandResult, NextAction
+from wkhelper.core.entities import course_reference, dedupe_courses
 from wkhelper.core.exceptions import APIError, ConfirmationRequiredError, PartialFailureError
-from wkhelper.core.models import (
-    ExecutionOverrides,
-    ExecutionSettings,
-    VideoItem,
-    VideoLearnPreview,
-    VideoListData,
-    VideoParameters,
-    VideoPlan,
-    VideoPlanSummary,
-    VideoProgress,
-    VideoTarget,
-    course_reference,
-    dedupe_courses,
-)
-from wkhelper.core.runner import Runner
+from wkhelper.core.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
+from wkhelper.core.results import VideoItem, VideoLearnPreview, VideoListData, VideoPlanSummary, VideoProgress
 from wkhelper.core.video import VideoWatchOptions
+from wkhelper.core.video_runner import VideoPlanRunner
 
 video_app = App(name="video", help="视频学习与查询")
 
@@ -161,7 +150,7 @@ async def video_learn_cmd(
     async with _open_platform(effective_platform, account) as plat:
         # 同一课程可能挂在多个课堂下，按课堂级引用建索引，避免空课堂顶掉有内容的课堂
         courses_map = {course_reference(course_item): course_item for course_item in dedupe_courses(await plat.get_courses())}
-        runner = Runner(plat)
+        runner = VideoPlanRunner(plat)
         summary = await runner.execute_video_plan(
             courses_map=courses_map,
             targets=targets,

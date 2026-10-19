@@ -29,19 +29,24 @@ wkhelper/
     spec.py                 # 命令规范注册表与 schema 自省
     commands/               # 按业务域拆分的子应用与命令函数
   core/
+    base_platform.py        # 平台抽象接口与模板方法（含章节树遍历）
     config.py               # 平台协议常量与并发上限
     credential_store.py     # Keyring 秘密 + SQLite 元数据
     deobfuscator.py         # 字体反混淆（动态字体结构）
+    entities.py             # 跨平台领域实体（课程/作业/题目/账号）
+    events.py               # NDJSON 事件通道与 notifier
     exceptions.py           # 业务异常
     exporter.py             # Markdown 原子导出（拒绝覆盖）
-    homework.py             # 结构化作业提交
-    models.py               # JsonValue/JsonDict、领域与结果模型、计划模型
-    runner.py               # 计划编排、预算与检查点
+    homework.py             # 作业并发提交流程
+    homework_runner.py      # 作业提交编排（事件契约）
+    json_types.py           # JsonValue/JsonDict 递归契约与收窄工具
+    plan.py                 # 视频计划与执行参数模型
+    results.py              # 命令输出契约模型
+    transport.py            # Fetcher：按 URL 取字节的传输抽象
     video.py                # 参数化视频引擎
+    video_runner.py         # 视频计划编排、预算与检查点
   platform/
-    base.py                 # 平台抽象接口与模板方法
     login_helper.py         # 临时二维码与本地回环 Web 展示
-    tree_utils.py           # 课程树解析共享逻辑
     xuetangx.py             # 学堂在线适配
     yuketang.py             # 雨课堂适配
 
@@ -58,10 +63,10 @@ tests/
 | 需求              | 主要文件                          | 说明                         |
 |-------------------|-----------------------------------|------------------------------|
 | 调整视频学习策略  | `wkhelper/core/video.py`          | 心跳发送、限流重试、终态校准 |
-| 调整计划编排流程  | `wkhelper/core/runner.py`         | 目标去重、参数分层、断点续学 |
-| 平台 API 适配     | `wkhelper/platform/*.py`          | 仅写平台差异，不复制通用流程 |
+| 调整计划编排流程  | `wkhelper/core/video_runner.py`   | 目标去重、参数分层、断点续学 |
+| 平台 API 适配     | `wkhelper/platform/*.py`          | 仅写平台差异（含 `heartbeat_profile`），不复制通用流程 |
 | CLI 契约与 Schema | `wkhelper/cli/spec.py`            | 命令规范与渐进披露           |
-| 输出契约与数据模型| `wkhelper/core/models.py`         | JsonValue、结果模型、计划模型|
+| 输出契约与数据模型| `wkhelper/core/results.py`        | 命令结果模型；实体见 `entities.py`，计划见 `plan.py` |
 | 凭据存储策略      | `wkhelper/core/credential_store.py`| 系统 Keyring 与元数据分离   |
 
 ## CONVENTIONS
@@ -75,8 +80,10 @@ tests/
   - 统一现代类型标注（`list[str]`、`dict[str, Any]`），使用 PEP 695 语法（`type X = ...`、`class Foo[T]`）
   - **禁止** `from __future__ import annotations`
 - 类型策略：
+  - `JsonValue` 是递归联合（`str | int | float | bool | None | Sequence | Mapping`），**不要**退化成 `Any`；JSON 解析边界用一次 `cast` 收窄
   - 输出/编排层（信封、事件、Schema、命令结果）只用精确模型与 `JsonValue` / `JsonDict`
   - `Any` 仅用于平台原始载荷（HTTP JSON、章节树、字体结构）与 HTTP 附加参数等动态边界
+  - `core` 不直接持有 HTTP 客户端：资源下载走 `core.transport.Fetcher`（实现为 `BasePlatform.fetch_bytes`）
   - CLI 命令返回 `CommandResult[...]`，不直接打印；序列化只经 `unified_result_action`
   - JSON 编码统一用 `msgspec.json.encode`（支持 dataclass 嵌套）；不要手写递归序列化
   - 需要保留缩进的文件（检查点）先用 `msgspec.to_builtins` 展开再 `json.dumps(indent=2)`
@@ -90,7 +97,8 @@ tests/
   - 命令树内省只用公开 API（`iter(app)`、`app[name]`、`assemble_argument_collection()`），禁止访问 `_commands` 等私有属性
 - 架构约束：
   - 通用流程放 `core`
-  - 平台模块只写平台 API 细节
+  - 平台模块只写平台 API 细节；协议固定字段用 `HeartbeatProfile` 之类显式声明，不要在 core 里写平台常量
+  - 事件派发统一用 `core.events.notifier`，不要各自实现 `_notify` 分支
   - CLI 不得访问平台私有方法（用 `BasePlatform` 公开方法）
   - 命令层通过 `_open_platform` / `_open_course` 获取已认证平台，不要各自复制会话与登录样板
 
@@ -120,7 +128,7 @@ uv run pytest -q
 
 ## NOTES
 
-- 计划文件契约见 `core/models.py::VideoPlan.from_mapping`；未知字段一律报错。
+- 计划文件契约见 `core/plan.py::VideoPlan.from_mapping`；未知字段一律报错。
 - 导出目标已存在时返回 `FILE_EXISTS`（退出码 5），不覆盖既有文件。
 - 全局 `--cookie-file` 仅与 `--credential-mode session` 搭配，且必须显式 `--platform`；置于子命令之后时归属该命令的同名选项（如 `auth login --cookie-file`）。
 - meta 启动器内对子命令的调用是嵌套调用，Cyclopts 会强制 `result_action="return_value"`，因此 `dispatch()` 必须显式调用 `unified_result_action` 完成渲染与退出码换算。

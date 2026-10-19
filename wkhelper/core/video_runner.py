@@ -1,34 +1,26 @@
-"""核心调度器：无状态无交互的原子用例执行。"""
+"""视频学习计划编排器：去重、预算、检查点与并发调度。"""
 
 import asyncio
 import json
 import logging
+import random
 from pathlib import Path
 from typing import Any
 
 import msgspec
 
 from wkhelper.core.base_platform import BasePlatform
-from wkhelper.core.events import emit_event
-from wkhelper.core.models import (
-    Course,
-    Homework,
-    HomeworkSubmitResult,
-    VideoParameters,
-    VideoPlanSummary,
-    VideoStatus,
-    VideoTarget,
-    VideoTargetResult,
-    VideoWatchResult,
-    parse_json_text,
-)
+from wkhelper.core.entities import Course
+from wkhelper.core.json_types import parse_json_text
+from wkhelper.core.plan import VideoParameters, VideoStatus, VideoTarget
+from wkhelper.core.results import VideoPlanSummary, VideoTargetResult, VideoWatchResult
 from wkhelper.core.video import VideoWatchOptions
 
 logger = logging.getLogger(__name__)
 
 
-class Runner:
-    """原子化用例执行器。"""
+class VideoPlanRunner:
+    """批量视频学习计划执行器。"""
 
     def __init__(self, platform: BasePlatform) -> None:
         self.platform = platform
@@ -200,8 +192,6 @@ class Runner:
 
                     # 跨视频切换冷却延迟（带随机抖动）
                     if merged.video_delay > 0 and not stop_flag and len(results) < len(deduped_targets):
-                        import random
-
                         actual_delay = merged.video_delay
                         if merged.jitter > 0:
                             delta = actual_delay * merged.jitter
@@ -225,36 +215,3 @@ class Runner:
             failed=len(results) - completed_count,
             results=results,
         )
-
-    async def execute_homework_submit(
-        self,
-        course: Course,
-        homework: Homework,
-        answers: dict[str, list[str]],
-        concurrency: int = 1,
-        delay: float = 0.0,
-        delay_jitter: float = 0.0,
-        random_order: bool = False,
-    ) -> HomeworkSubmitResult:
-        """执行作业答案提交。"""
-        emit_event("homework.started", {"course_id": str(course.id), "homework_id": str(homework.id), "name": homework.name})
-        result = await self.platform.do_homework(
-            homework,
-            course,
-            answers=answers,
-            concurrency=concurrency,
-            delay=delay,
-            delay_jitter=delay_jitter,
-            random_order=random_order,
-        )
-        emit_event(
-            "homework.finished",
-            {
-                "course_id": str(course.id),
-                "homework_id": str(homework.id),
-                "total": result.total,
-                "submitted_count": result.submitted_count,
-                "correct_count": result.correct_count,
-            },
-        )
-        return result

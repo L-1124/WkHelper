@@ -5,15 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from wkhelper.core.models import Course, VideoTarget, VideoWatchResult
-from wkhelper.core.runner import Runner
+from wkhelper.core.entities import Course
+from wkhelper.core.plan import VideoTarget
+from wkhelper.core.results import VideoWatchResult
 from wkhelper.core.video import VideoWatchOptions
+from wkhelper.core.video_runner import VideoPlanRunner
 
 
 @pytest.mark.asyncio
 async def test_runner_execute_video_plan(fake_platform):
     """验证 Runner 计划并发执行与结果收集。"""
-    runner = Runner(fake_platform)
+    runner = VideoPlanRunner(fake_platform)
     course = Course(id="c1", name="测试课程", platform_id="test")
     courses_map = {"c1": course}
 
@@ -61,7 +63,7 @@ async def test_runner_execute_video_plan(fake_platform):
 @pytest.mark.asyncio
 async def test_runner_execute_video_plan_resume(fake_platform):
     """验证从检查点恢复时跳过已完成项。"""
-    runner = Runner(fake_platform)
+    runner = VideoPlanRunner(fake_platform)
     course = Course(id="c1", name="测试课程", platform_id="test")
     courses_map = {"c1": course}
 

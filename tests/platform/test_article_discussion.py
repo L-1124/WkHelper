@@ -3,8 +3,8 @@
 import niquests
 import pytest
 
-from wkhelper.core.models import Course
-from wkhelper.platform.base import BasePlatform
+from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
+from wkhelper.core.entities import Course
 
 
 def _sample_course() -> Course:
@@ -17,6 +17,10 @@ def _sample_course() -> Course:
 
 
 class MockPlatform(BasePlatform):
+    @property
+    def heartbeat_profile(self) -> HeartbeatProfile:
+        return HeartbeatProfile(origin="test.local", lob="test")
+
     def _build_submit_url(self) -> str:
         return ""
 
@@ -75,7 +79,7 @@ class MockPlatform(BasePlatform):
         return True
 
     async def get_discussion_detail(self, leaf_id: str | int, course: Course):
-        from wkhelper.core.models import DiscussionTopicDetail
+        from wkhelper.core.results import DiscussionTopicDetail
 
         return DiscussionTopicDetail(
             course_id=str(course.id),
@@ -89,7 +93,7 @@ class MockPlatform(BasePlatform):
         )
 
     async def submit_discussion(self, leaf_id: str | int, course: Course, content: str):
-        from wkhelper.core.models import DiscussionCommentResult
+        from wkhelper.core.results import DiscussionCommentResult
 
         return DiscussionCommentResult(
             course_id=str(course.id),

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from wkhelper.core.credential_store import CredentialStore, SecretBackend
-from wkhelper.core.models import StorageStatus, UserInfo
+from wkhelper.core.entities import StorageStatus, UserInfo
 
 
 class MockKeyringBackend(SecretBackend):
