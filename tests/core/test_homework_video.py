@@ -43,6 +43,96 @@ async def test_generic_submit_homework_submits_and_returns_summary():
 
 
 @pytest.mark.asyncio
+async def test_generic_submit_homework_already_submitted_and_platform_error():
+    """验证已正确作答题目跳过提交，且平台返回 80001 时正确复用作答状态。"""
+
+    called_ids: list[int] = []
+
+    async def fake_submit(
+        problem_id: int,
+        answer: list[str],
+        course_info: Course,
+        client: niquests.AsyncSession,
+        kwargs: dict[str, Any] | None,
+    ) -> QuestionSubmitOutcome:
+        called_ids.append(problem_id)
+        if problem_id == 2:
+            return QuestionSubmitOutcome(
+                success=False,
+                is_correct=False,
+                correct_answer=[],
+                error="you do not have chance to answer (error_code: 80001)",
+                error_code=80001,
+            )
+        return QuestionSubmitOutcome(
+            success=False,
+            is_correct=False,
+            correct_answer=[],
+            error="参数错误 (error_code: 40001)",
+            error_code=40001,
+        )
+
+    resolved_pairs: list[tuple[dict[str, Any], list[str]]] = [
+        ({"id": 1, "user": {"my_count": 1, "is_right": True, "answer": "A"}}, ["A"]),
+        ({"id": 2, "user": {}}, ["B"]),
+        ({"id": 3, "user": {}}, ["C"]),
+    ]
+
+    course = Course(id="1", name="测试课程", platform_id="test")
+    async with niquests.AsyncSession() as client:
+        summary = await generic_submit_homework(resolved_pairs, fake_submit, course, client)
+
+    assert summary.total == 3
+    assert 1 not in called_ids
+    assert 2 in called_ids
+    assert summary.submitted_count == 1
+    assert summary.correct_count == 1
+    assert summary.items[0].submitted is True
+    assert summary.items[0].is_correct is True
+    assert summary.items[1].submitted is False
+    assert "80001" in str(summary.items[1].error)
+    assert summary.items[2].submitted is False
+    assert summary.items[2].error == "参数错误 (error_code: 40001)"
+
+
+@pytest.mark.asyncio
+async def test_generic_submit_homework_anti_risk_options():
+    """验证作业提交支持自定义延迟、并发与乱序提交。"""
+    order: list[int] = []
+
+    async def fake_submit(
+        problem_id: int,
+        answer: list[str],
+        course_info: Course,
+        client: niquests.AsyncSession,
+        kwargs: dict[str, Any] | None,
+    ) -> QuestionSubmitOutcome:
+        order.append(problem_id)
+        return QuestionSubmitOutcome(success=True, is_correct=True, correct_answer=answer)
+
+    resolved_pairs: list[tuple[dict[str, Any], list[str]]] = [({"id": i}, ["A"]) for i in range(1, 6)]
+
+    course = Course(id="1", name="测试课程", platform_id="test")
+    async with niquests.AsyncSession() as client:
+        summary = await generic_submit_homework(
+            resolved_pairs,
+            fake_submit,
+            course,
+            client,
+            concurrency=1,
+            delay=0.01,
+            delay_jitter=0.005,
+            random_order=True,
+        )
+
+    assert summary.total == 5
+    assert summary.submitted_count == 5
+    assert len(order) == 5
+    # 无论实际提交执行顺序如何，返回 items 始终按原 index 排序
+    assert [item.index for item in summary.items] == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.asyncio
 async def test_generic_watch_video_threshold_reached():
     """验证视频达到设定阈值时正常退出并报告 threshold_reached。"""
 

@@ -2,6 +2,7 @@
 
 import json
 from io import StringIO
+from typing import Any
 
 import msgspec
 import pytest
@@ -9,35 +10,31 @@ from cyclopts import CycloptsError
 
 from wkhelper.cli.app import app
 from wkhelper.cli.envelope import create_error_envelope, create_success_envelope, print_json
-from wkhelper.cli.spec import COMMAND_REGISTRY, get_command_schema
+from wkhelper.cli.spec import command_registry, get_command_schema, get_command_spec
 from wkhelper.core.models import VideoItem
 
 
+def _iter_leaf_commands(app_inst: Any, prefix: str = "") -> list[str]:
+    """用 Cyclopts 公开 API（迭代 + 下标访问）枚举叶子业务命令。"""
+    hidden = set(app_inst.help_flags) | set(app_inst.version_flags)
+    names = [name for name in app_inst if name not in hidden]
+    cmds: list[str] = []
+    for name in names:
+        sub = app_inst[name]
+        full = f"{prefix} {name}".strip()
+        children = [child for child in sub if child not in (set(sub.help_flags) | set(sub.version_flags))]
+        if children:
+            cmds.extend(_iter_leaf_commands(sub, full))
+        else:
+            cmds.append(full)
+    return cmds
+
+
 def test_command_registry_completeness():
-    """验证所有目标命令均已在规范字典中完整登记。"""
-    expected_commands = [
-        "status",
-        "schema",
-        "auth list",
-        "auth status",
-        "auth login",
-        "auth remove",
-        "auth storage status",
-        "course list",
-        "course inspect",
-        "video list",
-        "video inspect",
-        "video learn",
-        "homework list",
-        "homework inspect",
-        "homework submit",
-        "question list",
-        "question get",
-        "question submit",
-        "questions export",
-    ]
-    for cmd in expected_commands:
-        assert cmd in COMMAND_REGISTRY, f"缺少命令契约: {cmd}"
+    """验证所有在 Cyclopts 注册的业务命令均已在规范字典中完整登记。"""
+    registry = command_registry()
+    for full_cmd in _iter_leaf_commands(app):
+        assert full_cmd in registry, f"缺少命令契约: {full_cmd}"
 
 
 def test_get_command_schema_top_level():
@@ -83,6 +80,30 @@ def test_get_command_schema_leaf_compact_and_full():
         assert isinstance(p, dict)
         assert "help" in p
         assert "type" in p
+
+
+def test_get_command_spec_compact_and_full():
+    """验证 get_command_spec 在紧凑模式与全量模式下的返回规范。"""
+    compact = get_command_spec("video learn", full=False)
+    assert compact.path == "video learn"
+    assert compact.requires_confirm is True
+    assert len(compact.arguments) > 0
+    for arg in compact.arguments:
+        assert arg.name
+        assert arg.flags
+        assert arg.help == ""
+        assert arg.type == ""
+
+    full = get_command_spec("video learn", full=True)
+    assert full.path == "video learn"
+    assert len(full.arguments) == len(compact.arguments)
+    for arg in full.arguments:
+        assert arg.name
+        assert arg.flags
+        assert arg.type != ""
+
+    with pytest.raises(KeyError):
+        get_command_spec("unknown command")
 
 
 def test_app_build_and_error():

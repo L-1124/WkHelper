@@ -26,6 +26,34 @@ async def test_cli_status_command(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_global_proxy_and_user_agent_flags(monkeypatch):
+    """测试全局 --proxy 与 --user-agent 由 meta 应用解析并写入上下文。"""
+    from wkhelper.cli.app import ctx
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--proxy", "http://127.0.0.1:8080", "--user-agent", "CustomUA/1.0", "status"])
+    assert code == 0
+    assert ctx.proxy == "http://127.0.0.1:8080"
+    assert ctx.user_agent == "CustomUA/1.0"
+
+
+@pytest.mark.asyncio
+async def test_global_flags_after_subcommand(monkeypatch):
+    """全局参数置于子命令之后同样生效（fallthrough 解析）。"""
+    from wkhelper.cli.app import ctx
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["status", "--debug", "--credential-mode", "session"])
+    assert code == 0
+    assert ctx.debug is True
+    assert ctx.credential_mode == "session"
+
+
+@pytest.mark.asyncio
 async def test_cli_schema_command(monkeypatch):
     """测试 wkhelper schema video learn 命令输出。"""
     buf = StringIO()
@@ -86,8 +114,8 @@ async def test_cli_invalid_argument_envelope(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cli_question_submit_dry_run(monkeypatch):
-    """测试单题提交 --dry-run 预览。"""
+async def test_cli_question_submit_auth_guard(monkeypatch):
+    """测试未登录状态下提交题目被认证守卫拦截（退出码 3）。"""
     buf = StringIO()
     monkeypatch.setattr("sys.stdout", buf)
 
@@ -112,5 +140,7 @@ async def test_cli_question_submit_dry_run(monkeypatch):
             "--dry-run",
         ]
     )
-    # 未登录时会返回 AUTH_EXPIRED/AUTH_REQUIRED 错误码 3，测试验证认证守卫
-    assert code in (0, 3)
+    assert code == 3
+    data = json.loads(buf.getvalue().strip())
+    assert data["ok"] is False
+    assert data["error"]["code"] == "AUTH_EXPIRED"
