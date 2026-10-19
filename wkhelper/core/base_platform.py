@@ -734,7 +734,7 @@ class BasePlatform(ABC):
         传输实现由平台层持有，`core` 只消费这一能力（见 `core.transport.Fetcher`），
         从而避免把具体 HTTP 客户端类型泄漏到导出与反混淆模块。
         """
-        response = await self.client.get(url, timeout=15)
+        response = await self.client.get(url, timeout=15, headers={"Accept": "*/*"})
         response.raise_for_status()
         return bytes(response.content or b"")
 

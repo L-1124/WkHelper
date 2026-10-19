@@ -31,7 +31,7 @@ def test_explicit_none_disables_impersonation() -> None:
     assert resolve_impersonate(None) is None
 
 
-def test_platform_fingerprint_preferences_differ() -> None:
-    """雨课堂会话与签发指纹绑定，默认不伪装；学堂在线默认伪装。"""
+def test_platforms_share_browser_fingerprint() -> None:
+    """两个平台都默认伪装同一浏览器指纹。"""
     assert XuetangXPlatform.impersonate == "chrome"
-    assert YuketangPlatform.impersonate is None
+    assert YuketangPlatform.impersonate == "chrome"

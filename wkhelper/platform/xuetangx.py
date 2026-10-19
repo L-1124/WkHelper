@@ -87,7 +87,7 @@ class XuetangXPlatform(BasePlatform):
         ticket = message.get("ticket")
         if not ticket:
             return
-        ticket_resp = await self.client.get(str(ticket))
+        ticket_resp = await self.client.get(str(ticket), headers={"Accept": "image/*,*/*"})
         if ticket_resp.content:
             qr_session.create_image(ticket_resp.content)
             qr_session.emit_challenge(expires_in=expires_in)
