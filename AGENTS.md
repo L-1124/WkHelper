@@ -10,7 +10,7 @@
 - 平台：`yuketang.cn` / `xuetangx.com`
 - 架构：异步（`asyncio` + `niquests` + `TaskGroup`）+ 系统凭据存储（`keyring`）
 - 交互：标准单行 JSON 信封（stdout）+ 结构化 NDJSON 事件（stderr）
-- 命令框架：Cyclopts 声明式类型化命令树（`help_formatter="plain"`，无 ANSI）
+- 命令框架：Cyclopts 5.x 声明式类型化命令树（根应用统一 `help_formatter="plain"`，无 ANSI；全局会话参数由 meta 应用承载）
 
 核心思路是把通用流程放在 `wkhelper/core`，平台差异放在 `wkhelper/platform`，命令规范与自省放在 `wkhelper/cli`。
 
@@ -18,12 +18,16 @@
 
 ```text
 wkhelper/
-  main.py                   # 进程入口：全局参数、异常到退出码映射
+  main.py                   # 进程入口：异常到退出码映射、同步/异步两条薄封装
   cli/
-    app.py                  # Cyclopts 命令树与命令实现
+    app.py                  # 根 App 装配 + meta 应用（全局会话参数）
+    context.py              # ExecutionContext 与 OutputFormat/PlatformCode 等类型契约
+    deps.py                 # 平台打开、分页、载荷解析等命令共享依赖
     envelope.py             # CommandResult / 信封 / NextAction
-    events.py               # stderr NDJSON 事件通道
+    markdown.py             # 终端 Markdown 渲染
+    output.py               # 统一输出（信封/错误）与 unified_result_action
     spec.py                 # 命令规范注册表与 schema 自省
+    commands/               # 按业务域拆分的子应用与命令函数
   core/
     config.py               # 平台协议常量与并发上限
     credential_store.py     # Keyring 秘密 + SQLite 元数据
@@ -33,7 +37,6 @@ wkhelper/
     homework.py             # 结构化作业提交
     models.py               # JsonValue/JsonDict、领域与结果模型、计划模型
     runner.py               # 计划编排、预算与检查点
-    utils.py                # 通用小工具
     video.py                # 参数化视频引擎
   platform/
     base.py                 # 平台抽象接口与模板方法
@@ -47,7 +50,7 @@ tests/
   core/                     # 凭据、提交、视频引擎、计划、导出
   platform/                 # 平台适配
 
-其他文件：readme.md、design.md（CLI 契约设计规格）、pyproject.toml
+其他文件：README.md（用户文档）、AGENTS.md（本文件）、pyproject.toml
 ```
 
 ## WHERE TO CHANGE
@@ -80,10 +83,16 @@ tests/
 - 错误处理：
   - 库代码不要 `exit(1)`，抛出业务异常
   - 退出码：2 参数错误、3 认证缺失、4 目标不存在、5 前置条件不满足、6 平台失败、7 部分失败、1 内部错误
+- CLI 参数契约：
+  - 全局会话参数只在 `cli/app.py` 的 `app.meta.default` 上声明，命令层不要重复定义或手工扫描 `sys.argv`
+  - 枚举型选项用 `Literal[...]`（`PlatformCode` 等复用 `cli/context.py` 的类型别名），校验与 `[choices: ...]` 帮助由 Cyclopts 自动生成，不要另写 `if x not in (...)` 校验
+  - `console`/`help_formatter`/`exit_on_error`/`print_error` 只在根应用设置，子应用继承
+  - 命令树内省只用公开 API（`iter(app)`、`app[name]`、`assemble_argument_collection()`），禁止访问 `_commands` 等私有属性
 - 架构约束：
   - 通用流程放 `core`
   - 平台模块只写平台 API 细节
   - CLI 不得访问平台私有方法（用 `BasePlatform` 公开方法）
+  - 命令层通过 `_open_platform` / `_open_course` 获取已认证平台，不要各自复制会话与登录样板
 
 ## ANTI-PATTERNS
 
@@ -91,6 +100,8 @@ tests/
 - 在异步流程中调用阻塞式交互或嵌套 `asyncio.run`
 - 用 `Any` / `object` 逃逸输出契约检查，或把不可序列化对象塞进输出模型
 - 在 `cli/app.py` 中手工拼 JSON 或重复分页/参数校验逻辑
+- 手写 `argv` 扫描器替代 Cyclopts 的参数解析（全局参数属 meta 应用）
+- 访问 Cyclopts 私有属性（`App._commands` 等）做命令树内省
 
 ## COMMANDS
 
@@ -109,6 +120,7 @@ uv run pytest -q
 
 ## NOTES
 
-- 计划文件契约见 `design.md` §9.5 与 `core/models.py::VideoPlan`；未知字段一律报错。
+- 计划文件契约见 `core/models.py::VideoPlan.from_mapping`；未知字段一律报错。
 - 导出目标已存在时返回 `FILE_EXISTS`（退出码 5），不覆盖既有文件。
-- 全局 `--cookie-file` 仅与 `--credential-mode session` 搭配，且必须显式 `--platform`。
+- 全局 `--cookie-file` 仅与 `--credential-mode session` 搭配，且必须显式 `--platform`；置于子命令之后时归属该命令的同名选项（如 `auth login --cookie-file`）。
+- meta 启动器内对子命令的调用是嵌套调用，Cyclopts 会强制 `result_action="return_value"`，因此 `dispatch()` 必须显式调用 `unified_result_action` 完成渲染与退出码换算。
