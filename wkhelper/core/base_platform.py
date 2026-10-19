@@ -41,7 +41,7 @@ from wkhelper.core.results import (
     VideoWatchResult,
 )
 from wkhelper.core.throttle import RateGate, RetryPolicy, parse_retry_hint
-from wkhelper.core.time_types import epoch_millis
+from wkhelper.core.time_types import epoch_millis, parse_http_date_ms
 from wkhelper.core.transport import (
     AsyncSession,
     HttpMethod,
@@ -98,6 +98,16 @@ def _looks_like_risk_control(body: str | dict[str, Any] | None) -> bool:
     if isinstance(body, str):
         return _RISK_CONTROL_CODE in body
     return False
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    """按不区分大小写的方式读取响应头（兼容普通 dict 与 Headers 对象）。"""
+    if not headers:
+        return None
+    getter = getattr(headers, "get", None)
+    if getter is None:
+        return None
+    return getter(name) or getter(name.title()) or getter(name.upper())
 
 
 @dataclass(frozen=True)
@@ -227,6 +237,17 @@ class BasePlatform(ABC):
         self.current_cookies: dict[str, str] | None = None
         self.gate = gate or RateGate()
         self.retry_policy = retry_policy or RetryPolicy()
+        self._clock_offset_ms = 0.0
+        self._clock_samples = 0
+
+    @property
+    def clock_offset_ms(self) -> float:
+        """已测量的服务器时钟偏移（毫秒），正数表示本机时间慢于平台。"""
+        return self._clock_offset_ms
+
+    def _server_now_ms(self) -> int:
+        """按服务器时钟换算的当前毫秒时间戳。"""
+        return int(time.time() * 1000 + self._clock_offset_ms)
 
     @staticmethod
     def _trace_http(method: str, url: str, start: float, status_code: int | None, error: str | None = None) -> None:
@@ -301,7 +322,39 @@ class BasePlatform(ABC):
             raise APIError(f"平台响应不是 JSON 对象: {url}")
         if _looks_like_risk_control(payload):
             raise RiskControlError(f"触发平台风控人机验证，请先在浏览器完成验证后重试: {url}")
+        self._sync_server_clock(resp.headers, payload)
         return payload
+
+    _MAX_CLOCK_SKEW_MS = 6 * 3600 * 1000
+    _CLOCK_SMOOTHING = 0.3
+
+    def _sync_server_clock(self, headers: Any, payload: dict[str, Any]) -> None:
+        """用响应中的 server_time 或 Date 头校正本机时钟，供心跳与作答时间戳使用。"""
+        server_ms = self._payload_server_time_ms(payload)
+        if server_ms is None:
+            server_ms = parse_http_date_ms(_header_value(headers, "date"))
+        if server_ms is None:
+            return
+        sample = server_ms - time.time() * 1000
+        if abs(sample) > self._MAX_CLOCK_SKEW_MS:
+            logger.warning(f"忽略异常的服务器时钟样本: {sample:.0f}ms")
+            return
+        if self._clock_samples == 0:
+            self._clock_offset_ms = sample
+        else:
+            alpha = self._CLOCK_SMOOTHING
+            self._clock_offset_ms = (1 - alpha) * self._clock_offset_ms + alpha * sample
+        self._clock_samples += 1
+
+    @staticmethod
+    def _payload_server_time_ms(payload: dict[str, Any]) -> int | None:
+        """优先取响应体里的 server_time，支持顶层或 data 内嵌、秒级自动升级。"""
+        value = payload.get("server_time")
+        if value is None:
+            data = payload.get("data")
+            value = data.get("server_time") if isinstance(data, dict) else None
+        ms = epoch_millis(value)
+        return int(ms) if ms is not None else None
 
     @staticmethod
     def parse_cookie_string(raw: str) -> dict[str, str]:
@@ -795,7 +848,7 @@ class BasePlatform(ABC):
         """提交考试单题答案，答案立即写入服务端暂存。"""
         host, eid, _login_url = await self._open_exam_room(leaf_id, course)
         payload = {
-            "results": [{"problem_id": int(problem_id), "result": answer, "time": int(time.time() * 1000)}],
+            "results": [{"problem_id": int(problem_id), "result": answer, "time": self._server_now_ms()}],
             "exam_id": eid,
             "record": [],
         }
@@ -1158,7 +1211,7 @@ class BasePlatform(ABC):
             "fp": 0,
             "tp": 0,
             "sp": profile.sp,
-            "ts": str(int(timestamp)),
+            "ts": str(int(timestamp) + int(round(self._clock_offset_ms))),
             "u": int(user_id),
             "uip": "",
             "c": int(course_id),
