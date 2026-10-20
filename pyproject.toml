@@ -20,7 +20,7 @@ dev = [
   "pre-commit>=4.5.1",
   "pyrefly>=0.55.0",
   "pytest>=8.4.0",
-  "pytest-asyncio>=0.24.0",
+  "pytest-asyncio>=1.4.0",
   "ruff>=0.15.5",
 ]
 
