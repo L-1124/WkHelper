@@ -2,7 +2,7 @@
 
 会话以 JSON 文件持久化端口与临时 profile，跨命令以 CDP 重新连接；
 浏览器保持考场页面打开，由页面自身产生心跳（`refresh_time`）与监考采集，
-CLI 的作答/交卷仍走 REST 接口。
+CLI 的作答通过在页面中模拟点击与输入完成，交卷由本人在浏览器中提交。
 """
 
 import json
@@ -16,6 +16,7 @@ from curl_cffi.requests import AsyncSession
 
 from wkhelper.core.browser_manager import BrowserManager, _CdpClient, _wait_debugger, find_chromium_browser
 from wkhelper.core.credential_store import get_default_data_dir
+from wkhelper.core.exceptions import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ async def open_exam_browser(
     """以独立 profile 拉起常驻 Chromium，注入会话 Cookie 并打开考场页。"""
     browser = find_chromium_browser()
     if not browser:
-        raise RuntimeError("未检测到本地 Chromium 浏览器（Chrome/Edge），无法打开考场会话")
+        raise APIError("未检测到本地 Chromium 浏览器（Chrome/Edge），无法打开考场会话", retryable=False)
 
     existing = load_session(data_dir, verify=True)
     if existing is not None:
@@ -107,7 +108,11 @@ async def open_exam_browser(
     _browser_ws, page_ws = await _wait_debugger(port)
     if not page_ws:
         shutil.rmtree(profile, ignore_errors=True)
-        raise RuntimeError("无法连接到浏览器调试端口")
+        raise APIError(
+            "考场浏览器已拉起但调试端口未就绪，无法接管考场页面。"
+            "请关闭残留的 WkHelper 浏览器窗口后重试；若持续失败，检查本机 Chromium 是否禁止远程调试。",
+            retryable=True,
+        )
 
     async with AsyncSession() as session:
         ws = await session.ws_connect(page_ws)

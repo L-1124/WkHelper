@@ -36,7 +36,6 @@ from wkhelper.core.results import (
     ExamStartPreview,
     ExamStartResult,
     ExamStatusData,
-    ExamSubmitResult,
     ExportResult,
     HomeworkListData,
     HomeworkOutline,
@@ -647,23 +646,6 @@ def _render_exam_answer(data: ExamAnswerResult) -> list[str]:
         f"- **提示信息**：{data.message}",
         *([f"> **注意**：{data.notice}"] if data.notice else []),
     ]
-
-
-@renderer(ExamSubmitResult)
-def _render_exam_submit(data: ExamSubmitResult) -> list[str]:
-    lines = [
-        f"## 考试交卷：`{data.exam_id}`",
-        "",
-        f"- **已作答题数**：{data.answered_count}",
-        f"- **未作答题数**：{len(data.unanswered)}",
-        f"- **交卷状态**：{'已交卷' if data.submitted else ('预览未交卷' if data.dry_run else '交卷失败')}",
-        f"- **提示信息**：{data.message}",
-    ]
-    if data.unanswered:
-        lines.append(f"- **未作答题目**：{'、'.join(data.unanswered)}")
-    if data.notice:
-        lines.append(f"> **注意**：{data.notice}")
-    return lines
 
 
 @renderer(ExamBrowserCloseResult)

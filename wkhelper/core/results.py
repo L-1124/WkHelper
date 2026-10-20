@@ -528,19 +528,6 @@ class ExamAnswerResult:
 
 
 @dataclass
-class ExamSubmitResult:
-    """考试交卷回执。"""
-
-    dry_run: bool
-    exam_id: str
-    answered_count: int
-    unanswered: list[str]
-    submitted: bool
-    message: str
-    notice: str = ""
-
-
-@dataclass
 class ExamBrowserCloseResult:
     """考场浏览器会话关闭回执。"""
 

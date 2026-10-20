@@ -180,7 +180,45 @@ wkhelper notice list -c 1966245:31318907 --status pending
 wkhelper notice inspect -c 1966245:31318907 -n 84705560
 ```
 
-### 8. 契约自省 (`schema`)
+### 8. 考场与考试 (`exam`)
+
+```bash
+# 查询课程内的期中/期末考试及截止时间
+wkhelper exam list -c 1966245:31318907
+
+# 查看考试封面、考场须知与监考开关
+wkhelper exam inspect -c 1966245:31318907 -e 84705331
+
+# 预览进入考场（不申请令牌）
+wkhelper exam start -c 1966245:31318907 -e 84705331 --dry-run
+
+# 进入考场：默认拉起前台可见浏览器保持考场页面
+wkhelper exam start -c 1966245:31318907 -e 84705331 --confirm
+
+# 读取整卷题目（只读）或导出为 Markdown
+wkhelper exam paper -c 1966245:31318907 -e 84705331
+wkhelper exam export -c 1966245:31318907 -e 84705331 -o ./exam.md
+
+# 在考场页面中模拟点击/输入完成单题作答（需保持浏览器会话）
+wkhelper exam answer -c 1966245:31318907 -e 84705331 -q 9001 --answer A --confirm
+
+# 只读诊断：封面/refresh_time/暂存作答/成绩接口状态
+wkhelper exam status -c 1966245:31318907 -e 84705331
+
+# 结束考场浏览器会话
+wkhelper exam close
+```
+
+> [!IMPORTANT]
+> - 作答只通过前台真实浏览器页面的模拟点击与输入完成，不存在绕过浏览器的作答接口；交卷必须由本人在浏览器中核对后点击。
+> - `exam answer` 的 `saved` 依据页面自身的 `answer_problem` 请求与响应判定（通过 CDP 抓取，不额外发请求）；未捕获到该请求时才回读一次 `/exam_room/cache_results` 兜底，两者都无法确认时返回 `saved: false`。
+> - 页面实际提交内容与预期不一致（例如选项未绑定）会直接判 `saved: false`，不会被暂存回读洗白。
+> - 判断题选项键是 `true`/`false`，`--answer 正确` 会自动映射，也接受直接传 `true`。
+> - 在线监考、人脸/实名核验、网页截屏与线下机房等**实际启用**的监考项会锁定全部自动化入场与作答，只保留只读查询。
+> - `app_capture_screen`、`app_front_random_snap` 属于 App 端从属配置，未开启在线监考时不视为已启用监考。
+> - 强监考锁定只阻止自动化写操作，`exam inspect` 等只读查询始终可用。
+
+### 9. 契约自省 (`schema`)
 
 ```bash
 # 查询所有命令列表与摘要索引

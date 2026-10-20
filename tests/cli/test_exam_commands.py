@@ -2,20 +2,19 @@
 
 import json
 from io import StringIO
-from typing import override
+from typing import Any, override
 
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
 from wkhelper.core.entities import Course
+from wkhelper.core.exam_session import ExamBrowserSession
 from wkhelper.core.results import (
-    ExamAnswerResult,
     ExamCoverDetail,
     ExamItem,
     ExamPaperData,
     ExamProblemItem,
     ExamStartResult,
-    ExamSubmitResult,
     OptionItem,
 )
 from wkhelper.core.time_types import EpochMillis
@@ -78,32 +77,6 @@ class _ExamMockPlatform(FakeAsyncPlatform):
         )
 
     @override
-    async def get_exam_answer_state(self, leaf_id: str | int, course: Course) -> tuple[list[str], list[str]]:
-        return ["9001"], ["9001", "9002"]
-
-    @override
-    async def answer_exam_problem(self, leaf_id: str | int, course: Course, problem_id: str, answer: list[str]) -> ExamAnswerResult:
-        return ExamAnswerResult(
-            dry_run=False,
-            exam_id=str(leaf_id),
-            problem_id=problem_id,
-            answer=answer,
-            saved=True,
-            message="作答已保存",
-        )
-
-    @override
-    async def submit_exam(self, leaf_id: str | int, course: Course) -> ExamSubmitResult:
-        return ExamSubmitResult(
-            dry_run=False,
-            exam_id=str(leaf_id),
-            answered_count=1,
-            unanswered=["9002"],
-            submitted=True,
-            message="交卷成功",
-        )
-
-    @override
     async def get_exam_paper(self, leaf_id: str | int, course: Course) -> ExamPaperData:
         return ExamPaperData(
             course_id="1001",
@@ -123,6 +96,10 @@ class _ExamMockPlatform(FakeAsyncPlatform):
                 )
             ],
         )
+
+    @override
+    async def get_exam_cached_answers(self, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["A"]}
 
     @override
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
@@ -151,6 +128,24 @@ async def _overdue_cover(self, leaf_id: str | int, course: Course) -> ExamCoverD
         description="",
         face_auth=False,
         capture_screen=False,
+    )
+
+
+async def _submitted_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
+    return ExamCoverDetail(
+        course_id="1001",
+        exam_id=str(leaf_id),
+        title="期中考试测试卷",
+        problem_count=20,
+        total_score=100.0,
+        limit_minutes=90,
+        start_time=EpochMillis(1700000000000),
+        deadline=EpochMillis(4102444800000),
+        status="已交卷",
+        description="",
+        face_auth=False,
+        capture_screen=False,
+        raw_status=2,
     )
 
 
@@ -184,6 +179,24 @@ def mock_exam_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "wkhelper.cli.deps._create_platform_instance",
         lambda code, client: _ExamMockPlatform(client),
     )
+
+    async def _fake_open_browser(**kwargs: Any) -> ExamBrowserSession:
+        return ExamBrowserSession(
+            exam_id=str(kwargs["exam_id"]),
+            platform=str(kwargs["platform"]),
+            host=str(kwargs["host"]),
+            eid=int(kwargs["eid"]),
+            port=9222,
+            profile="test-profile",
+            web_url=str(kwargs["web_url"]),
+        )
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.open_exam_browser", _fake_open_browser)
+
+    async def _fake_browser_cookies(session: ExamBrowserSession) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.browser_cookies", _fake_browser_cookies)
 
 
 @pytest.mark.asyncio
@@ -310,6 +323,35 @@ async def test_exam_answer_dry_run_and_confirm(mock_exam_env: None, monkeypatch:
     buf = StringIO()
     monkeypatch.setattr("sys.stdout", buf)
 
+    session = ExamBrowserSession(
+        exam_id="3001",
+        platform="XuetangXPlatform",
+        host="https://examination.test",
+        eid=42,
+        port=1,
+        profile="p",
+        web_url="https://examination.test/exam/42",
+    )
+    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+
+    class _FakeCdp:
+        events: list[dict[str, Any]] = []
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_connect(*args: Any) -> _FakeCdp:
+        return _FakeCdp()
+
+    async def _fake_simulate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"success": True, "clicked_count": 1}
+
+    async def _fake_wait(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"observed": False, "accepted": False, "answer": []}
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.connect_exam_page", _fake_connect)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.simulate_browser_answer", _fake_simulate)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.wait_for_answer_submission", _fake_wait)
     code = await async_main(
         ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--dry-run", "-p", "xtzx"]
     )
@@ -359,26 +401,331 @@ async def test_exam_answer_dry_run_and_confirm(mock_exam_env: None, monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_exam_submit_gate_dry_run_and_confirm(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """exam submit 门禁、预览未答题、确认交卷三条路径。"""
-    code = await async_main(["exam", "submit", "-c", "1001", "-e", "3001", "-p", "xtzx"])
-    assert code == 5
+async def test_exam_answer_requires_live_browser_session(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """没有考场浏览器会话时拒绝作答，且不触碰页面。"""
+    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: None)
+    called: list[str] = []
+
+    async def _fake_connect(*args: Any) -> Any:
+        called.append("connect")
+        raise AssertionError("不应连接未启动的考场浏览器")
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.connect_exam_page", _fake_connect)
+
+    code = await async_main(["exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"])
+    assert code == 6
+    assert called == []
+
+
+def _patch_answer_driver(
+    monkeypatch: pytest.MonkeyPatch,
+    simulated: dict[str, Any],
+    submission: dict[str, Any] | None = None,
+) -> None:
+    """固定浏览器会话、页面模拟结果与页面提交证据，便于验证落库判定。"""
+    session = ExamBrowserSession(
+        exam_id="3001",
+        platform="XuetangXPlatform",
+        host="https://examination.test",
+        eid=42,
+        port=1,
+        profile="p",
+        web_url="https://examination.test/exam/42",
+    )
+    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+
+    class _FakeCdp:
+        events: list[dict[str, Any]] = []
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_connect(*args: Any) -> _FakeCdp:
+        return _FakeCdp()
+
+    async def _fake_simulate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return simulated
+
+    async def _fake_wait(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return submission or {"observed": False, "accepted": False, "answer": []}
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.connect_exam_page", _fake_connect)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.simulate_browser_answer", _fake_simulate)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.wait_for_answer_submission", _fake_wait)
+
+
+def _observed(answer: list[str], accepted: bool = True) -> dict[str, Any]:
+    """构造页面自身已发出作答请求的证据。"""
+    return {"observed": True, "accepted": accepted, "answer": answer, "status": 200, "errcode": 0 if accepted else 1}
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_reports_staged_mismatch(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面点击成功但服务端暂存不一致时，saved 必须为 false。"""
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1})
+
+    async def _staged_other(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["B"]}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_other)
 
     buf = StringIO()
     monkeypatch.setattr("sys.stdout", buf)
-    code = await async_main(["--format", "json", "exam", "submit", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
     assert code == 0
-    preview = json.loads(buf.getvalue().strip())
-    assert preview["data"]["answered_count"] == 1
-    assert preview["data"]["unanswered"] == ["9002"]
-    assert preview["data"]["submitted"] is False
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is False
+    assert "不一致" in data["message"]
 
-    buf.truncate(0)
-    buf.seek(0)
-    code = await async_main(["--format", "json", "exam", "submit", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"])
+
+@pytest.mark.asyncio
+async def test_exam_answer_reports_unverifiable_staging(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """暂存接口不可用时不得宣称已保存。"""
+    from wkhelper.core.exceptions import APIError as CoreAPIError
+
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1})
+
+    async def _staged_boom(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        raise CoreAPIError("暂存接口不可用", retryable=True)
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_boom)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
     assert code == 0
-    result = json.loads(buf.getvalue().strip())
-    assert result["data"]["submitted"] is True
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is False
+    assert "无法读取服务端暂存作答" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_captured_submission_skips_readback(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """捕获到页面自身的作答请求与成功响应时，不再额外回读暂存。"""
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["A"]))
+
+    async def _no_readback(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        raise AssertionError("已捕获页面提交请求，不应再回读暂存作答")
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _no_readback)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is True
+    assert "平台返回成功" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_contradicting_submission_is_not_saved(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面实际提交的内容与预期不符时直接判失败，不再用暂存回读洗白。"""
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["B"]))
+
+    async def _staged_matches(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["A"]}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_matches)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is False
+    assert "提交内容为" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_reports_simulation_failure(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面定位失败必须报错，不得伪称已作答。"""
+    session = ExamBrowserSession(
+        exam_id="3001",
+        platform="XuetangXPlatform",
+        host="https://examination.test",
+        eid=42,
+        port=1,
+        profile="p",
+        web_url="https://examination.test/exam/42",
+    )
+    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+
+    class _FakeCdp:
+        events: list[dict[str, Any]] = []
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_connect(*args: Any) -> _FakeCdp:
+        return _FakeCdp()
+
+    async def _fake_simulate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"success": False, "error": "考场页面未找到选项: C"}
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.connect_exam_page", _fake_connect)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.simulate_browser_answer", _fake_simulate)
+
+    code = await async_main(["exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "C", "--confirm", "-p", "xtzx"])
+    assert code == 6
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_text_question_keeps_raw_answer(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """主观题不按逗号拆分，逐字送入页面输入框。"""
+    session = ExamBrowserSession(
+        exam_id="3001",
+        platform="XuetangXPlatform",
+        host="https://examination.test",
+        eid=42,
+        port=1,
+        profile="p",
+        web_url="https://examination.test/exam/42",
+    )
+    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+
+    async def _text_paper(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> ExamPaperData:
+        return ExamPaperData(
+            course_id="1001",
+            exam_id=str(leaf_id),
+            title="期中考试测试卷",
+            problems=[
+                ExamProblemItem(
+                    index=1,
+                    id="9001",
+                    type="主观题",
+                    prompt="简述连续的定义。",
+                    images=[],
+                    options=[],
+                    score=10.0,
+                    answer=[],
+                    has_remark=False,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_paper", _text_paper)
+
+    class _FakeCdp:
+        events: list[dict[str, Any]] = []
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_connect(*args: Any) -> _FakeCdp:
+        return _FakeCdp()
+
+    seen: dict[str, Any] = {}
+
+    async def _fake_simulate(cdp: Any, problem_id: str, keys: list[str], mode: str = "click") -> dict[str, Any]:
+        seen.update({"problem_id": problem_id, "keys": keys, "mode": mode})
+        return {"success": True}
+
+    async def _fake_wait(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _observed(["极限存在，且等于该点函数值"])
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.connect_exam_page", _fake_connect)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.simulate_browser_answer", _fake_simulate)
+    monkeypatch.setattr("wkhelper.cli.commands.exam.wait_for_answer_submission", _fake_wait)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        [
+            "--format",
+            "json",
+            "exam",
+            "answer",
+            "-c",
+            "1001",
+            "-e",
+            "3001",
+            "-q",
+            "9001",
+            "--answer",
+            "极限存在，且等于该点函数值",
+            "--confirm",
+            "-p",
+            "xtzx",
+        ]
+    )
+    assert code == 0
+    assert seen == {"problem_id": "9001", "keys": ["极限存在，且等于该点函数值"], "mode": "text"}
+    assert json.loads(buf.getvalue())["data"]["answer"] == ["极限存在，且等于该点函数值"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_judge_question_maps_display_text(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """判断题界面显示“正确/错误”，作答需映射为 true/false 选项键并按暂存校验。"""
+
+    async def _judge_paper(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> ExamPaperData:
+        return ExamPaperData(
+            course_id="1001",
+            exam_id=str(leaf_id),
+            title="期中考试测试卷",
+            problems=[
+                ExamProblemItem(
+                    index=1,
+                    id="9001",
+                    type="判断题",
+                    prompt="人类具有进化选择的积极天性。",
+                    images=[],
+                    options=[OptionItem(key="true", text="正确"), OptionItem(key="false", text="错误")],
+                    score=2.0,
+                    answer=["true"],
+                    has_remark=False,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_paper", _judge_paper)
+
+    async def _staged_true(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["true"]}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_true)
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1})
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "正确", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["answer"] == ["true"]
+    assert data["saved"] is True
+
+
+@pytest.mark.asyncio
+async def test_exam_submitted_exam_cannot_reenter(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """已交卷考试不得再次入场或作答，但仍可只读查看试卷。"""
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _submitted_cover)
+    opened: list[str] = []
+
+    async def _fake_open_browser(**kwargs: Any) -> Any:
+        opened.append("browser")
+        raise AssertionError("已交卷考试不得拉起考场浏览器")
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.open_exam_browser", _fake_open_browser)
+
+    assert await async_main(["exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]) == 6
+    assert opened == []
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    assert await async_main(["--format", "json", "exam", "paper", "-c", "1001", "-e", "3001", "-p", "xtzx"]) == 0
+    assert json.loads(buf.getvalue())["data"]["title"] == "期中考试测试卷"
 
 
 @pytest.mark.asyncio
@@ -403,13 +750,13 @@ async def test_exam_inspect_overdue(mock_exam_env: None, monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_exam_start_and_submit_blocked_when_overdue(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """已缺考的考试不允许再进入考场或交卷，直接返回不可重试的平台错误。"""
+async def test_exam_start_blocked_when_overdue(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """已缺考的考试不允许再进入考场或读取试卷，直接返回不可重试的平台错误。"""
     monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _overdue_cover)
 
     assert await async_main(["exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
-    assert await async_main(["exam", "submit", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
-    assert await async_main(["exam", "submit", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "paper", "-c", "1001", "-e", "3001", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "export", "-c", "1001", "-e", "3001", "-o", "exam.md", "-p", "xtzx"]) == 6
 
 
 def test_proctoring_payload_detects_flags() -> None:
@@ -431,6 +778,24 @@ def test_proctoring_payload_detects_flags() -> None:
         capture_screen=False,
     )
     assert proctoring_payload(quiet) is None
+
+    app_only = ExamCoverDetail(
+        course_id="5812766",
+        exam_id="84705331",
+        title="期末考试",
+        problem_count=28,
+        total_score=51.0,
+        limit_minutes=0,
+        start_time=None,
+        deadline=None,
+        status="未开始",
+        description="",
+        face_auth=False,
+        capture_screen=False,
+        app_capture_screen=True,
+        front_random_snap=True,
+    )
+    assert proctoring_payload(app_only) is None
 
     proctored = ExamCoverDetail(
         course_id="1001",
@@ -476,20 +841,39 @@ async def test_exam_start_dry_run_emits_proctoring_event(mock_exam_env: None, mo
 
 @pytest.mark.asyncio
 async def test_exam_write_results_carry_cli_notice(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """考试写命令必须在结果里明确提示：CLI 不产生心跳/截屏/切屏上报。"""
+    """考试写命令必须声明交卷由本人在浏览器完成，CLI 不代提交。"""
     buf = StringIO()
     monkeypatch.setattr("sys.stdout", buf)
 
     code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
     assert code == 0
     notice = json.loads(buf.getvalue())["data"]["notice"]
-    assert "不会产生考场心跳" in notice
+    assert "本人点击交卷" in notice
+    assert "浏览器" in notice
 
-    buf.truncate(0)
-    buf.seek(0)
-    code = await async_main(["--format", "json", "exam", "submit", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
-    assert code == 0
-    assert "不会产生考场心跳" in json.loads(buf.getvalue())["data"]["notice"]
+
+@pytest.mark.asyncio
+async def test_exam_start_and_answer_blocked_by_proctoring(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """强监考考试只允许预览，进入考场与作答都在触达页面前被拦下。"""
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _proctored_cover)
+    session = ExamBrowserSession(
+        exam_id="3001",
+        platform="XuetangXPlatform",
+        host="https://examination.test",
+        eid=42,
+        port=1,
+        profile="p",
+        web_url="https://examination.test/exam/42",
+    )
+    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+
+    async def _fail_connect(*args: Any) -> Any:
+        raise AssertionError("强监考考试不得连接考场页面")
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.connect_exam_page", _fail_connect)
+
+    assert await async_main(["exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]) == 6
 
 
 def test_exam_session_roundtrip(tmp_path) -> None:
