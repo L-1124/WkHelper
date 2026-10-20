@@ -70,6 +70,7 @@ class VideoParameters:
             raise ValueError(f"{context} 字段 'jitter' 必须位于 [0, 1) 区间")
         if self.progress_interval is not None and self.progress_interval <= 0:
             raise ValueError(f"{context} 字段 'progress_interval' 必须为正数")
+        if self.video_timeout is not None and self.video_timeout <= 0:
             raise ValueError(f"{context} 字段 'video_timeout' 必须为正数")
         if self.stall_timeout is not None and self.stall_timeout <= 0:
             raise ValueError(f"{context} 字段 'stall_timeout' 必须为正数")

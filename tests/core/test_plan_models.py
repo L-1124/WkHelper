@@ -75,12 +75,24 @@ def test_parameter_layering_precedence() -> None:
         {"jitter": 1.5},
         {"jitter": -0.1},
         {"video_delay": -1},
+        {"video_timeout": 0},
+        {"video_timeout": -10},
+        {"progress_interval": 0},
+        {"stall_timeout": 0},
         {"unknown_param": 1},
     ],
 )
 def test_video_parameters_reject_invalid_values(raw: dict[str, JsonValue]) -> None:
     with pytest.raises(ValueError):
         VideoParameters.from_mapping(raw)
+
+
+def test_video_parameters_rejects_invalid_video_timeout() -> None:
+    """验证 video_timeout 校验生效且报错信息准确。"""
+    with pytest.raises(ValueError, match="video_timeout.*必须为正数"):
+        VideoParameters.from_mapping({"video_timeout": 0})
+    with pytest.raises(ValueError, match="video_timeout.*必须为正数"):
+        VideoParameters.from_mapping({"video_timeout": -10})
 
 
 def test_execution_overrides_layering() -> None:

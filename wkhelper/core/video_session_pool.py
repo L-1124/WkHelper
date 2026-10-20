@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import urllib.request
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,6 +44,8 @@ class VideoWarmSession:
     ttl_seconds: float = 120.0
     web_url: str = ""
     watchdog_pid: int | None = None
+    account_id: str | None = None
+    platform: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -62,6 +64,8 @@ class VideoWarmSession:
             ttl_seconds=float(data.get("ttl_seconds", 120.0)),
             web_url=str(data.get("web_url", "")),
             watchdog_pid=int(data["watchdog_pid"]) if data.get("watchdog_pid") is not None else None,
+            account_id=str(data["account_id"]) if data.get("account_id") is not None else None,
+            platform=str(data["platform"]) if data.get("platform") is not None else None,
         )
 
 
@@ -98,21 +102,38 @@ def get_session_file(
 
 _FILE_LOCK_OWNERS: dict[str, tuple[int, int | None, int]] = {}
 _FILE_LOCK_MUTEX = threading.Lock()
-_ASYNC_ACTIVE_PATHS: set[str] = set()
 
 
-def _is_async_path_locked(norm_path: str) -> bool:
-    with _FILE_LOCK_MUTEX:
-        return norm_path in _ASYNC_ACTIVE_PATHS
+@contextlib.asynccontextmanager
+async def async_file_lock(
+    lock_path: Path | str,
+    timeout: float = 15.0,
+    poll_interval: float = 0.02,
+) -> AsyncGenerator[None, None]:
+    """复用同步锁的非阻塞尝试，等待时让出事件循环，取消时不遗留持锁线程。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(file_lock(lock_path, timeout=0))
+            except TimeoutError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"获取会话文件锁超时 ({timeout}s): {lock_path}") from None
+            else:
+                yield
+                return
+        await asyncio.sleep(min(max(0.001, poll_interval), remaining))
 
 
 @contextlib.contextmanager
 def file_lock(lock_path: Path | str, timeout: float = 15.0) -> Generator[None, None, None]:
-    actual_lock = Path(str(lock_path) + ".lock")
+    """跨进程与跨线程的文件互斥锁（阻塞等待）。"""
+    path_str = str(lock_path)
+    actual_lock = Path(path_str if path_str.endswith(".lock") else path_str + ".lock")
     actual_lock.parent.mkdir(parents=True, exist_ok=True)
     norm_path = str(actual_lock.resolve())
     thread_id = threading.get_ident()
-    running_loop: asyncio.AbstractEventLoop | None = None
     try:
         running_loop = asyncio.get_running_loop()
         current_task = asyncio.current_task(running_loop)
@@ -141,17 +162,7 @@ def file_lock(lock_path: Path | str, timeout: float = 15.0) -> Generator[None, N
                         _FILE_LOCK_OWNERS.pop(norm_path, None)
         return
 
-    start_time = time.time()
-    async_lock_acquired = False
-    if running_loop is not None and running_loop.is_running():
-        while _is_async_path_locked(norm_path):
-            if time.time() - start_time >= timeout:
-                raise TimeoutError(f"获取会话文件锁超时 ({timeout}s): {actual_lock}")
-            time.sleep(0.02)
-        with _FILE_LOCK_MUTEX:
-            if norm_path not in _ASYNC_ACTIVE_PATHS:
-                _ASYNC_ACTIVE_PATHS.add(norm_path)
-                async_lock_acquired = True
+    start_time = time.monotonic()
     with open(actual_lock, "a+b") as init_f:
         if init_f.tell() == 0:
             init_f.write(b"\x00")
@@ -161,25 +172,45 @@ def file_lock(lock_path: Path | str, timeout: float = 15.0) -> Generator[None, N
     acquired = False
     try:
         while True:
-            try:
-                if sys.platform == "win32":
-                    import msvcrt
+            can_try_os = False
+            with _FILE_LOCK_MUTEX:
+                if norm_path not in _FILE_LOCK_OWNERS:
+                    can_try_os = True
 
-                    fd.seek(0)
-                    msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
+            if can_try_os:
+                try:
+                    if sys.platform == "win32":
+                        import msvcrt
 
-                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except OSError:
-                if time.time() - start_time >= timeout:
-                    raise TimeoutError(f"获取会话文件锁超时 ({timeout}s): {actual_lock}") from None
-                time.sleep(0.02)
+                        fd.seek(0)
+                        msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
 
-        with _FILE_LOCK_MUTEX:
-            _FILE_LOCK_OWNERS[norm_path] = (thread_id, task_id, 1)
+                        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                    with _FILE_LOCK_MUTEX:
+                        if norm_path not in _FILE_LOCK_OWNERS:
+                            _FILE_LOCK_OWNERS[norm_path] = (thread_id, task_id, 1)
+                            acquired = True
+                            break
+                        else:
+                            if sys.platform == "win32":
+                                import msvcrt
+
+                                fd.seek(0)
+                                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+                            else:
+                                import fcntl
+
+                                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
+            if time.monotonic() - start_time >= timeout:
+                raise TimeoutError(f"获取会话文件锁超时 ({timeout}s): {actual_lock}")
+            time.sleep(0.02)
+
         yield
     finally:
         if acquired:
@@ -197,10 +228,10 @@ def file_lock(lock_path: Path | str, timeout: float = 15.0) -> Generator[None, N
                     fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
             except Exception:
                 pass
-        fd.close()
-        if async_lock_acquired:
-            with _FILE_LOCK_MUTEX:
-                _ASYNC_ACTIVE_PATHS.discard(norm_path)
+        try:
+            fd.close()
+        except Exception:
+            pass
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -467,7 +498,7 @@ async def get_or_create_warm_session(
     target_dir = session_file.parent
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    with file_lock(session_file, timeout=10.0):
+    async with async_file_lock(session_file, timeout=10.0):
         if session_file.exists():
             try:
                 data = json.loads(session_file.read_text(encoding="utf-8"))
@@ -521,6 +552,8 @@ async def get_or_create_warm_session(
                 ttl_seconds=ttl_seconds,
                 web_url=web_url,
                 watchdog_pid=watchdog_pid,
+                account_id=account_id,
+                platform=platform,
             )
             session_file.write_text(json.dumps(new_session.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
             return new_session, True
@@ -571,12 +604,14 @@ def close_warm_session(
     account_id: str | None = None,
     platform: str | None = None,
 ) -> None:
+    resolved_account = account_id if account_id is not None else session.account_id
+    resolved_platform = platform if platform is not None else session.platform
     session_file = get_session_file(
         session.course_id,
         session.video_id,
         session_dir=session_dir,
-        account_id=account_id,
-        platform=platform,
+        account_id=resolved_account,
+        platform=resolved_platform,
     )
     with file_lock(session_file, timeout=5.0):
         clean_session_resources(session, session_file)
@@ -592,16 +627,22 @@ def cleanup_all_warm_sessions(session_dir: Path | None = None) -> int:
             with file_lock(file_path, timeout=3.0):
                 if not file_path.exists():
                     continue
-                data = json.loads(file_path.read_text(encoding="utf-8"))
-                sess = VideoWarmSession.from_dict(data)
-                clean_session_resources(sess, file_path)
-                cleaned += 1
+                try:
+                    data = json.loads(file_path.read_text(encoding="utf-8"))
+                    sess = VideoWarmSession.from_dict(data)
+                    clean_session_resources(sess, file_path)
+                    cleaned += 1
+                except Exception as exc:
+                    logger.debug(f"会话元数据损坏，清理无效文件 {file_path}: {exc}")
+                    try:
+                        file_path.unlink()
+                    except OSError:
+                        pass
+        except TimeoutError:
+            logger.debug(f"获取会话文件锁超时，会话可能正在活跃使用，跳过清理: {file_path}")
+            continue
         except Exception as exc:
-            logger.debug(f"清理会话文件 {file_path} 失败: {exc}")
-            try:
-                file_path.unlink()
-            except OSError:
-                pass
+            logger.debug(f"清理会话文件 {file_path} 异常: {exc}")
     return cleaned
 
 
@@ -636,6 +677,7 @@ __all__ = [
     "clean_session_resources",
     "cleanup_all_warm_sessions",
     "close_warm_session",
+    "async_file_lock",
     "file_lock",
     "get_active_page_ws",
     "get_default_video_session_dir",

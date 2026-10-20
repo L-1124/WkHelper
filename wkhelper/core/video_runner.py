@@ -57,8 +57,11 @@ class VideoPlanRunner:
         )
 
     @staticmethod
-    def _load_completed_records(resume_from: str | Path, target_keys: set[str]) -> list[VideoTargetResult]:
-        """从检查点读取已完成记录，仅保留属于当前目标集的条目。"""
+    def _load_completed_records(
+        resume_from: str | Path,
+        target_thresholds: dict[str, float],
+    ) -> list[VideoTargetResult]:
+        """从检查点读取已完成记录，仅保留属于当前目标集且满足本次有效阈值的条目。"""
         resume_path = Path(resume_from)
         if not resume_path.exists():
             return []
@@ -84,7 +87,12 @@ class VideoPlanRunner:
                 logger.debug(f"跳过无效检查点记录: {exc}")
                 continue
             key = f"{record.course_id}:{record.video_id}"
-            if key in target_keys and key not in seen and record.status in ("completed", "threshold_reached"):
+            if (
+                key in target_thresholds
+                and key not in seen
+                and record.status in ("completed", "threshold_reached")
+                and (record.platform_completed or record.final_rate >= target_thresholds[key])
+            ):
                 seen.add(key)
                 preserved.append(record)
         return preserved
@@ -105,19 +113,23 @@ class VideoPlanRunner:
         base_options = default_options or VideoWatchOptions()
         semaphore = asyncio.Semaphore(max(1, concurrency))
 
-        # 1. 目标排重（相同 course_id + video_id 只保留第一个）
+        # 1. 目标排重（相同 course_id + video_id 只保留第一个）并计算有效阈值
         deduped_targets: list[VideoTarget] = []
         seen_keys: set[str] = set()
+        target_thresholds: dict[str, float] = {}
         for target in targets:
             key = f"{target.course_id}:{target.video_id}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped_targets.append(target)
+                merged_opts = (
+                    base_options.with_parameters(plan_parameters).with_parameters(target.parameters).with_parameters(cli_parameters)
+                )
+                target_thresholds[key] = merged_opts.completion_threshold
 
-        # 2. 读取已有检查点恢复记录（仅恢复属于本次计划 targets 的完成项）
-        preserved_records = self._load_completed_records(resume_from, seen_keys) if resume_from else []
+        # 2. 读取已有检查点恢复记录（依据本次合并有效阈值和 final_rate 判恢复资格）
+        preserved_records = self._load_completed_records(resume_from, target_thresholds) if resume_from else []
         completed_target_keys = {f"{record.course_id}:{record.video_id}" for record in preserved_records}
-
         results: list[VideoTargetResult] = list(preserved_records)
         lock = asyncio.Lock()
         stop_flag = False
@@ -145,8 +157,6 @@ class VideoPlanRunner:
 
         async def worker(target: VideoTarget) -> None:
             nonlocal stop_flag
-            if stop_flag:
-                return
 
             target_key = f"{target.course_id}:{target.video_id}"
             # 已从检查点恢复的完成项直接跳过
@@ -164,6 +174,9 @@ class VideoPlanRunner:
 
             async with semaphore:
                 if stop_flag:
+                    async with lock:
+                        results.append(self._failed_result(target, "执行已停止，目标未启动", status="stopped"))
+                        _save_checkpoint()
                     return
                 # 总预算耗尽后不再启动新目标
                 if asyncio.get_running_loop().time() >= plan_deadline:
@@ -173,16 +186,18 @@ class VideoPlanRunner:
                         stop_flag = True
                     return
                 try:
-                    # 内建默认值 < 计划级参数 < 目标级参数 < 本次命令行显式覆盖
-                    merged = (
-                        base_options.with_parameters(plan_parameters).with_parameters(target.parameters).with_parameters(cli_parameters)
-                    )
-                    res = await self.platform.do_video(
-                        video_id=target.video_id,
-                        video_name=target.name or target.video_id,
-                        course=course,
-                        options=merged,
-                    )
+                    # 总预算约束已启动 do_video 及准备请求
+                    async with asyncio.timeout_at(plan_deadline):
+                        # 内建默认值 < 计划级参数 < 目标级参数 < 本次命令行显式覆盖
+                        merged = (
+                            base_options.with_parameters(plan_parameters).with_parameters(target.parameters).with_parameters(cli_parameters)
+                        )
+                        res = await self.platform.do_video(
+                            video_id=target.video_id,
+                            video_name=target.name or target.video_id,
+                            course=course,
+                            options=merged,
+                        )
                     record = res.with_course_id(target.course_id)
                     async with lock:
                         results.append(record)
@@ -190,13 +205,21 @@ class VideoPlanRunner:
                         if record.status in ("failed", "timed_out", "stalled") and on_error == "stop":
                             stop_flag = True
 
-                    # 跨视频切换冷却延迟（带随机抖动）
-                    if merged.video_delay > 0 and not stop_flag and len(results) < len(deduped_targets):
+                    # 跨视频切换冷却延迟（带随机抖动），且不得超出整次执行剩余预算
+                    remaining_budget = max(0.0, plan_deadline - asyncio.get_running_loop().time())
+                    if merged.video_delay > 0 and not stop_flag and len(results) < len(deduped_targets) and remaining_budget > 0:
                         actual_delay = merged.video_delay
                         if merged.jitter > 0:
                             delta = actual_delay * merged.jitter
                             actual_delay = max(0.5, actual_delay + random.uniform(-delta, delta))
-                        await asyncio.sleep(actual_delay)
+                        capped_delay = min(actual_delay, remaining_budget)
+                        if capped_delay > 0:
+                            await asyncio.sleep(capped_delay)
+                except TimeoutError:
+                    async with lock:
+                        results.append(self._failed_result(target, "整次执行总时间预算耗尽", status="timed_out"))
+                        _save_checkpoint()
+                        stop_flag = True
                 except Exception as exc:
                     async with lock:
                         results.append(self._failed_result(target, str(exc)))

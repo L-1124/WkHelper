@@ -1,6 +1,7 @@
 """视频截帧 Warm Session 进程池与 Watchdog 守护机制单元测试。"""
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -8,15 +9,18 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from wkhelper.core.browser_manager import BrowserProcess
+from wkhelper.core.browser_manager import BrowserManager, BrowserProcess
+from wkhelper.core.results import VideoSnapshotFrame
 from wkhelper.core.video_session_pool import (
     VideoWarmSession,
     _watchdog_main,
     acquire_warm_session,
+    async_file_lock,
     check_cdp_alive,
     cleanup_all_warm_sessions,
     close_warm_session,
@@ -47,6 +51,8 @@ def test_video_warm_session_model() -> None:
         ttl_seconds=120.0,
         web_url="https://example.com/video",
         watchdog_pid=5678,
+        account_id="user_123",
+        platform="ykt",
     )
 
     data = session.to_dict()
@@ -55,6 +61,8 @@ def test_video_warm_session_model() -> None:
     assert data["pid"] == 1234
     assert data["port"] == 9222
     assert data["watchdog_pid"] == 5678
+    assert data["account_id"] == "user_123"
+    assert data["platform"] == "ykt"
 
     restored = VideoWarmSession.from_dict(data)
     assert restored.course_id == "1001"
@@ -67,6 +75,8 @@ def test_video_warm_session_model() -> None:
     assert restored.ttl_seconds == 120.0
     assert restored.web_url == "https://example.com/video"
     assert restored.watchdog_pid == 5678
+    assert restored.account_id == "user_123"
+    assert restored.platform == "ykt"
 
 
 def test_session_path_and_sanitization() -> None:
@@ -629,3 +639,183 @@ def test_file_lock_acquired_flag_on_failure() -> None:
         import shutil
 
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_async_file_lock_holder_await_competitor_succeeds() -> None:
+    """行为测试：持锁任务 await 挂起时，等待的竞争者不应卡死事件循环，并在持锁者释放后成功获取锁。"""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_async_lock_succ_"))
+    lock_target = temp_dir / "target.json"
+    try:
+        task1_acquired = asyncio.Event()
+        task1_released = asyncio.Event()
+        task2_acquired = asyncio.Event()
+        order: list[str] = []
+
+        async def holder() -> None:
+            async with async_file_lock(lock_target, timeout=2.0):
+                order.append("holder_acquired")
+                task1_acquired.set()
+                # 持锁并挂起让出事件循环
+                await asyncio.sleep(0.1)
+            order.append("holder_released")
+            task1_released.set()
+
+        async def competitor() -> None:
+            await task1_acquired.wait()
+            # 竞争者非阻塞等待锁
+            async with async_file_lock(lock_target, timeout=2.0):
+                order.append("competitor_acquired")
+                assert task1_released.is_set()
+                task2_acquired.set()
+
+        await asyncio.gather(holder(), competitor())
+        assert task2_acquired.is_set()
+        assert order == ["holder_acquired", "holder_released", "competitor_acquired"]
+    finally:
+        import shutil
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_async_file_lock_cancellation_safety() -> None:
+    """行为测试：竞争任务在非阻塞等待锁期间被取消，不得遗留持锁状态或后台线程，后续任务仍可成功获取。"""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_async_lock_cancel_"))
+    lock_target = temp_dir / "target.json"
+    try:
+        task1_acquired = asyncio.Event()
+        task2_started = asyncio.Event()
+        task3_success = asyncio.Event()
+
+        async def holder() -> None:
+            async with async_file_lock(lock_target, timeout=2.0):
+                task1_acquired.set()
+                await asyncio.sleep(0.2)
+
+        async def competitor() -> None:
+            await task1_acquired.wait()
+            task2_started.set()
+            async with async_file_lock(lock_target, timeout=5.0):
+                pass
+
+        holder_task = asyncio.create_task(holder())
+        comp_task = asyncio.create_task(competitor())
+        await task2_started.wait()
+        # 竞争者处于 await asyncio.sleep 等待状态时取消它
+        await asyncio.sleep(0.02)
+        comp_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await comp_task
+        assert comp_task.cancelled()
+
+        await holder_task
+
+        # 后续任务应能立即成功获取锁
+        async with async_file_lock(lock_target, timeout=1.0):
+            task3_success.set()
+
+        assert task3_success.is_set()
+    finally:
+        import shutil
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_cleanup_all_warm_sessions_skips_timeout_preserves_metadata_cleans_corrupted() -> None:
+    """行为测试：cleanup_all_warm_sessions 遇到锁超时必须跳过不能删元数据；锁取得后坏文件仍可清理。"""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_cleanup_safe_"))
+    try:
+        active_sess_file = temp_dir / "session_active.json"
+        corrupt_sess_file = temp_dir / "session_corrupt.json"
+
+        active_sess = VideoWarmSession(course_id="c_act", video_id="v_act", pid=99999, port=9099, profile_dir="")
+        active_sess_file.write_text(json.dumps(active_sess.to_dict()), encoding="utf-8")
+        corrupt_sess_file.write_text("{invalid json corrupt content...", encoding="utf-8")
+
+        # 模拟 active_sess_file 获取锁时超时，而 corrupt_sess_file 正常获取锁
+        real_file_lock = file_lock
+
+        @contextlib.contextmanager
+        def fake_lock(path: Path | str, timeout: float = 3.0):
+            if "session_active" in str(path):
+                raise TimeoutError("获取会话文件锁超时")
+            with real_file_lock(path, timeout=timeout):
+                yield
+
+        with patch("wkhelper.core.video_session_pool.file_lock", side_effect=fake_lock):
+            cleaned = cleanup_all_warm_sessions(session_dir=temp_dir)
+
+            # 活跃会话因为锁超时被跳过，元数据未被删除！
+            assert active_sess_file.exists()
+            # 损坏的会话取得了锁，被正常清理！
+            assert not corrupt_sess_file.exists()
+            assert cleaned == 0
+    finally:
+        import shutil
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_default_snapshot_identity_selects_own_cached_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """省略 CLI 身份时，切换用户必须命中各自已认证的缓存，而非共用旧会话。"""
+    from wkhelper.cli.commands.video import video_snapshot_cmd
+    from wkhelper.core.entities import Course, UserInfo
+
+    for account, pid in (("10001", 101), ("20002", 202)):
+        session = VideoWarmSession(
+            course_id="c1", video_id="v1", pid=pid, port=9000 + pid, profile_dir="", account_id=account, platform="ykt"
+        )
+        path = get_session_file("c1", "v1", session_dir=tmp_path, account_id=account, platform="ykt")
+        path.write_text(json.dumps(session.to_dict()), encoding="utf-8")
+
+    monkeypatch.setattr("wkhelper.core.video_session_pool.is_pid_alive", lambda pid: True)
+    monkeypatch.setattr("wkhelper.core.video_session_pool.check_cdp_alive", lambda port: True)
+
+    def forbid_launch(**kwargs: object):
+        raise AssertionError("账号对应缓存应已命中，不应创建其他浏览器")
+
+    monkeypatch.setattr(BrowserManager, "launch_browser", forbid_launch)
+    selected_pids: list[int] = []
+
+    async def capture_using_real_cache(**kwargs: Any) -> list[VideoSnapshotFrame]:
+        session, is_new = await get_or_create_warm_session(
+            course_id=kwargs["course_id"],
+            video_id=kwargs["video_id"],
+            web_url=kwargs["web_url"],
+            cookies={},
+            cookie_domain=".yuketang.cn",
+            session_dir=tmp_path,
+            account_id=kwargs["account_id"],
+            platform=kwargs["platform"],
+        )
+        assert not is_new
+        selected_pids.append(session.pid)
+        return []
+
+    monkeypatch.setattr("wkhelper.cli.commands.video.capture_video_frames", capture_using_real_cache)
+
+    class AuthenticatedPlatform:
+        api_base = "https://www.yuketang.cn"
+        platform_code = "ykt"
+        client = MagicMock(cookies={})
+
+        def __init__(self, account: str) -> None:
+            self.user = UserInfo(id=account, name="user")
+            self.account_id = account
+
+        def format_web_task_url(self, *args: object) -> str:
+            return "https://www.yuketang.cn/video/v1"
+
+    current_account = "10001"
+
+    @contextlib.asynccontextmanager
+    async def open_course(*args: object, **kwargs: object):
+        yield AuthenticatedPlatform(current_account), Course("c1", "course", "ykt")
+
+    monkeypatch.setattr("wkhelper.cli.commands.video._open_course", open_course)
+    await video_snapshot_cmd(course="c1", video="v1", timestamps="10")
+    current_account = "20002"
+    await video_snapshot_cmd(course="c1", video="v1", timestamps="10")
+    assert selected_pids == [101, 202]

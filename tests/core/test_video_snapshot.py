@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import os
 import tempfile
 import time
@@ -464,6 +465,9 @@ async def test_video_snapshot_cmd_partial_and_total_failure(monkeypatch: pytest.
         api_base = "https://www.xuetangx.com"
         cookie_domain = ".xuetangx.com"
         client = AsyncMock(cookies={})
+        user = None
+        account_id = "test-user"
+        platform_code = "xtzx"
 
         def format_web_task_url(self, course: object, leaf_id: object, leaf_type: str) -> str:
             return "https://www.xuetangx.com/learn/1/video/1"
@@ -692,6 +696,9 @@ async def test_video_snapshot_cmd_no_cache_flag(monkeypatch: pytest.MonkeyPatch)
         api_base = "https://www.xuetangx.com"
         cookie_domain = ".xuetangx.com"
         client = MagicMock()
+        user = None
+        account_id = "test-user"
+        platform_code = "xtzx"
 
         def format_web_task_url(self, course: object, leaf_id: object, leaf_type: str) -> str:
             return "https://www.xuetangx.com/learn/1/video/1"
@@ -834,11 +841,14 @@ async def test_capture_video_frames_lock_timeout_preserves_session_file(monkeypa
         sess_file = get_session_file("c_pres", "v_pres", session_dir=session_dir)
         sess_file.write_text('{"course_id": "c_pres", "video_id": "v_pres"}', encoding="utf-8")
 
-        # 模拟 file_lock 超时
-        def fake_file_lock(*args: object, **kwargs: object):
-            raise TimeoutError("获取会话文件锁超时")
+        # 模拟 async_file_lock 超时
+        @contextlib.asynccontextmanager
+        async def fake_async_file_lock(*args: object, **kwargs: object):
+            if True:
+                raise TimeoutError("获取会话文件锁超时")
+            yield
 
-        monkeypatch.setattr("wkhelper.core.video_snapshot.file_lock", fake_file_lock)
+        monkeypatch.setattr("wkhelper.core.video_snapshot.async_file_lock", fake_async_file_lock)
 
         mock_ephemeral_proc = BrowserProcess(
             pid=4444,

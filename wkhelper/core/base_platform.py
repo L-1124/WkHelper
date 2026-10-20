@@ -60,7 +60,7 @@ from wkhelper.core.transport import (
 from wkhelper.core.transport import (
     Timeout as HttpTimeout,
 )
-from wkhelper.core.video import VideoWatchOptions, generic_watch_video, parse_progress_text
+from wkhelper.core.video import VideoWatchOptions, generic_watch_video, parse_progress_completed, parse_progress_text
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +242,8 @@ class BasePlatform(ABC):
     ) -> None:
         self.client = client
         self.user: UserInfo | None = None
+        self.platform_code: str | None = None
+        self.account_id: str | None = None
         self.current_cookies: dict[str, str] | None = None
         self.gate = gate or RateGate()
         self.retry_policy = retry_policy or RetryPolicy()
@@ -800,14 +802,15 @@ class BasePlatform(ABC):
         """真正开始作答：调用 `start_paper` 创建作答记录并启动服务端计时。"""
         host, eid, login_url = await self._open_exam_room(leaf_id, course)
         resp = await self._request_json("POST", f"{host}/exam_room/start_paper", json={"exam_id": eid})
-        ok = int(resp.get("errcode") or 0) == 0
+        if resp.get("success") is False or resp.get("errcode") not in (0, "0") or isinstance(resp.get("errcode"), bool):
+            raise APIError(f"开始作答未获平台确认: {resp.get('errmsg') or resp.get('msg') or '缺少有效成功码'}", retryable=False)
         cover = await self.get_exam_cover(leaf_id, course)
-        message = "作答已开始，服务端计时已启动" if ok else f"开始作答失败: {resp.get('errmsg') or '未知错误'}"
+        message = "作答已开始，服务端计时已启动"
         return ExamStartResult(
             course_id=str(course.id),
             exam_id=str(leaf_id),
             title=cover.title,
-            started=ok,
+            started=True,
             limit_minutes=cover.limit_minutes,
             web_url=login_url,
             message=message,
@@ -901,6 +904,8 @@ class BasePlatform(ABC):
         target = next((item for item in articles if item.id == str(leaf_id)), None)
         title = target.name if target else str(leaf_id)
         success = await self._mark_article_finish(leaf_id, course)
+        if not success:
+            raise APIError(f"资料 {leaf_id} 标记完成失败，平台未确认成功", retryable=False)
         return ArticleReadResult(
             course_id=str(course.id),
             leaf_id=str(leaf_id),
@@ -1131,34 +1136,21 @@ class BasePlatform(ABC):
         max_attempts = max(1, self.retry_policy.max_attempts) + 6
         for attempt in range(1, max_attempts + 1):
             await self.gate.acquire()
-            req_start = time.perf_counter()
-            response = await self.client.post(url, json=payload, **(kwargs or {}))
-            body = response.text or ""
-            self._trace_http("POST", url, req_start, response.status_code)
-
-            hint = parse_retry_hint(body, response.headers.get("Retry-After"))
-            if hint is not None or response.status_code == 429:
-                wait = hint if hint is not None else self.gate.backoff_delay(attempt, self.retry_policy)
-                if on_status:
-                    on_status(f"限流等待 {wait:.0f}s")
-                await self.gate.cooldown(wait)
-                continue
-
             try:
-                response.raise_for_status()
-            except HttpError as exc:
-                if response.status_code in (401, 403):
-                    raise AuthError(f"平台拒绝提交（HTTP {response.status_code}），登录态可能已失效") from exc
-                if response.status_code >= 500 and attempt < max_attempts:
+                parsed = await self._request_json_once("POST", url, json=payload, **(kwargs or {}))
+            except APIError as exc:
+                if not exc.retryable or attempt >= max_attempts:
+                    raise
+                if exc.retry_after is not None or exc.status_code == 429:
+                    wait = exc.retry_after if exc.retry_after is not None else self.gate.backoff_delay(attempt, self.retry_policy)
+                    if on_status:
+                        on_status(f"限流等待 {wait:.0f}s")
+                    await self.gate.cooldown(wait)
+                elif exc.status_code is not None and exc.status_code >= 500:
                     await asyncio.sleep(self.gate.backoff_delay(attempt, self.retry_policy))
-                    continue
-                raise APIError(
-                    f"题目 {problem_id} 提交失败（HTTP {response.status_code}）",
-                    status_code=response.status_code,
-                ) from exc
-            parsed = response.json()
-            if not isinstance(parsed, dict):
-                raise APIError(f"题目 {problem_id} 提交返回结构无法识别")
+                else:
+                    raise
+                continue
             return self._parse_submit_response(parsed)
 
         raise APIError(f"题目 {problem_id} 提交重试次数过多，平台持续限流", retryable=True)
@@ -1283,7 +1275,7 @@ class BasePlatform(ABC):
             course_id=str(course.id),
             video_id=str(video_id),
             current_rate=rate,
-            completed='"completed":1' in text or rate >= 1.0,
+            completed=parse_progress_completed(text, str(video_id)) or rate >= 1.0,
         )
 
     @abstractmethod

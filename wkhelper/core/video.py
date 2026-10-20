@@ -81,15 +81,45 @@ class PayloadGenerator(Protocol):
     ) -> RequestOptions: ...
 
 
-def parse_progress_detail(text: str, video_id: str) -> tuple[float, float, float]:
+def parse_progress_completed(text: str, video_id: str | int) -> bool:
+    """从进度响应文本精确判断指定 video_id 是否已完播。
+
+    只针对目标视频节点的 JSON 字段判断 completed，忽略其他视频节点及文本中的空白或无关字段。
+    """
+    if not text or not text.strip():
+        return False
+    try:
+        parsed = parse_json_text(text)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    data = parsed.get("data")
+    if not isinstance(data, dict):
+        return False
+    target_key = str(video_id)
+    entry = data.get(target_key)
+    if not isinstance(entry, dict):
+        return False
+    val = entry.get("completed")
+    return val in (1, "1", True, "true", "True")
+
+
+def parse_progress_detail(text: str, video_id: str | int) -> tuple[float, float, float]:
     """从进度响应文本解析 (rate, watch_length, video_length)；结构不符时返回零值。"""
-    parsed = parse_json_text(text)
+    if not text or not text.strip():
+        return (0.0, 0.0, 0.0)
+    try:
+        parsed = parse_json_text(text)
+    except (ValueError, TypeError):
+        return (0.0, 0.0, 0.0)
     if not isinstance(parsed, dict):
         return (0.0, 0.0, 0.0)
     data = parsed.get("data")
     if not isinstance(data, dict):
         return (0.0, 0.0, 0.0)
-    entry = data.get(video_id)
+    target_key = str(video_id)
+    entry = data.get(target_key)
     if not isinstance(entry, dict):
         return (0.0, 0.0, 0.0)
     return (
@@ -99,7 +129,7 @@ def parse_progress_detail(text: str, video_id: str) -> tuple[float, float, float
     )
 
 
-def parse_progress_text(text: str, video_id: str) -> tuple[float, float]:
+def parse_progress_text(text: str, video_id: str | int) -> tuple[float, float]:
     """从进度响应文本解析 (rate, watch_length)。"""
     rate, watch_length, _ = parse_progress_detail(text, video_id)
     return (rate, watch_length)
@@ -144,7 +174,7 @@ async def generic_watch_video(
     try:
         resp = await client.get(progress_url, **_progress_kwargs())
         if resp.text:
-            if '"completed":1' in resp.text:
+            if parse_progress_completed(resp.text, video_id):
                 _notify("video.completed", {"video_id": video_id, "name": video_name, "rate": 1.0, "skipped": True})
                 return VideoWatchResult(
                     video_id=video_id,
@@ -279,11 +309,17 @@ async def generic_watch_video(
         try:
             resp = await client.get(progress_url, **_progress_kwargs(5.0))
             if resp.text:
-                if '"completed":1' in resp.text:
+                if parse_progress_completed(resp.text, video_id):
                     final_platform_completed = True
-                observed_rate, _ = parse_progress_text(resp.text, video_id)
-                if observed_rate > 0:
-                    current_rate = observed_rate
+                try:
+                    parsed = parse_json_text(resp.text)
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
+                    data_dict = parsed["data"]
+                    if str(video_id) in data_dict:
+                        observed_rate, _ = parse_progress_text(resp.text, video_id)
+                        current_rate = observed_rate
         except Exception:
             pass
 
@@ -297,6 +333,9 @@ async def generic_watch_video(
         status = "threshold_reached"
         message = f"达到设定阈值 ({opts.completion_threshold})"
 
+    elif status == "completed":
+        status = "failed"
+        message = f"未达到设定目标进度 (当前 {current_rate:.2f}, 目标 {opts.completion_threshold:.2f})"
     # 前端在播放结束时立即补发 videoend，用于平台消费完播事件
     if status == "completed" and loop.time() < deadline:
         try:

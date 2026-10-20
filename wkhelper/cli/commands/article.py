@@ -7,7 +7,7 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
-from wkhelper.core.exceptions import ConfirmationRequiredError
+from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
 from wkhelper.core.results import ArticleListData, ArticleReadResult
 
 article_app = App(name="article", help="资料与图文任务管理")
@@ -56,6 +56,8 @@ async def article_read_cmd(
         raise ConfirmationRequiredError("标记资料已读必须显式附加 `--confirm` 参数")
     async with _open_course(course, platform, account) as (plat, matched):
         result = await plat.read_article(article, matched)
+        if not result.success or not result.completed:
+            raise APIError(f"资料 {article} 标记完成失败，平台未确认成功", retryable=False)
         return CommandResult(data=result)
 
 

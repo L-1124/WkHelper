@@ -435,3 +435,146 @@ async def test_completed_video_sends_videoend_event():
     )
 
     assert client.posts[-1][0]["et"] == "videoend"
+
+
+def test_parse_progress_completed_ignores_other_videos_and_blank() -> None:
+    """验证 parse_progress_completed 能够忽略空白字符串与其他视频的 completed 标识。"""
+    from wkhelper.core.video import parse_progress_completed
+
+    assert not parse_progress_completed("", "v1")
+    assert not parse_progress_completed("   \n\t", "v1")
+    assert not parse_progress_completed("invalid json", "v1")
+
+    # 包含其他视频的 completed=1，但目标视频为 completed=0
+    other_json = '{"data": {"v_other": {"completed": 1, "rate": 1.0}, "v1": {"completed": 0, "rate": 0.2}}}'
+    assert not parse_progress_completed(other_json, "v1")
+    assert parse_progress_completed(other_json, "v_other")
+
+    # 包含无关字段的字符串 completed:1，但目标未完成
+    fake_json = '{"data": {"v1": {"completed": 0, "remark": "has completed:1 in text"}}}'
+    assert not parse_progress_completed(fake_json, "v1")
+
+    # 目标视频明确 completed=1
+    done_json = '{"data": {"v1": {"completed": 1, "rate": 1.0}}}'
+    assert parse_progress_completed(done_json, "v1")
+
+
+@pytest.mark.asyncio
+async def test_generic_watch_video_final_progress_rollback_or_zero_fails_without_videoend():
+    """验证循环退出后最终复查若低于阈值（含回退到0），不得残留completed且不得发送videoend。"""
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.get_count = 0
+            self.posts: list[list[dict[str, Any]]] = []
+
+        async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.get_count += 1
+            if self.get_count == 1:
+                return FakeResponse('{"data": {"v1": {"rate": 0.0, "watch_length": 0, "completed": 0}}}')
+            if self.get_count == 2:
+                return FakeResponse('{"data": {"v1": {"rate": 1.0, "watch_length": 100, "completed": 0}}}')
+            return FakeResponse('{"data": {"v1": {"rate": 0.0, "watch_length": 0, "completed": 0}}}')
+
+        async def post(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.posts.append(kwargs["json"]["heart_data"])
+            return FakeResponse('{"success": true}')
+
+    def fake_payload_gen(
+        video_id: str,
+        classroom_id: str,
+        user_id: int,
+        course_id: int,
+        sku_id: int,
+        video_frame: float,
+        seq: int,
+        timestamp: int,
+        cc: str,
+        duration: float,
+    ) -> dict[str, Any]:
+        return {"et": "heartbeat", "ts": timestamp}
+
+    client = FakeSession()
+    res = await generic_watch_video(
+        client=client,  # type: ignore[arg-type]
+        video_id="v1",
+        video_name="零进度终态回退",
+        classroom_id="c1",
+        user_id=1,
+        course_id=1,
+        sku_id=1,
+        progress_url="http://fake/progress",
+        heartbeat_url="http://fake/heartbeat",
+        payload_gen=fake_payload_gen,
+        options=VideoWatchOptions(
+            learning_rate=1.0,
+            heartbeat_interval=0.01,
+            progress_interval=0.01,
+            completion_threshold=0.9,
+            video_timeout=5.0,
+        ),
+    )
+
+    # 最终结果必须更新为 0 且状态为 failed，而不是默认的 completed
+    assert res.final_rate == 0.0
+    assert res.status == "failed"
+    assert not res.platform_completed
+    # 绝不能发送 videoend
+    for post_batch in client.posts:
+        for point in post_batch:
+            assert point.get("et") != "videoend"
+
+
+@pytest.mark.asyncio
+async def test_generic_submit_homework_interval_and_sequential_order():
+    """验证 concurrency=1 时抖动不破坏提交顺序，且各题之间存在实际提交间隔。"""
+    import asyncio
+    import time
+
+    submit_events: list[tuple[int, float]] = []
+
+    async def fake_submit(
+        problem_id: int,
+        answer: list[str],
+        course_info: Course,
+        client: AsyncSession,
+        kwargs: dict[str, Any] | None,
+        question: dict[str, Any] | None = None,
+    ) -> QuestionSubmitOutcome:
+        submit_events.append((problem_id, time.perf_counter()))
+        await asyncio.sleep(0.005)
+        return QuestionSubmitOutcome(success=True, is_correct=True, correct_answer=answer)
+
+    pairs = [({"id": i}, ["A"]) for i in range(1, 4)]
+    course = Course(id="1", name="测试课程", platform_id="test")
+
+    async with AsyncSession() as client:
+        summary = await generic_submit_homework(
+            pairs,
+            fake_submit,
+            course,
+            client,
+            concurrency=1,
+            delay=0.04,
+            delay_jitter=0.01,
+            random_order=False,
+        )
+
+    assert summary.total == 3
+    assert summary.submitted_count == 3
+    submitted_ids = [pid for pid, _ in submit_events]
+    # concurrency=1 且 random_order=False 时，必须严格按照 1, 2, 3 顺序提交，抖动不可重排
+    assert submitted_ids == [1, 2, 3]
+
+    # 校验各题提交开始时间之间的间隔：每个后续提交与前一个提交的间隔必须 >= delay - delay_jitter
+    timestamps = [ts for _, ts in submit_events]
+    for i in range(len(timestamps) - 1):
+        interval = timestamps[i + 1] - timestamps[i]
+        assert interval >= 0.025, f"题目间隔过短 ({interval:.4f}s)，未能有效限速"

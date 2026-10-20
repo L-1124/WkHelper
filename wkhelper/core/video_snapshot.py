@@ -15,8 +15,8 @@ from curl_cffi.requests import AsyncSession
 from wkhelper.core.browser_manager import BrowserManager, CdpClient
 from wkhelper.core.results import VideoSnapshotFrame
 from wkhelper.core.video_session_pool import (
+    async_file_lock,
     clean_session_resources,
-    file_lock,
     get_active_page_ws,
     get_or_create_warm_session,
     get_session_file,
@@ -415,7 +415,7 @@ async def capture_video_frames(
         )
         warm_session = None
         try:
-            with file_lock(session_file, timeout=15.0):
+            async with async_file_lock(session_file, timeout=15.0):
                 warm_session, is_new = await get_or_create_warm_session(
                     course_id=course_id,
                     video_id=video_id,

@@ -266,8 +266,8 @@ async def video_snapshot_cmd(
             course_id=str(course),
             video_id=str(video),
             use_cache=not no_cache,
-            account_id=account,
-            platform=str(platform) if platform else None,
+            account_id=str(plat.user.id) if plat.user is not None else plat.account_id,
+            platform=plat.platform_code or matched.platform_id,
         )
 
         data = VideoSnapshotData(

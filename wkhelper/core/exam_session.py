@@ -103,39 +103,44 @@ async def open_exam_browser(
     if existing is not None:
         await close_exam_browser(existing, data_dir=data_dir)
     b_proc = BrowserManager.launch_browser(mode="headful", detached=True)
-    port = b_proc.port
-    profile = b_proc.profile_dir
-    _browser_ws, page_ws = await _wait_debugger(port)
-    if not page_ws:
-        shutil.rmtree(profile, ignore_errors=True)
-        raise APIError(
-            "考场浏览器已拉起但调试端口未就绪，无法接管考场页面。"
-            "请关闭残留的 WkHelper 浏览器窗口后重试；若持续失败，检查本机 Chromium 是否禁止远程调试。",
-            retryable=True,
+    persisted = False
+    try:
+        port = b_proc.port
+        profile = b_proc.profile_dir
+        _browser_ws, page_ws = await _wait_debugger(port)
+        if not page_ws:
+            raise APIError(
+                "考场浏览器已拉起但调试端口未就绪，无法接管考场页面。"
+                "请关闭残留的 WkHelper 浏览器窗口后重试；若持续失败，检查本机 Chromium 是否禁止远程调试。",
+                retryable=True,
+            )
+
+        async with AsyncSession() as session:
+            ws = await session.ws_connect(page_ws)
+            cdp = _CdpClient(ws)
+            try:
+                if cookies:
+                    payload = [{"name": k, "value": v, "domain": cookie_domain, "path": "/"} for k, v in cookies.items()]
+                    await cdp.call("Network.setCookies", {"cookies": payload})
+                await cdp.call("Page.navigate", {"url": web_url})
+            finally:
+                await cdp.close()
+
+        record = ExamBrowserSession(
+            exam_id=str(exam_id),
+            platform=platform,
+            host=host,
+            eid=eid,
+            port=port,
+            profile=profile,
+            web_url=web_url,
         )
-
-    async with AsyncSession() as session:
-        ws = await session.ws_connect(page_ws)
-        cdp = _CdpClient(ws)
-        try:
-            if cookies:
-                payload = [{"name": k, "value": v, "domain": cookie_domain, "path": "/"} for k, v in cookies.items()]
-                await cdp.call("Network.setCookies", {"cookies": payload})
-            await cdp.call("Page.navigate", {"url": web_url})
-        finally:
-            await cdp.close()
-
-    record = ExamBrowserSession(
-        exam_id=str(exam_id),
-        platform=platform,
-        host=host,
-        eid=eid,
-        port=port,
-        profile=profile,
-        web_url=web_url,
-    )
-    save_session(record, data_dir)
-    return record
+        save_session(record, data_dir)
+        persisted = True
+        return record
+    finally:
+        if not persisted:
+            BrowserManager.close_browser(b_proc)
 
 
 async def close_exam_browser(session: ExamBrowserSession, data_dir: str | Path | None = None) -> bool:
