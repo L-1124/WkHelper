@@ -219,20 +219,24 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "examples": ["wkhelper exam result --course 1001 --exam 2001"],
     },
     "exam close": {
-        "description": "关闭 exam start --browser 拉起的常驻考场浏览器会话。",
+        "description": "关闭 exam start 拉起的考场浏览器会话并清理会话文件。",
         "side_effects": "local_write",
         "examples": ["wkhelper exam close"],
     },
     "exam answer": {
         "description": (
-            "提交考试单题作答（写入服务端暂存，不改动最终得分）；支持 --delay 与 --delay-jitter。"
-            "建议依据题目难度（判断单选 5~15s，多选/计算 15~35s，主观题 45~90s）动态指定思考延迟，避免高频机械提交触发风控。"
+            "在已打开的前台考场浏览器页面中模拟点击选项或输入文本完成单题作答，由考场前端页面自动暂存。"
+            "必须先用 `exam start --confirm` 拉起考场浏览器；直接调用 REST 作答接口的路径已移除。"
+            "`saved` 以 CDP 捕获的页面 `answer_problem` 请求与响应为准，未捕获时才回读一次暂存作答。"
+            "强监考考试（在线监考/人脸核验/网页截屏/线下考场）一律拒绝执行，已交卷或已缺考的考试同样拒绝。"
+            "客观题用逗号分隔多个选项键（判断题自动映射正确/错误），填空题按空逗号分隔，主观题整段填入。"
         ),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
             "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --dry-run",
             "wkhelper exam answer --course 1001 --exam 2001 --question 3001 --answer A --delay 10 --delay-jitter 3 --confirm",
+            "wkhelper exam answer --course 1001 --exam 2001 --question 3002 --answer '极限存在且等于该点函数值' --confirm",
         ],
     },
     "exam export": {
@@ -245,12 +249,16 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         "examples": ["wkhelper exam paper --course 1001 --exam 2001"],
     },
     "exam start": {
-        "description": "显式确认后向平台发起进入考场请求，启动考场会话与授权令牌。",
+        "description": (
+            "显式确认后向平台申请考场会话令牌，并默认拉起前台可见浏览器保持考场页面（监考与心跳采集）。"
+            "传入 `--begin` 才会真正开始作答并启动服务端计时；强监考考试拒绝进入。"
+        ),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
             "wkhelper exam start --course 1001 --exam 2001 --dry-run",
             "wkhelper exam start --course 1001 --exam 2001 --confirm",
+            "wkhelper exam start --course 1001 --exam 2001 --begin --confirm",
         ],
     },
 }

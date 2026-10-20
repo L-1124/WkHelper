@@ -1,6 +1,9 @@
 """考试查询、考场封面检索与进入考场命令。"""
 
+import asyncio
 import json
+import logging
+import random
 from typing import Annotated, Any
 
 from cyclopts import App, Parameter
@@ -9,8 +12,14 @@ from wkhelper.cli.context import PlatformCode, ctx
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult, NextAction
 from wkhelper.core.events import emit_event
+from wkhelper.core.exam_browser_driver import (
+    connect_exam_page,
+    simulate_browser_answer,
+    wait_for_answer_submission,
+)
+from wkhelper.core.exam_proctoring import assess_proctoring_risk, ensure_exam_operation_allowed
 from wkhelper.core.exam_session import browser_cookies, close_exam_browser, load_session, open_exam_browser
-from wkhelper.core.exceptions import ConfirmationRequiredError
+from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
 from wkhelper.core.exporter import export_exam_paper_to_markdown
 from wkhelper.core.json_types import JsonValue
 from wkhelper.core.results import (
@@ -20,24 +29,28 @@ from wkhelper.core.results import (
     ExamExportResult,
     ExamListData,
     ExamPaperData,
+    ExamProblemItem,
     ExamResultData,
     ExamStartPreview,
     ExamStartResult,
     ExamStatusData,
-    ExamSubmitResult,
 )
+
+logger = logging.getLogger(__name__)
 
 exam_app = App(name="exam", help="考试查询与考场管理")
 
-_CLI_NOTICE = "CLI 经 REST 接口写入，不会产生考场心跳、桌面截屏与切屏上报；如需完整监考记录，请同时保持浏览器考场页面开启"
+_CLI_NOTICE = "考场作答依托前台真实浏览器模拟点击完成；交卷属于不可逆高危操作，请在浏览器中核对无误后由本人点击交卷"
 
 
 def proctoring_payload(cover: ExamCoverDetail) -> dict[str, JsonValue] | None:
-    """把监考规则收敛为事件载荷；未开启监考时返回 None。"""
-    if not (cover.online_proctor or cover.capture_screen or cover.app_capture_screen or cover.screen_cuts):
+    """把监考规则收敛为事件载荷；未真正启用监考时返回 None。"""
+    is_restricted, reasons = assess_proctoring_risk(cover)
+    if not is_restricted:
         return None
     return {
         "exam_id": cover.exam_id,
+        "reasons": reasons,
         "online_proctor": cover.online_proctor,
         "capture_screen": cover.capture_screen,
         "app_capture_screen": cover.app_capture_screen,
@@ -67,11 +80,36 @@ async def _bind_browser_session(plat: Any, exam: str) -> None:
 
 
 def _ensure_not_overdue(cover: ExamCoverDetail) -> None:
-    """已过截止时间（已缺考）的考试不允许再进入或交卷。"""
-    from wkhelper.core.exceptions import APIError
-
+    """已缺考的考试没有可进入的考场会话，只读查询仍然可用。"""
     if cover.status == "已缺考":
-        raise APIError(f"考试 {cover.exam_id} 已过截止时间（已缺考），无法进入考场或交卷", retryable=False)
+        raise APIError(f"考试 {cover.exam_id} 已过截止时间（已缺考），无法进入考场或读取试卷", retryable=False)
+
+
+def _ensure_not_submitted(cover: ExamCoverDetail) -> None:
+    """已交卷的考试不接受任何作答或重新入场。"""
+    if cover.status == "已交卷":
+        raise APIError(f"考试 {cover.exam_id} 已交卷，无法再次进入考场或作答", retryable=False)
+
+
+def _normalize_answer(keys: list[str], mode: str) -> list[str]:
+    """把作答归一到服务端暂存格式：客观题按大写选项键排序，主观题保留原文。"""
+    if mode == "click":
+        return sorted({key.strip().upper() for key in keys if key.strip()})
+    return [key.strip() for key in keys]
+
+
+def _answer_plan(problem: ExamProblemItem, raw_answer: str) -> tuple[list[str], str]:
+    """按题型决定作答方式：客观题映射到选项键并点击，填空题按空拆分，其余整段输入。"""
+    if problem.options:
+        lookup: dict[str, str] = {}
+        for option in problem.options:
+            lookup[option.key.strip().lower()] = option.key
+            lookup[option.text.strip().lower()] = option.key
+        parts = [part.strip() for part in raw_answer.split(",") if part.strip()]
+        return [lookup.get(part.lower(), part) for part in parts], "click"
+    if problem.type and "填空" in problem.type:
+        return [part.strip() for part in raw_answer.split(",") if part.strip()], "text"
+    return [raw_answer], "text"
 
 
 @exam_app.command(name="list")
@@ -100,15 +138,27 @@ async def exam_inspect_cmd(
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
-        room_status = await plat.get_exam_room_status(exam, matched)
-        if room_status is not None:
-            cover.status = room_status
-        if cover.status == "已缺考":
+        is_restricted, reasons = assess_proctoring_risk(cover)
+        if is_restricted:
+            reasons_text = "、".join(reasons)
+            cover.description = (
+                f"【强监考安全锁定】本考试已启用强监考（{reasons_text}）。"
+                "为保护学籍与诚信记录，自动化进入考场与作答已被锁定；"
+                "请在官方客户端或考场网页中由本人独立完成。\n\n" + (cover.description or "")
+            )
+            next_actions = [
+                NextAction(
+                    reason="在官方客户端或考场网页中由本人独立完成",
+                    argv=[],
+                    description="WkHelper 不提供该考试的自动化入口",
+                )
+            ]
+        elif cover.status == "已缺考":
             next_actions = [
                 NextAction(
                     reason="已缺考：截止时间已过且未参加考试，本场不可再进入",
                     argv=[],
-                    description=f"考试 {exam} 已逾期，`exam start` 与 `exam submit` 均不会成功",
+                    description=f"考试 {exam} 已逾期，`exam start` 无法进入",
                 )
             ]
         elif cover.status == "已交卷":
@@ -122,7 +172,7 @@ async def exam_inspect_cmd(
         else:
             next_actions = [
                 NextAction(reason="预览考场信息", argv=["wkhelper", "exam", "start", "-c", course, "-e", exam, "--dry-run"]),
-                NextAction(reason="进入考场并启动计时", argv=["wkhelper", "exam", "start", "-c", course, "-e", exam, "--confirm"]),
+                NextAction(reason="进入考场并拉起浏览器", argv=["wkhelper", "exam", "start", "-c", course, "-e", exam, "--confirm"]),
             ]
         return CommandResult[ExamCoverDetail](data=cover, next_actions=next_actions)
 
@@ -133,7 +183,7 @@ async def exam_start_cmd(
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验并预览考场信息，不触发开始考试")] = False,
     confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认进入考场会话（不开始作答，需配合 --begin）")] = False,
-    browser: Annotated[bool, Parameter(name=["--browser"], help="进入考场后拉起常驻浏览器保持考场页面（心跳与监考采集）")] = False,
+    browser: Annotated[bool, Parameter(name=["--browser"], help="进入考场后拉起前台可见浏览器窗口保持考场页面（监考与心跳采集）")] = True,
     begin: Annotated[bool, Parameter(name=["--begin"], help="调用 start_paper 真正开始作答并启动服务端计时")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
@@ -158,6 +208,7 @@ async def exam_start_cmd(
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
+        _ensure_not_submitted(cover)
         _warn_proctoring(cover)
 
         if dry_run:
@@ -171,6 +222,8 @@ async def exam_start_cmd(
                 notice=_CLI_NOTICE,
             )
             return CommandResult[ExamStartPreview](data=preview)
+
+        ensure_exam_operation_allowed(cover)
 
         result = await plat.start_exam(exam, matched) if not begin else await plat.begin_exam(exam, matched)
         result.notice = _CLI_NOTICE
@@ -206,6 +259,9 @@ async def exam_paper_cmd(
     """读取考场子系统下发的整卷题目（只读，不提交答案）。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
+        cover = await plat.get_exam_cover(exam, matched)
+        _ensure_not_overdue(cover)
+        ensure_exam_operation_allowed(cover)
         paper = await plat.get_exam_paper(exam, matched)
         return CommandResult[ExamPaperData](data=paper)
 
@@ -222,6 +278,9 @@ async def exam_export_cmd(
     """把考场试卷导出为 Markdown，可选下载配图，拒绝覆盖已有文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
+        cover = await plat.get_exam_cover(exam, matched)
+        _ensure_not_overdue(cover)
+        ensure_exam_operation_allowed(cover)
         result = await export_exam_paper_to_markdown(
             plat,
             matched,
@@ -257,22 +316,22 @@ async def exam_answer_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamAnswerResult]:
-    """提交考试单题作答（写入服务端暂存，不改动最终得分）。建议依据题目难易程度动态指定 `--delay` 与 `--delay-jitter` 模拟真人思考。"""
-    keys = [part.strip() for part in answer.split(",") if part.strip()]
-    if not keys:
+    """在考场浏览器页面中模拟点击作答（由前端页面自动暂存）。"""
+    raw_answer = answer.strip()
+    if not raw_answer:
         raise ConfirmationRequiredError("答案不能为空，请使用 `--answer A` 或 `--answer A,B`")
 
     if not confirm and not dry_run:
         raise ConfirmationRequiredError(
-            f"作答会写入平台暂存，请传入 `--confirm` 确认，或使用 `--dry-run` 预览。\n目标题目 ID: {question}",
+            f"作答将在浏览器中模拟点击并写入平台暂存，请传入 `--confirm` 确认，或使用 `--dry-run` 预览。\n目标题目 ID: {question}",
             next_actions=[
                 NextAction(
-                    reason="确认写入该题作答",
-                    argv=["wkhelper", "exam", "answer", "-c", course, "-e", exam, "-q", question, "--answer", ",".join(keys), "--confirm"],
+                    reason="确认模拟点击作答",
+                    argv=["wkhelper", "exam", "answer", "-c", course, "-e", exam, "-q", question, "--answer", raw_answer, "--confirm"],
                 ),
                 NextAction(
                     reason="预览该题作答",
-                    argv=["wkhelper", "exam", "answer", "-c", course, "-e", exam, "-q", question, "--answer", ",".join(keys), "--dry-run"],
+                    argv=["wkhelper", "exam", "answer", "-c", course, "-e", exam, "-q", question, "--answer", raw_answer, "--dry-run"],
                 ),
             ],
         )
@@ -283,9 +342,9 @@ async def exam_answer_cmd(
                 dry_run=True,
                 exam_id=str(exam),
                 problem_id=str(question),
-                answer=keys,
+                answer=[raw_answer],
                 saved=False,
-                message="预览模式不会写入平台",
+                message="预览模式不会向浏览器或平台写入；作答方式在确认后依据试卷题型判定",
                 notice=_CLI_NOTICE,
             )
         )
@@ -294,71 +353,109 @@ async def exam_answer_cmd(
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
-        _warn_proctoring(cover)
-        if delay > 0:
-            import asyncio
-            import random
+        _ensure_not_submitted(cover)
 
+        # 考场安全门禁：所有作答必须依托已打开的真实浏览器会话
+        session = load_session(ctx.data_dir)
+        if session is None or session.exam_id != str(exam):
+            raise APIError(
+                f"考场作答必须依托已打开的前台考场浏览器会话。\n"
+                f"请先运行：wkhelper exam start -c {course} -e {exam} --confirm\n"
+                "拉起考场浏览器窗口并在前台保持打开后重试。",
+                retryable=False,
+            )
+
+        # 强监考考试硬阻断
+        ensure_exam_operation_allowed(cover)
+        _warn_proctoring(cover)
+
+        paper = await plat.get_exam_paper(exam, matched)
+        problem = next((item for item in paper.problems if item.id == str(question)), None)
+        if problem is None:
+            raise APIError(f"考场试卷中不存在题目 {question}，未执行任何作答", retryable=False)
+
+        # 客观题映射到选项键并点击；填空题按空拆分；主观题整段输入
+        keys, mode = _answer_plan(problem, raw_answer)
+        if not keys:
+            raise ConfirmationRequiredError("答案不能为空，请使用 `--answer A` 或 `--answer A,B`")
+
+        if delay > 0:
             actual_delay = max(0.05, delay + random.uniform(-delay_jitter, delay_jitter) if delay_jitter > 0 else delay)
             await asyncio.sleep(actual_delay)
 
-        result = await plat.answer_exam_problem(exam, matched, question, keys)
-        result.notice = _CLI_NOTICE
-        return CommandResult[ExamAnswerResult](data=result)
+        # 通过 CDP 向考场前台浏览器页面派发模拟 DOM 点击/输入
+        cdp = await connect_exam_page(session)
+        try:
+            # 先记事件基线：页面可能在点击回调里立即发请求，晚记录会漏掉
+            baseline = len(cdp.events)
+            sim_res = await simulate_browser_answer(cdp, problem.id, keys, mode=mode)
+            if not sim_res.get("success"):
+                err_msg = sim_res.get("error") or "未能成功定位选项或输入内容"
+                raise APIError(f"考场页面模拟作答失败: {err_msg}", retryable=False)
+            # 优先用页面自身发出的作答请求作证，避免每题额外回读
+            submission = await wait_for_answer_submission(cdp, problem.id, since=baseline)
+        finally:
+            await cdp.close()
 
-
-@exam_app.command(name="submit")
-async def exam_submit_cmd(
-    course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
-    exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
-    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="只预览作答进度，不交卷")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认交卷（不可撤销）")] = False,
-    platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
-    account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
-) -> CommandResult[ExamSubmitResult]:
-    """交卷并封存本次考试成绩，提交后不可撤销。"""
-    if not confirm and not dry_run:
-        raise ConfirmationRequiredError(
-            f"交卷后不可撤销且本场考试仅允许一次作答，请传入 `--confirm` 确认，或使用 `--dry-run` 预览。\n目标考试 ID: {exam}",
-            next_actions=[
-                NextAction(
-                    reason="确认交卷",
-                    argv=["wkhelper", "exam", "submit", "-c", course, "-e", exam, "--confirm"],
-                ),
-                NextAction(
-                    reason="预览作答进度",
-                    argv=["wkhelper", "exam", "submit", "-c", course, "-e", exam, "--dry-run"],
-                ),
-            ],
-        )
-
-    async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
-        cover = await plat.get_exam_cover(exam, matched)
-        _ensure_not_overdue(cover)
-        _warn_proctoring(cover)
-        if dry_run:
-            answered, all_ids = await plat.get_exam_answer_state(exam, matched)
-            unanswered = [pid for pid in all_ids if pid not in set(answered)]
-            return CommandResult[ExamSubmitResult](
-                data=ExamSubmitResult(
-                    dry_run=True,
+        expected = _normalize_answer(keys, mode)
+        observed = bool(submission.get("observed"))
+        submitted = _normalize_answer(submission.get("answer") or [], mode) if observed else None
+        if observed and submission.get("accepted") and submitted == expected:
+            return CommandResult[ExamAnswerResult](
+                data=ExamAnswerResult(
+                    dry_run=False,
                     exam_id=str(exam),
-                    answered_count=len(answered),
-                    unanswered=unanswered,
-                    submitted=False,
-                    message="预览模式不会交卷",
+                    problem_id=str(problem.id),
+                    answer=keys,
+                    saved=True,
+                    message="考场页面已提交本题作答且平台返回成功。交卷请在浏览器核对无误后由本人点击交卷。",
+                    notice=_CLI_NOTICE,
+                )
+            )
+        if observed:
+            reason = "平台未返回成功" if not submission.get("accepted") else f"提交内容为 {submitted or '空'}"
+            return CommandResult[ExamAnswerResult](
+                data=ExamAnswerResult(
+                    dry_run=False,
+                    exam_id=str(exam),
+                    problem_id=str(problem.id),
+                    answer=keys,
+                    saved=False,
+                    message=f"考场页面已发出作答请求，但{reason}，与预期 {expected} 不符。请在浏览器中核对。",
                     notice=_CLI_NOTICE,
                 )
             )
 
-        result = await plat.submit_exam(exam, matched)
-        result.notice = _CLI_NOTICE
-        session = load_session(ctx.data_dir)
-        if result.submitted and session is not None and session.exam_id == str(exam):
-            await close_exam_browser(session, data_dir=ctx.data_dir)
-            emit_event("exam.browser_closed", {"exam_id": str(exam), "reason": "submit"})
-        return CommandResult[ExamSubmitResult](data=result)
+        # 未捕获到页面请求时，回读一次暂存作答兜底
+        try:
+            cached = await plat.get_exam_cached_answers(exam, matched)
+        except (APIError, NotImplementedError) as exc:
+            logger.debug(f"读取考场暂存作答失败: {exc}")
+            cached = None
+
+        if cached is None:
+            saved = False
+            message = (
+                "已在考场浏览器页面中完成模拟点击/输入，但既未捕获到页面提交请求，也无法读取服务端暂存作答；请在浏览器中确认页面状态。"
+            )
+        elif _normalize_answer(cached.get(str(problem.id)) or [], mode) == expected:
+            saved = True
+            message = "已在考场浏览器页面完成模拟点击/输入，服务端暂存作答与预期一致。交卷请在浏览器核对无误后由本人点击交卷。"
+        else:
+            saved = False
+            actual = cached.get(str(problem.id))
+            message = f"页面已执行模拟点击/输入，但服务端暂存作答与预期不一致（暂存: {actual or '空'}）。请在浏览器中核对。"
+
+        result = ExamAnswerResult(
+            dry_run=False,
+            exam_id=str(exam),
+            problem_id=str(problem.id),
+            answer=keys,
+            saved=saved,
+            message=message,
+            notice=_CLI_NOTICE,
+        )
+        return CommandResult[ExamAnswerResult](data=result)
 
 
 @exam_app.command(name="close")

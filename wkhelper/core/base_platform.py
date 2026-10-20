@@ -29,13 +29,11 @@ from wkhelper.core.results import (
     DiscussionCommentResult,
     DiscussionItem,
     DiscussionTopicDetail,
-    ExamAnswerResult,
     ExamCoverDetail,
     ExamItem,
     ExamPaperData,
     ExamProblemItem,
     ExamStartResult,
-    ExamSubmitResult,
     HomeworkSubmitResult,
     NextAction,
     NoticeDetail,
@@ -731,19 +729,6 @@ class BasePlatform(ABC):
             return "未开始"
         return str(raw) if raw is not None else "未知"
 
-    async def get_exam_room_status(self, leaf_id: str | int, course: Course) -> str | None:
-        """读取考场子系统权威状态；失败时返回 None。"""
-        try:
-            host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-            resp = await self._request_json("GET", f"{host}/exam_room/cover", params={"exam_id": eid})
-        except (APIError, AuthError, RiskControlError, NotImplementedError):
-            return None
-        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-        result = data.get("result") if isinstance(data.get("result"), dict) else {}
-        if "status" not in result:
-            return None
-        return self._exam_status_text(result.get("status"))
-
     async def get_exam_status_snapshot(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         """只读汇总考场各接口状态，用于定位「页面已提交但成绩未落库」。"""
         host, eid, _login_url = await self._open_exam_room(leaf_id, course)
@@ -776,6 +761,30 @@ class BasePlatform(ABC):
         snapshot["result_code"] = problem.get("errcode")
         snapshot["result_message"] = str(problem.get("errmsg") or "")
         return snapshot
+
+    async def get_exam_cached_answers(self, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        """读取考场暂存作答（只读），返回 {题目 ID: 答案列表}。"""
+        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
+        resp = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        results = data.get("results") if isinstance(data.get("results"), list) else []
+        staged: dict[str, list[str]] = {}
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            problem_id = item.get("problem_id")
+            if problem_id is None:
+                continue
+            raw = item.get("result")
+            if isinstance(raw, list):
+                answers = [str(value) for value in raw if str(value).strip()]
+            elif raw is None or str(raw).strip() == "":
+                answers = []
+            else:
+                answers = [str(raw)]
+            if answers:
+                staged[str(problem_id)] = answers
+        return staged
 
     async def get_exam_result(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         """读取考场成绩与作答结果（只读）；未交卷时平台返回空数据。"""
@@ -858,79 +867,6 @@ class BasePlatform(ABC):
             score=float(raw.get("score") or raw.get("Score") or 0.0),
             answer=answers,
             has_remark=bool(raw.get("HasRemark")),
-        )
-
-    async def get_exam_answer_state(self, leaf_id: str | int, course: Course) -> tuple[list[str], list[str]]:
-        """对照试卷与暂存作答，返回 (已作答题目 ID, 全部题目 ID)。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        cached = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
-        cached_data = cached.get("data") if isinstance(cached.get("data"), dict) else {}
-        results = cached_data.get("results") if isinstance(cached_data.get("results"), list) else []
-        answered_ids = {str(item.get("problem_id")) for item in results if isinstance(item, dict) and item.get("result")}
-
-        paper = await self.get_exam_paper(leaf_id, course)
-        all_ids = [problem.id for problem in paper.problems]
-        answered = [pid for pid in all_ids if pid in answered_ids]
-        return answered, all_ids
-
-    async def answer_exam_problem(
-        self,
-        leaf_id: str | int,
-        course: Course,
-        problem_id: str,
-        answer: list[str],
-    ) -> ExamAnswerResult:
-        """提交考试单题答案，答案立即写入服务端暂存。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        payload = {
-            "results": [{"problem_id": int(problem_id), "result": answer, "time": self._server_now_ms()}],
-            "exam_id": eid,
-            "record": [],
-        }
-        resp = await self._request_json("POST", f"{host}/exam_room/answer_problem", json=payload)
-        ok = int(resp.get("errcode") or 0) == 0
-        message = str(resp.get("errmsg") or ("作答已保存" if ok else "作答保存失败"))
-        return ExamAnswerResult(
-            dry_run=False,
-            exam_id=str(leaf_id),
-            problem_id=str(problem_id),
-            answer=answer,
-            saved=ok,
-            message=message,
-        )
-
-    async def submit_exam(self, leaf_id: str | int, course: Course) -> ExamSubmitResult:
-        """交卷：以服务端暂存作答为准提交整卷。"""
-        host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        cached = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
-        cached_data = cached.get("data") if isinstance(cached.get("data"), dict) else {}
-        results = cached_data.get("results") if isinstance(cached_data.get("results"), list) else []
-        answered, all_ids = await self.get_exam_answer_state(leaf_id, course)
-        unanswered = [pid for pid in all_ids if pid not in set(answered)]
-
-        resp = await self._request_json("POST", f"{host}/exam_room/submit_paper", json={"results": results, "exam_id": eid})
-        code = int(resp.get("errcode") or 0)
-        ok = code == 0
-        message = str(resp.get("errmsg") or ("交卷成功" if ok else "交卷失败"))
-
-        verified = False
-        if ok:
-            check = await self._request_json("GET", f"{host}/exam_room/cover", params={"exam_id": eid})
-            check_data = check.get("data") if isinstance(check.get("data"), dict) else {}
-            check_result = check_data.get("result") if isinstance(check_data.get("result"), dict) else {}
-            verified = check_result.get("status") in (2, 3, 4, 5)
-            if not verified:
-                message = "平台返回成功但考场状态未变为已交卷，请在浏览器考场页提交"
-        elif code != 0:
-            message = f"{message} (errcode: {code})"
-
-        return ExamSubmitResult(
-            dry_run=False,
-            exam_id=str(leaf_id),
-            answered_count=len(answered),
-            unanswered=unanswered,
-            submitted=ok and verified,
-            message=message,
         )
 
     async def get_articles(self, course: Course) -> list[ArticleItem]:

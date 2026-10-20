@@ -152,7 +152,7 @@ def _http_json(url: str) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-async def _wait_debugger(port: int, timeout: float = 8.0) -> tuple[str | None, str | None]:
+async def _wait_debugger(port: int, timeout: float = 15.0) -> tuple[str | None, str | None]:
     browser_ws: str | None = None
     page_ws: str | None = None
     deadline = asyncio.get_running_loop().time() + timeout
