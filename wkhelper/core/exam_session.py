@@ -8,17 +8,13 @@ CLI 的作答/交卷仍走 REST 接口。
 import json
 import logging
 import shutil
-import subprocess
-import sys
-import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from curl_cffi.requests import AsyncSession
 
-from wkhelper.core.browser_cdp import _CdpClient, _find_free_port, _wait_debugger, find_chromium_browser
+from wkhelper.core.browser_manager import BrowserManager, _CdpClient, _wait_debugger, find_chromium_browser
 from wkhelper.core.credential_store import get_default_data_dir
 
 logger = logging.getLogger(__name__)
@@ -105,26 +101,9 @@ async def open_exam_browser(
     existing = load_session(data_dir, verify=True)
     if existing is not None:
         await close_exam_browser(existing, data_dir=data_dir)
-
-    port = _find_free_port()
-    profile = tempfile.mkdtemp(prefix="wk_exam_profile_")
-    cmd = [
-        browser,
-        f"--remote-debugging-port={port}",
-        f"--user-data-dir={profile}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-sync",
-        "--disable-extensions",
-        "about:blank",
-    ]
-    kwargs: dict[str, Any] = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    subprocess.Popen(cmd, **kwargs)
-
+    b_proc = BrowserManager.launch_browser(mode="headful", detached=True)
+    port = b_proc.port
+    profile = b_proc.profile_dir
     _browser_ws, page_ws = await _wait_debugger(port)
     if not page_ws:
         shutil.rmtree(profile, ignore_errors=True)
