@@ -288,6 +288,8 @@ uv run pyrefly check
 uv run pytest -q
 ```
 
+Windows 下测试通过 `pytest-asyncio>=1.4` 的循环工厂钩子复用 CLI 的 Selector 循环，避免 `curl_cffi` 启用额外选择器线程；不屏蔽警告。可用 `uv run pytest -q -W error::curl_cffi.utils.CurlCffiWarning` 验证。
+
 ---
 
 > [!WARNING]

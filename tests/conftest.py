@@ -1,5 +1,7 @@
 """测试全局配置与 Fixtures。"""
 
+import asyncio
+from collections.abc import Callable
 from typing import Any, override
 
 import pytest_asyncio
@@ -7,6 +9,12 @@ import pytest_asyncio
 from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
 from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
 from wkhelper.core.transport import AsyncSession
+from wkhelper.main import _loop_factory
+
+
+def pytest_asyncio_loop_factories() -> dict[str, Callable[[], asyncio.AbstractEventLoop]]:
+    """测试与 CLI 共用循环工厂，避免 Windows 下 curl_cffi 的线程兼容路径。"""
+    return {"default": _loop_factory}
 
 
 class FakeAsyncPlatform(BasePlatform):
