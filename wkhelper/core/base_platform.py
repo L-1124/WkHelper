@@ -524,16 +524,21 @@ class BasePlatform(ABC):
         """构建提交载荷；题型差异（如填空需 `answers` 映射）由平台实现处理。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现题目提交载荷")
 
-    def _format_web_task_url(self, course: Course, leaf_id: str | int, task_type: str = "exercise") -> str | None:
-        """格式化官方平台的前端网页直达 URL，方便用户/Agent 在风控拦截时直接打开。"""
+    def format_web_task_url(self, course: Course, leaf_id: str | int, task_type: str = "exercise") -> str | None:
+        """格式化官方平台的前端网页直达 URL，方便用户/Agent 在风控拦截或抽帧时直接打开。"""
         cid = self._classroom_id(course)
         lid = str(leaf_id)
         if "xuetangx" in self.api_base:
             sign = str(course.metadata.get("sign") or "")
             return f"https://www.xuetangx.com/learn/{sign}/{course.id}/{cid}/{task_type}/{lid}"
         if "yuketang" in self.api_base:
+            if task_type == "video":
+                return f"https://www.yuketang.cn/v2/web/xcloud/video-student/{cid}/{lid}"
             return f"https://www.yuketang.cn/v2/web/studentLog/{cid}/{lid}"
         return None
+
+    def _format_web_task_url(self, course: Course, leaf_id: str | int, task_type: str = "exercise") -> str | None:
+        return self.format_web_task_url(course, leaf_id, task_type)
 
     def _get_request_kwargs(self, course: Course) -> dict[str, Any] | None:
         return None

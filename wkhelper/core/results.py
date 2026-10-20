@@ -574,3 +574,26 @@ class ExamStatusData:
     cached_sample: str
     result_code: int | None
     result_message: str
+
+
+@dataclass
+class VideoSnapshotFrame:
+    """单张视频抽帧元数据与落盘结果。"""
+
+    timestamp: float
+    file_path: str | None = None
+    data_url: str | None = None
+    width: int = 0
+    height: int = 0
+    size_bytes: int = 0
+    error: str | None = None
+
+
+@dataclass
+class VideoSnapshotData:
+    """视频批量截帧结果汇总。"""
+
+    course_id: str
+    video_id: str
+    total_frames: int
+    frames: list[VideoSnapshotFrame]
