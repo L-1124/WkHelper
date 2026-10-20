@@ -1,5 +1,6 @@
 """视频学习与查询命令。"""
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
@@ -10,9 +11,18 @@ from wkhelper.cli.envelope import CommandResult, NextAction
 from wkhelper.core.entities import course_reference, dedupe_courses
 from wkhelper.core.exceptions import APIError, ConfirmationRequiredError, PartialFailureError
 from wkhelper.core.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
-from wkhelper.core.results import VideoItem, VideoLearnPreview, VideoListData, VideoPlanSummary, VideoProgress
+from wkhelper.core.results import (
+    VideoItem,
+    VideoLearnPreview,
+    VideoListData,
+    VideoPlanSummary,
+    VideoProgress,
+    VideoSnapshotData,
+)
 from wkhelper.core.video import VideoWatchOptions
 from wkhelper.core.video_runner import VideoPlanRunner
+from wkhelper.core.video_session_pool import cleanup_all_warm_sessions
+from wkhelper.core.video_snapshot import capture_video_frames
 
 video_app = App(name="video", help="视频学习与查询")
 
@@ -169,9 +179,117 @@ async def video_learn_cmd(
         return CommandResult[VideoPlanSummary](data=summary)
 
 
+@video_app.command(name="snapshot")
+async def video_snapshot_cmd(
+    course: Annotated[str | None, Parameter(name=["--course", "-c"], help="课程 ID")] = None,
+    video: Annotated[str | None, Parameter(name=["--video", "-v"], help="视频 ID")] = None,
+    timestamps: Annotated[str | None, Parameter(name=["--timestamps"], help="指定抽帧时间戳（秒，逗号分隔，如 '30,60,90'）")] = None,
+    start: Annotated[float | None, Parameter(name=["--start"], help="采样起始时间（秒）")] = None,
+    end: Annotated[float | None, Parameter(name=["--end"], help="采样结束时间（秒）")] = None,
+    step: Annotated[float | None, Parameter(name=["--step"], help="采样步长（秒）")] = None,
+    count: Annotated[int | None, Parameter(name=["--count"], help="均匀抽帧数量（上限 30 张）")] = None,
+    width: Annotated[int, Parameter(name=["--width"], help="图像宽度（像素，默认 1280）")] = 1280,
+    quality: Annotated[int, Parameter(name=["--quality"], help="JPEG 压缩质量 (30~95，默认 85)")] = 85,
+    output_dir: Annotated[str | None, Parameter(name=["--output-dir", "-o"], help="截图保存目录（缺省自动保存在临时目录）")] = None,
+    no_cache: Annotated[bool, Parameter(name=["--no-cache"], help="禁用 Warm Session 缓存复用（每次冷启动并在用完后立即销毁）")] = False,
+    clean_cache: Annotated[bool, Parameter(name=["--clean-cache"], help="清理所有后台保留的视频热会话进程并退出")] = False,
+    platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
+    account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
+) -> CommandResult[VideoSnapshotData]:
+    """对视频进行纯净无杂质抽帧。"""
+    if clean_cache:
+        cleaned_count = cleanup_all_warm_sessions()
+        return CommandResult(
+            data=VideoSnapshotData(
+                course_id=str(course or ""),
+                video_id=str(video or ""),
+                total_frames=0,
+                frames=[],
+            ),
+            meta={"cleaned_sessions": cleaned_count, "message": f"成功清理 {cleaned_count} 个后台热会话"},
+        )
+
+    if not course or not video:
+        raise ValueError("执行抽帧必须指定 `--course` 和 `--video` 参数")
+
+    if timestamps is None and step is None and count is None:
+        raise ValueError(
+            "必须指定抽帧模式：`--timestamps`、`--step` 或 `--count` 之一（`--start/--end` 需配合 `--step` 或 `--count` 使用）"
+        )
+    if step is not None and step <= 0:
+        raise ValueError(f"采样步长 step 必须大于 0: {step}")
+    if start is not None and start < 0:
+        raise ValueError(f"采样起始时间 start 不能小于 0: {start}")
+    if end is not None and end < 0:
+        raise ValueError(f"采样结束时间 end 不能小于 0: {end}")
+    if start is not None and end is not None and start > end:
+        raise ValueError(f"采样起始时间 start ({start}) 不能大于结束时间 end ({end})")
+    if count is not None and count <= 0:
+        raise ValueError(f"均匀抽帧数量 count 必须大于 0: {count}")
+
+    parsed_timestamps: list[float] | None = None
+    if timestamps is not None:
+        try:
+            parsed_timestamps = [float(x.strip()) for x in timestamps.split(",") if x.strip()]
+        except ValueError as exc:
+            raise ValueError(f"时间戳格式错误: {timestamps}") from exc
+        if not parsed_timestamps:
+            raise ValueError(f"未能解析出有效时间戳: {timestamps}")
+        parsed_timestamps = parsed_timestamps[:30]
+
+    effective_count = min(30, count) if count is not None else None
+    effective_quality = max(30, min(95, quality))
+    target_output_dir = Path(output_dir) if output_dir is not None else None
+
+    async with _open_course(course, platform, account) as (plat, matched):
+        web_url = plat.format_web_task_url(matched, video, "video")
+        if not web_url:
+            raise ValueError(f"无法生成视频播放页面 URL: course={course}, video={video}")
+
+        cookie_domain = getattr(plat, "cookie_domain", "") or (".xuetangx.com" if "xuetangx" in plat.api_base else ".yuketang.cn")
+        client_cookies = getattr(plat.client, "cookies", None)
+        cookies = {k: v for k, v in client_cookies.items()} if client_cookies is not None else {}
+
+        frames = await capture_video_frames(
+            web_url=web_url,
+            cookies=cookies,
+            cookie_domain=cookie_domain,
+            timestamps=parsed_timestamps,
+            width=width,
+            height=int(width * 9 / 16) if width else 720,
+            quality=effective_quality,
+            output_dir=target_output_dir,
+            start=start,
+            end=end,
+            step=step,
+            count=effective_count,
+            course_id=str(course),
+            video_id=str(video),
+            use_cache=not no_cache,
+            account_id=account,
+            platform=str(platform) if platform else None,
+        )
+
+        data = VideoSnapshotData(
+            course_id=str(course),
+            video_id=str(video),
+            total_frames=len(frames),
+            frames=frames,
+        )
+
+        failed_count = sum(1 for f in frames if f.error is not None)
+        if failed_count == len(frames) and len(frames) > 0:
+            raise APIError(f"所有视频帧均截取失败 (共 {len(frames)} 帧)")
+        if failed_count > 0:
+            raise PartialFailureError(f"部分视频帧截取失败 ({failed_count}/{len(frames)} 失败)", data=data)
+
+        return CommandResult(data=data)
+
+
 video_list = video_list_cmd
 video_inspect = video_inspect_cmd
 video_learn = video_learn_cmd
+video_snapshot = video_snapshot_cmd
 
 __all__ = [
     "video_app",
@@ -181,4 +299,6 @@ __all__ = [
     "video_learn_cmd",
     "video_list",
     "video_list_cmd",
+    "video_snapshot",
+    "video_snapshot_cmd",
 ]

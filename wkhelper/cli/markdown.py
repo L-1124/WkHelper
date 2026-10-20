@@ -56,6 +56,7 @@ from wkhelper.core.results import (
     VideoListData,
     VideoPlanSummary,
     VideoProgress,
+    VideoSnapshotData,
 )
 from wkhelper.core.time_types import EpochMillis
 
@@ -208,6 +209,28 @@ def _render_video_learn_preview(data: VideoLearnPreview) -> list[str]:
         f"- **执行策略**：并发 `{data.effective_config.concurrency}` | 出错策略 `{data.effective_config.on_error}`",
         "",
         *_table(["序号", "课程 ID", "视频 ID"], rows),
+    ]
+
+
+@renderer(VideoSnapshotData)
+def _render_video_snapshot_data(data: VideoSnapshotData) -> list[str]:
+    rows = [
+        [
+            i,
+            f"{f.timestamp:.1f}s",
+            f"{f.width}x{f.height}" if f.width else "-",
+            f"{f.size_bytes / 1024:.1f} KB" if f.size_bytes else "-",
+            f.file_path or "-",
+            f.error or "正常",
+        ]
+        for i, f in enumerate(data.frames, 1)
+    ]
+    return [
+        f"## 视频截图完成 (共 {data.total_frames} 帧)",
+        "",
+        f"- **课程 ID**：`{_cell(data.course_id)}` | **视频 ID**：`{_cell(data.video_id)}`",
+        "",
+        *_table(["序号", "时间戳", "分辨率", "体积", "文件路径", "状态"], rows),
     ]
 
 
@@ -464,10 +487,15 @@ def format_error_markdown(
     message: str,
     details: JsonDict | None = None,
     next_actions: list[NextAction] | None = None,
+    data: object = None,
 ) -> str:
     """格式化错误响应为 Markdown。"""
     quoted = str(message).replace("\r", "").replace("\n", "\n> ")
     lines = [f"## 操作失败 [{_cell(code)}]", "", f"> **错误信息**：{quoted}", ""]
+    if data:
+        render = _RENDERERS.get(type(data))
+        data_lines = render(data) if render is not None else _render_fallback(data)
+        lines.extend(["", *data_lines, ""])
     if details:
         lines.append("### 详细诊断")
         if "exception_type" in details:

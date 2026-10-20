@@ -44,6 +44,8 @@ from wkhelper.core.results import (
     VideoListData,
     VideoPlanSummary,
     VideoProgress,
+    VideoSnapshotData,
+    VideoSnapshotFrame,
     VideoTargetResult,
 )
 from wkhelper.main import async_main
@@ -217,6 +219,20 @@ def _result_samples() -> list[object]:
             results=[VideoTargetResult(video_id="v1", course_id="c1", initial_rate=0.0, final_rate=1.0, duration_seconds=1.5)],
         ),
         VideoProgress(course_id="c1", video_id="v1", current_rate=0.5, completed=False),
+        VideoSnapshotData(
+            course_id="c1",
+            video_id="v1",
+            total_frames=1,
+            frames=[
+                VideoSnapshotFrame(
+                    timestamp=30.0,
+                    file_path="/tmp/f.jpg",
+                    width=1280,
+                    height=720,
+                    size_bytes=20480,
+                )
+            ],
+        ),
     ]
 
 

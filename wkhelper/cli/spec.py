@@ -108,6 +108,20 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper video learn --plan-file plan.json --confirm",
         ],
     },
+    "video snapshot": {
+        "description": (
+            "基于原生浏览器对指定视频进行纯净抽帧，支持特定时间戳、步长范围或均匀采样"
+            "（默认开启 Warm Session 进程池复用，支持 --no-cache 禁用；--clean-cache 清理后台热会话）。"
+        ),
+        "side_effects": "none",
+        "examples": [
+            "wkhelper video snapshot --course 1001 --video 2001 --timestamps 30,60,90",
+            "wkhelper video snapshot --course 1001 --video 2001 --count 5",
+            "wkhelper video snapshot --course 1001 --video 2001 --start 300 --end 600 --step 30",
+            "wkhelper video snapshot --course 1001 --video 2001 --timestamps 45 --no-cache",
+            "wkhelper video snapshot --clean-cache",
+        ],
+    },
     "homework list": {
         "description": "有界分页列出指定课程的作业、截止时间与完成状态。",
         "examples": ["wkhelper homework list --course 1001 --status pending"],

@@ -48,6 +48,7 @@ def emit_error(envelope: JsonDict, console: Console = CONSOLE) -> None:
     error: Mapping[str, JsonValue] = raw_error if isinstance(raw_error, Mapping) else {}
     raw_details = error.get("details")
     raw_actions = envelope.get("next_actions")
+    raw_data = envelope.get("data")
     # 信封已由强类型模型生成，此处是 JSON 反查边界，按契约收窄一次即可。
     actions = cast("list[NextAction]", raw_actions) if isinstance(raw_actions, list) else []
     _print_markdown(
@@ -56,6 +57,7 @@ def emit_error(envelope: JsonDict, console: Console = CONSOLE) -> None:
             str(error.get("message", "未知错误")),
             dict(raw_details) if isinstance(raw_details, Mapping) else None,
             actions,
+            data=raw_data,
         ),
         console,
     )
