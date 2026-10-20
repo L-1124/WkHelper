@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import random
 from typing import Any, Protocol
 
 from wkhelper.core.entities import Course
@@ -148,13 +149,15 @@ async def generic_submit_homework(
                 async with lock:
                     success_count += 1
                 return
-            if delay > 0 and not already_submitted:
-                import random
-
-                actual_delay = max(0.05, delay + random.uniform(-delay_jitter, delay_jitter) if delay_jitter > 0 else delay)
-                await asyncio.sleep(actual_delay)
-
             async with semaphore:
+                if delay > 0:
+                    if delay_jitter > 0:
+                        delta = random.uniform(-delay_jitter, delay_jitter)
+                        actual_delay = max(0.0, delay + delta)
+                    else:
+                        actual_delay = delay
+                    if actual_delay > 0:
+                        await asyncio.sleep(actual_delay)
                 result = await submit_func(pid_int, answer, course_info, client, headers, q)
 
             if result.success:
@@ -195,8 +198,6 @@ async def generic_submit_homework(
 
     pairs_to_process = list(enumerate(resolved_pairs, 1))
     if random_order:
-        import random
-
         random.shuffle(pairs_to_process)
 
     async with asyncio.TaskGroup() as tg:

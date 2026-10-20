@@ -190,9 +190,10 @@ class CredentialStore:
 
             # 1. 写秘密
             self.backend.set_secret(SERVICE_NAME, key_id, encoded_json)
-            # 2. 写元数据
-            conn = self._get_connection()
+            # 2. 写元数据（连接/执行/提交失败均进行补偿回滚与事务 rollback）
+            conn: sqlite3.Connection | None = None
             try:
+                conn = self._get_connection()
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO accounts (platform, user_id, name, school, key_id, saved_at)
@@ -201,25 +202,30 @@ class CredentialStore:
                     (platform, str(user_info.id), user_info.name, user_info.school, key_id, now),
                 )
                 conn.commit()
-            except Exception:
-                # 精确回滚：若原本有旧秘密则恢复，否则删除新创建的秘密
+            except Exception as db_exc:
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 try:
                     if old_secret is not None:
                         self.backend.set_secret(SERVICE_NAME, key_id, old_secret)
                     else:
                         self.backend.delete_secret(SERVICE_NAME, key_id)
-                except Exception:
-                    pass
+                except Exception as comp_exc:
+                    raise comp_exc from db_exc
                 raise
             finally:
-                if self._memory_conn is None:
+                if conn is not None and self._memory_conn is None:
                     conn.close()
 
     def list_accounts(self, platform: str | None = None) -> list[AccountSummary]:
         """列出所有保存的账号元数据（无敏感 Cookies）。"""
         with self._db_lock:
-            conn = self._get_connection()
+            conn: sqlite3.Connection | None = None
             try:
+                conn = self._get_connection()
                 if platform:
                     cursor = conn.execute(
                         "SELECT platform, user_id, name, school, saved_at FROM accounts WHERE platform = ? ORDER BY saved_at DESC",
@@ -239,7 +245,7 @@ class CredentialStore:
                     for row in rows
                 ]
             finally:
-                if self._memory_conn is None:
+                if conn is not None and self._memory_conn is None:
                     conn.close()
 
     def get_cookies(self, platform: str, user_id: str | int) -> dict[str, str] | None:
@@ -258,20 +264,36 @@ class CredentialStore:
         """原子删除指定账号的凭据与元数据。"""
         key_id = self._make_key_id(platform, user_id)
         with self._db_lock:
+            # 记录修改前的旧秘密，以便在 SQLite 失败时精确恢复
+            old_secret = self.backend.get_secret(SERVICE_NAME, key_id)
+
             # 1. 先删秘密
             self.backend.delete_secret(SERVICE_NAME, key_id)
 
-            # 2. 删元数据
-            conn = self._get_connection()
+            # 2. 删元数据（连接/执行/提交失败均进行补偿回滚与事务 rollback）
+            conn: sqlite3.Connection | None = None
             try:
+                conn = self._get_connection()
                 cursor = conn.execute(
                     "DELETE FROM accounts WHERE platform = ? AND user_id = ?",
                     (platform, str(user_id)),
                 )
                 conn.commit()
                 return cursor.rowcount > 0
+            except Exception as db_exc:
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                try:
+                    if old_secret is not None:
+                        self.backend.set_secret(SERVICE_NAME, key_id, old_secret)
+                except Exception as comp_exc:
+                    raise comp_exc from db_exc
+                raise
             finally:
-                if self._memory_conn is None:
+                if conn is not None and self._memory_conn is None:
                     conn.close()
 
     def get_storage_status(self) -> StorageStatus:

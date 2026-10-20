@@ -301,25 +301,52 @@ async def wait_for_answer_submission(
         await asyncio.sleep(0.2)
 
     if request is None:
-        return {"observed": False, "accepted": False, "answer": []}
+        return {"observed": False, "accepted": False, "rejected": False, "unknown": True, "answer": []}
 
     status = response.get("status") if isinstance(response, dict) else None
     errcode: int | None = None
-    if isinstance(status, int) and status < 400:
+    accepted = False
+    rejected = False
+    unknown = False
+
+    if not isinstance(status, int):
+        unknown = True
+    elif status >= 400:
+        rejected = True
+    else:
         try:
             body = await cdp.call("Network.getResponseBody", {"requestId": request["request_id"]}, timeout=3.0)
             text = body.get("body") if isinstance(body, dict) else None
-            if isinstance(text, str) and text.strip():
-                parsed = json.loads(text)
-                if isinstance(parsed, dict):
-                    errcode = int(parsed.get("errcode") or 0)
-        except Exception:
-            logger.debug("读取作答响应体失败，按状态码判定", exc_info=True)
+            if not isinstance(text, str) or not text.strip():
+                unknown = True
+            else:
+                try:
+                    parsed = json.loads(text)
+                except (ValueError, TypeError):
+                    parsed = None
+                    unknown = True
 
-    accepted = bool(isinstance(status, int) and status < 400 and (errcode in (None, 0)))
+                if isinstance(parsed, dict):
+                    raw_errcode = parsed.get("errcode")
+                    if isinstance(raw_errcode, (int, str)) and not isinstance(raw_errcode, bool):
+                        try:
+                            errcode = int(raw_errcode)
+                        except ValueError:
+                            pass
+                    rejected = parsed.get("success") is False or (errcode is not None and errcode != 0)
+                    accepted = 200 <= status < 300 and errcode == 0 and not rejected
+                    unknown = not accepted and not rejected
+                else:
+                    unknown = True
+        except Exception:
+            logger.debug("读取作答响应体失败，状态归为未知", exc_info=True)
+            unknown = True
+
     return {
         "observed": True,
         "accepted": accepted,
+        "rejected": rejected,
+        "unknown": unknown,
         "answer": request["answer"],
         "status": status,
         "errcode": errcode,

@@ -273,6 +273,31 @@ async def test_exam_start_confirm(mock_exam_env: None, monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_exam_start_fails_when_started_false(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """当平台返回 started 为 false 时，exam start 必须报错，不能 ok true exit 0。"""
+
+    async def _fake_start(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> ExamStartResult:
+        return ExamStartResult(
+            course_id="1001",
+            exam_id=str(leaf_id),
+            title="期中考试测试卷",
+            started=False,
+            limit_minutes=90,
+            web_url="",
+            message="考场未放行或已关闭",
+        )
+
+    monkeypatch.setattr(_ExamMockPlatform, "start_exam", _fake_start)
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"])
+    assert code != 0
+    res = json.loads(buf.getvalue().strip())
+    assert res["ok"] is False
+    assert "未获平台确认" in res["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_exam_paper(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """验证 exam paper 输出考场试卷题目。"""
     buf = StringIO()
@@ -454,9 +479,24 @@ def _patch_answer_driver(
     monkeypatch.setattr("wkhelper.cli.commands.exam.wait_for_answer_submission", _fake_wait)
 
 
-def _observed(answer: list[str], accepted: bool = True) -> dict[str, Any]:
+def _observed(
+    answer: list[str],
+    accepted: bool = True,
+    rejected: bool | None = None,
+    unknown: bool | None = None,
+) -> dict[str, Any]:
     """构造页面自身已发出作答请求的证据。"""
-    return {"observed": True, "accepted": accepted, "answer": answer, "status": 200, "errcode": 0 if accepted else 1}
+    is_rejected = not accepted if rejected is None and unknown is None else bool(rejected)
+    is_unknown = bool(unknown) if unknown is not None else (not accepted and not is_rejected)
+    return {
+        "observed": True,
+        "accepted": accepted,
+        "rejected": is_rejected,
+        "unknown": is_unknown,
+        "answer": answer,
+        "status": 200,
+        "errcode": 0 if accepted else (1 if is_rejected else None),
+    }
 
 
 @pytest.mark.asyncio
@@ -543,6 +583,92 @@ async def test_exam_answer_contradicting_submission_is_not_saved(mock_exam_env: 
     data = json.loads(buf.getvalue())["data"]
     assert data["saved"] is False
     assert "提交内容为" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_rejected_submission_not_washed_by_cache(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面作答被平台明确拒绝时，即便暂存作答匹配也不可用旧缓存洗白。"""
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["A"], accepted=False, rejected=True))
+
+    async def _staged_matches(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["A"]}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_matches)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is False
+    assert "平台未返回成功" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_unknown_submission_recovers_via_cache(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面提交状态未知（如 HTTP 200 HTML / 空 JSON）但暂存回读一致时判定保存成功。"""
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["A"], accepted=False, unknown=True))
+
+    async def _staged_matches(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["A"]}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_matches)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is True
+    assert "服务端暂存作答与预期一致" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_unknown_submission_fails_on_cache_mismatch(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面提交状态未知且暂存作答不一致时判定保存失败。"""
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["A"], accepted=False, unknown=True))
+
+    async def _staged_other(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        return {"9001": ["B"]}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_other)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is False
+    assert "不一致" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_answer_unknown_submission_fails_on_cache_error(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """页面提交状态未知且无法读取暂存时判定保存失败。"""
+    from wkhelper.core.exceptions import APIError as CoreAPIError
+
+    _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["A"], accepted=False, unknown=True))
+
+    async def _staged_boom(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
+        raise CoreAPIError("暂存接口不可用", retryable=True)
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cached_answers", _staged_boom)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+    code = await async_main(
+        ["--format", "json", "exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]
+    )
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["saved"] is False
+    assert "无法读取服务端暂存作答" in data["message"]
 
 
 @pytest.mark.asyncio

@@ -227,6 +227,8 @@ async def exam_start_cmd(
 
         result = await plat.start_exam(exam, matched) if not begin else await plat.begin_exam(exam, matched)
         result.notice = _CLI_NOTICE
+        if not result.started:
+            raise APIError(f"进入考场未获平台确认: {result.message or '平台未确认开始'}", retryable=False)
         if browser:
             from urllib.parse import parse_qs, urlparse
 
@@ -400,7 +402,10 @@ async def exam_answer_cmd(
         expected = _normalize_answer(keys, mode)
         observed = bool(submission.get("observed"))
         submitted = _normalize_answer(submission.get("answer") or [], mode) if observed else None
-        if observed and submission.get("accepted") and submitted == expected:
+        accepted = bool(submission.get("accepted"))
+        rejected = bool(submission.get("rejected"))
+
+        if observed and accepted and submitted == expected:
             return CommandResult[ExamAnswerResult](
                 data=ExamAnswerResult(
                     dry_run=False,
@@ -412,8 +417,9 @@ async def exam_answer_cmd(
                     notice=_CLI_NOTICE,
                 )
             )
-        if observed:
-            reason = "平台未返回成功" if not submission.get("accepted") else f"提交内容为 {submitted or '空'}"
+
+        if observed and (submitted != expected or rejected):
+            reason = f"提交内容为 {submitted or '空'}" if submitted != expected else "平台未返回成功"
             return CommandResult[ExamAnswerResult](
                 data=ExamAnswerResult(
                     dry_run=False,
@@ -426,7 +432,7 @@ async def exam_answer_cmd(
                 )
             )
 
-        # 未捕获到页面请求时，回读一次暂存作答兜底
+        # 未捕获到页面请求，或响应为未知状态且提交内容与预期一致时，回读一次暂存作答兜底
         try:
             cached = await plat.get_exam_cached_answers(exam, matched)
         except (APIError, NotImplementedError) as exc:
@@ -436,7 +442,9 @@ async def exam_answer_cmd(
         if cached is None:
             saved = False
             message = (
-                "已在考场浏览器页面中完成模拟点击/输入，但既未捕获到页面提交请求，也无法读取服务端暂存作答；请在浏览器中确认页面状态。"
+                "已在考场浏览器页面中完成模拟点击/输入并发出作答请求，但响应状态未知且无法读取服务端暂存作答；请在浏览器中确认页面状态。"
+                if observed
+                else "已在考场浏览器页面中完成模拟点击/输入，但既未捕获到页面提交请求，也无法读取服务端暂存作答；请在浏览器中确认页面状态。"
             )
         elif _normalize_answer(cached.get(str(problem.id)) or [], mode) == expected:
             saved = True
@@ -445,7 +453,6 @@ async def exam_answer_cmd(
             saved = False
             actual = cached.get(str(problem.id))
             message = f"页面已执行模拟点击/输入，但服务端暂存作答与预期不一致（暂存: {actual or '空'}）。请在浏览器中核对。"
-
         result = ExamAnswerResult(
             dry_run=False,
             exam_id=str(exam),

@@ -191,6 +191,8 @@ async def _open_platform(
     impersonate = platform_cls.impersonate if platform_cls is not None else None
     async with _create_http_session(timeout=timeout, impersonate=impersonate) as client:
         plat = _create_platform_instance(platform_code, client)
+        plat.platform_code = platform_code
+        plat.account_id = _account_id
         await plat.login(cookies=cookies)
         yield plat
 

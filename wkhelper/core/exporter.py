@@ -132,6 +132,19 @@ async def localize_question_detail(
     return detail
 
 
+def _publish_file_no_clobber(temp_file_path: str, target_path: Path) -> None:
+    """原子发布临时文件到目标路径，绝不覆盖已有文件。
+
+    使用 os.link 实现原子 no-clobber 写入：
+    - 若目标路径已存在（或发布时竞态新建），os.link 抛出 FileExistsError，捕获并转换为 OutputExistsError。
+    - 若系统或文件系统不支持硬链接等其他错误，真实抛出，严禁降级为会覆盖现有文件的 copy/replace。
+    """
+    try:
+        os.link(temp_file_path, target_path)
+    except FileExistsError as exc:
+        raise OutputExistsError(f"输出文件已存在，拒绝覆盖: {target_path}") from exc
+
+
 async def export_questions_to_markdown(
     platform: BasePlatform,
     course: Course,
@@ -157,14 +170,14 @@ async def export_questions_to_markdown(
         raise OutputExistsError(f"输出文件已存在，拒绝覆盖: {target_path}")
 
     semaphore = asyncio.Semaphore(MAX_WORKERS_DOWNLOAD)
-    hw_questions: dict[str, list[dict[str, Any]]] = {}
+    hw_questions: dict[str | int, list[dict[str, Any]]] = {}
     failures: list[str] = []
 
     async def _fetch(hw: Homework) -> None:
         try:
             async with semaphore:
                 questions = await platform.get_leaf_questions(hw.id, course)
-            hw_questions[hw.name] = questions
+            hw_questions[hw.id] = questions
         except Exception as e:
             failures.append(f"{hw.name} (ID:{hw.id}): {e}")
             logger.warning(f"获取作业 {hw.name} 题目失败: {e}")
@@ -173,10 +186,12 @@ async def export_questions_to_markdown(
         for hw in homeworks:
             tg.create_task(_fetch(hw))
 
-    if not hw_questions or not any(hw_questions.values()):
-        detail = "；".join(failures[:5]) or "所有作业均未返回题目"
-        raise APIError(f"未能从任何作业中抓取题目（共 {len(homeworks)} 份，已中止导出以防覆盖已有文件）: {detail}")
+    if failures:
+        detail = "；".join(failures)
+        raise APIError(f"抓取作业题目失败（{len(failures)}/{len(homeworks)} 份失败，已中止导出）: {detail}")
 
+    if not hw_questions or not any(hw_questions.values()):
+        raise APIError(f"未能从任何作业中抓取题目（共 {len(homeworks)} 份，已中止导出）: 所有作业均未返回题目")
     total_questions = 0
     downloaded_resources_total = 0
     assets_dir = target_path.parent / "assets" if download_resources else None
@@ -189,11 +204,11 @@ async def export_questions_to_markdown(
             f.write(f"# {course.name} 题目汇总\n\n")
 
             for hw in homeworks:
-                if hw.name not in hw_questions or not hw_questions[hw.name]:
+                if hw.id not in hw_questions or not hw_questions[hw.id]:
                     continue
 
                 f.write(f"## {hw.name}\n\n")
-                questions = hw_questions[hw.name]
+                questions = hw_questions[hw.id]
                 for idx, q in enumerate(questions, 1):
                     total_questions += 1
                     content = q.get("content", {})
@@ -256,14 +271,13 @@ async def export_questions_to_markdown(
                             f.write("**题目附件：**\n" + "\n".join(attach_lines) + "\n\n")
 
                     f.write("---\n\n")
-        os.replace(temp_file_path, target_path)
-    except Exception:
+        _publish_file_no_clobber(temp_file_path, target_path)
+    finally:
         if os.path.exists(temp_file_path):
             try:
                 os.unlink(temp_file_path)
             except OSError:
                 pass
-        raise
 
     return ExportResult(
         file_path=str(target_path),
@@ -339,14 +353,13 @@ async def export_exam_paper_to_markdown(
                 if problem.answer:
                     f.write(f"**平台答案：** {'、'.join(problem.answer)}\n\n")
                 f.write("---\n\n")
-        os.replace(temp_file_path, target_path)
-    except Exception:
+        _publish_file_no_clobber(temp_file_path, target_path)
+    finally:
         if os.path.exists(temp_file_path):
             try:
                 os.unlink(temp_file_path)
             except OSError:
                 pass
-        raise
 
     return ExamExportResult(
         file_path=str(target_path),

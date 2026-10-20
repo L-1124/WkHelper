@@ -93,6 +93,8 @@ wkhelper auth status -p ykt
 wkhelper auth list
 ```
 
+凭据保存或删除遇到数据库连接、执行或提交失败时，会回滚事务并补偿恢复旧秘密；若秘密补偿本身失败，错误会保留数据库故障的因果链。
+
 ### 2. 课程查询 (`course`)
 
 ```bash
@@ -123,7 +125,8 @@ wkhelper video learn --plan-file plan.json --checkpoint-file cp.json --confirm
 ```
 
 > [!TIP]
-> 批量执行支持断点续学。若因断网中断，追加 `--resume-from cp.json` 即可自动跳过已完成项继续推进。
+> 批量执行支持断点续学。追加 `--resume-from cp.json` 会跳过满足本次完成阈值的记录；提高阈值后，旧的部分完成记录会继续执行。`--total-timeout` 限制整次执行，包括已启动任务及视频切换等待。
+> 视频截帧缓存按实际认证平台与用户隔离；并发请求等待同一会话时不会阻塞事件循环，清理命令遇到被占用的会话会跳过。
 
 ### 4. 作业与题目检索 (`homework` / `question`)
 
@@ -145,6 +148,7 @@ wkhelper homework submit -c 1966245:31318907 -w 84704898 \
 
 > [!NOTE]
 > `homework` / `questions` 仅覆盖章节作业（`leaf_type=6`）；期中、期末等考场由 `exam` 命令族处理，两者不再混列。
+> 导出按作业 ID 区分同名节点。任一作业抓取失败时整次导出报错，不发布不完整文件；作业与考试导出均拒绝覆盖既有目标，包括导出期间由其他进程创建的文件。
 
 ### 5. 资料阅读与图文题 (`article`)
 
@@ -155,6 +159,8 @@ wkhelper article list -c 1966245:31318907 --status pending
 # 标记指定资料节点为已读已完成（写操作要求 --confirm）
 wkhelper article read -c 1966245:31318907 -a 84705076 --confirm
 ```
+
+资料标记必须获得平台成功确认；平台拒绝或响应未确认成功时输出错误信封，退出码为 6，不宣称已完成。
 
 ### 6. 讨论题互动打卡 (`discussion`)
 
@@ -211,8 +217,8 @@ wkhelper exam close
 
 > [!IMPORTANT]
 > - 作答只通过前台真实浏览器页面的模拟点击与输入完成，不存在绕过浏览器的作答接口；交卷必须由本人在浏览器中核对后点击。
-> - `exam answer` 的 `saved` 依据页面自身的 `answer_problem` 请求与响应判定（通过 CDP 抓取，不额外发请求）；未捕获到该请求时才回读一次 `/exam_room/cache_results` 兜底，两者都无法确认时返回 `saved: false`。
-> - 页面实际提交内容与预期不一致（例如选项未绑定）会直接判 `saved: false`，不会被暂存回读洗白。
+> - `exam answer` 优先核验页面自身的 `answer_problem` 请求内容与有效业务成功码（通过 CDP 抓取，不额外发请求）；HTTP 200、HTML、空响应或缺失成功码均不能证明保存成功。未捕获到请求或响应证据未知时，只回读一次 `/exam_room/cache_results` 兜底；仍无法确认则返回 `saved: false`。
+> - 平台明确拒绝或页面实际提交内容与预期不一致（例如选项未绑定），会直接判 `saved: false`，不会被旧暂存回读洗白。
 > - 判断题选项键是 `true`/`false`，`--answer 正确` 会自动映射，也接受直接传 `true`。
 > - 在线监考、人脸/实名核验、网页截屏与线下机房等**实际启用**的监考项会锁定全部自动化入场与作答，只保留只读查询。
 > - `app_capture_screen`、`app_front_random_snap` 属于 App 端从属配置，未开启在线监考时不视为已启用监考。
@@ -241,7 +247,7 @@ wkhelper schema --path "homework submit" --full
 | **全局** | `--data-dir <dir>` | 平台默认目录 | 凭据元数据与检查点数据目录 |
 | **全局** | `--cookie-file <path>` | 无 | 会话 Cookie 文件，需配合 `--credential-mode session` |
 | **作业提交** | `--concurrency <N>` | `1` | 严格限制并发提交数，默认单线程顺序提交 |
-| **作业提交** | `--delay <sec>` | `8.0` | 单题作答基础间隔秒数，建议依据题目难易度动态调整（客观题 5~15s，多选 15~35s，主观题 45~90s） |
+| **作业提交** | `--delay <sec>` | `8.0` | 每个提交任务获得并发槽位后等待；默认并发 1 时逐题保持间隔，并发大于 1 时不承诺全局请求间隔 |
 | **作业提交** | `--delay-jitter <sec>`| `3.0` | 提交间隔浮动范围，实际间隔为 `delay ± jitter`，消除固定周期机械特征 |
 | **作业提交** | `--random-order` | `false` | 随机打乱题目提交次序，打破从第 1 题顺序作答的机械规律 |
 | **单题/考试** | `--delay <sec>` | `0.0` | 提交或作答前思考等待秒数，建议依据难度动态传入（简单题 5~15s，多选/计算 15~35s，主观题 45~90s） |
