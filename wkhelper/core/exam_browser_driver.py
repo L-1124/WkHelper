@@ -73,8 +73,22 @@ _SIMULATE_JS = """
         node.dispatchEvent(new Event('blur', {bubbles: true}));
     };
 
+    // UEditor 等富文本编辑器的可编辑区位于 iframe 内，必须跨文档查找
+    const collectFields = (root) => {
+        const selector = 'textarea, input[type="text"], [contenteditable="true"], .ql-editor';
+        const found = Array.from(root.querySelectorAll(selector));
+        Array.from(root.querySelectorAll('iframe')).forEach((frame) => {
+            let doc = null;
+            try { doc = frame.contentDocument; } catch (e) { return; }
+            if (!doc || !doc.body) return;
+            if (doc.body.isContentEditable) found.push(doc.body);
+            found.push(...Array.from(doc.querySelectorAll(selector)));
+        });
+        return found;
+    };
+
     if (mode === 'text' || type === 4 || type === 5) {
-        const fields = Array.from(el.querySelectorAll('textarea, input[type="text"], [contenteditable="true"]'));
+        const fields = collectFields(el);
         if (!fields.length) return {success: false, error: '题目 ' + pid + ' 未找到可输入控件'};
         if (type === 4 && keys.length > fields.length) {
             return {success: false, error: '题目 ' + pid + ' 填空数量与答案数量不匹配'};
@@ -127,19 +141,38 @@ _SIMULATE_JS = """
     if (missing.length) return {success: false, error: '考场页面未找到选项: ' + missing.join(',')};
     const expected = wanted.map((key) => options.find((option) => matches(option, key)).id);
 
+    // 每次点击都会触发组件重渲染，必须重新查询节点并等待渲染完成，否则后续点击落在已卸载的 label 上
+    const liveOptions = () => Array.from(el.querySelectorAll('label.el-radio, label.el-checkbox')).map(optionOf);
     let clicked = 0;
-    for (const option of options) {
-        const want = wanted.some((key) => matches(option, key));
-        const current = checked(option.label);
-        const needClick = type === 1 ? want && !current : want !== current;
-        if (!needClick) continue;
+    const clickOption = async (key) => {
+        const option = liveOptions().find((item) => matches(item, key));
+        if (!option) return false;
+        if (checked(option.label)) return true;
         option.label.scrollIntoView({block: 'center'});
         option.label.click();
         clicked += 1;
+        await tick();
+        return true;
+    };
+    if (type === 1) {
+        await clickOption(wanted[0]);
+    } else {
+        for (const key of wanted) {
+            if (!await clickOption(key)) return {success: false, error: '考场页面未找到选项: ' + key};
+        }
+        // 清掉不在答案里的历史勾选
+        for (const key of liveOptions().map((item) => item.id)) {
+            if (wanted.includes(key)) continue;
+            const extra = liveOptions().find((item) => item.id === key);
+            if (extra && checked(extra.label)) {
+                extra.label.click();
+                clicked += 1;
+                await tick();
+            }
+        }
     }
-    await tick();
 
-    const selected = options.filter((option) => checked(option.label)).map((option) => option.id);
+    const selected = liveOptions().filter((option) => checked(option.label)).map((option) => option.id);
     const matched = selected.length === expected.length && expected.every((key) => selected.includes(key));
     return {
         success: matched,
