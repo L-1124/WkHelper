@@ -6,13 +6,11 @@
 """
 
 import inspect
-import types
-from collections.abc import Sequence
 from functools import cache
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import Any
 
 from cyclopts import App
-from pydantic import Field, JsonValue
+from pydantic import Field, JsonValue, TypeAdapter
 
 from wkhelper.domain.model import Model
 
@@ -20,11 +18,16 @@ from wkhelper.domain.model import Model
 class ArgumentSpec(Model):
     name: str
     flags: list[str]
+    negative_flags: list[str] = Field(default_factory=list)
     type: str = ""
+    items: str | None = None
     required: bool = False
     default: JsonValue = None
     help: str = ""
     choices: list[str] | None = None
+    positional: bool = False
+    keyword_only: bool = False
+    allow_repeating: bool = False
 
 
 class CommandSpec(Model):
@@ -32,6 +35,7 @@ class CommandSpec(Model):
     summary: str
     description: str
     arguments: list[ArgumentSpec] = Field(default_factory=list)
+    session_options: list[ArgumentSpec] = Field(default_factory=list)
     side_effects: str = "none"
     requires_confirm: bool = False
     examples: list[str] = Field(default_factory=list)
@@ -263,75 +267,70 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 
-def _unwrap_optional(hint: Any) -> Any:
-    """剥离 `Optional[T]`，返回 `T`。"""
-    if get_origin(hint) in (Union, types.UnionType):
-        args = [item for item in get_args(hint) if item is not type(None)]
-        if args:
-            return args[0]
-    return hint
+def _resolve_type_and_items(hint: Any) -> tuple[str, str | None]:
+    """利用 Pydantic TypeAdapter 提取标准 JSON Schema 类型与容器元素类型。"""
+    try:
+        schema = TypeAdapter(hint).json_schema()
+    except Exception:
+        return "string", None
+
+    schemas = [s for s in schema.get("anyOf", [schema]) if s.get("type") != "null"]
+    type_map = {"integer": "int", "number": "float", "boolean": "bool"}
+    type_names = list(dict.fromkeys(type_map.get(s.get("type", "string"), s.get("type", "string")) for s in schemas))
+    items_list: list[str] = []
+    for s in schemas:
+        if s.get("type") == "array" and "items" in s:
+            raw_item_type = s["items"].get("type", "string")
+            items_list.append(type_map.get(raw_item_type, raw_item_type))
+
+    return " | ".join(type_names) if type_names else "string", " | ".join(dict.fromkeys(items_list)) or None
 
 
-def _resolve_type_str(hint: Any) -> str:
-    """从 Python 类型注解推导契约规范中的类型字符串。"""
-    hint = _unwrap_optional(hint)
-    origin = get_origin(hint)
-    if origin in (list, Sequence, tuple, set):
-        return "string"
-    if hint is bool:
-        return "bool"
-    if hint is int:
-        return "int"
-    if hint is float:
-        return "float"
-    return "string"
+def _build_argument_spec(arg: Any) -> ArgumentSpec:
+    """基于 Cyclopts Argument 的真实解析元数据构建参数契约规范。"""
+    name = arg.field_info.names[0]
+    negatives = list(arg.negatives)
+    flags = [name for name in arg.names if name not in negatives]
 
+    required = bool(arg.required)
+    default = None if required or arg.field_info.default is inspect.Parameter.empty else arg.field_info.default
+    help_str = arg.parameter.help or arg.field_info.help or ""
+    type_str, items_str = _resolve_type_and_items(arg.hint)
+    raw_choices = arg.get_choices()
+    choices = [str(choice) for choice in raw_choices] if raw_choices else None
+    positional = arg.index is not None
+    keyword_only = arg.index is None
+    allow_repeating = bool(arg.parameter.allow_repeating) if arg.parameter.allow_repeating is not None else (type_str == "array")
 
-def _resolve_choices(hint: Any) -> list[str] | None:
-    """从 `Literal[...]` 注解推导可选值列表。"""
-    hint = _unwrap_optional(hint)
-    if get_origin(hint) is Literal:
-        return [str(item) for item in get_args(hint)]
-    return None
+    return ArgumentSpec(
+        name=name,
+        flags=flags,
+        negative_flags=negatives,
+        type=type_str,
+        items=items_str,
+        required=required,
+        default=default,
+        help=help_str,
+        choices=choices,
+        positional=positional,
+        keyword_only=keyword_only,
+        allow_repeating=allow_repeating,
+    )
 
 
 def _inspect_command_arguments(cmd_app: App) -> list[ArgumentSpec]:
     """从 Cyclopts 命令应用中内省解析参数列表。"""
     args_col = cmd_app.assemble_argument_collection()
-    arg_specs: list[ArgumentSpec] = []
-    for arg in args_col:
-        name = arg.field_info.names[0]
-        if arg.parameter.name:
-            if isinstance(arg.parameter.name, (tuple, list)):
-                flags = list(arg.parameter.name)
-            else:
-                flags = [str(arg.parameter.name)]
-        else:
-            flags = [f"--{name.replace('_', '-')}"]
+    return [_build_argument_spec(arg) for arg in args_col if arg.show]
 
-        required = bool(arg.field_info.required)
-        default = None if required or arg.field_info.default is inspect._empty else arg.field_info.default
-        help_str = arg.parameter.help or arg.field_info.help or ""
-        type_str = _resolve_type_str(arg.hint)
 
-        choices: list[str] | None = None
-        if arg.parameter.choices:
-            choices = [str(c) for c in arg.parameter.choices]
-        else:
-            choices = _resolve_choices(arg.hint)
+@cache
+def get_session_options_specs() -> list[ArgumentSpec]:
+    """从根应用的 meta 装配中提取全局会话参数规范（扁平化展开并排除内部 tokens）。"""
+    from wkhelper.cli.app import app
 
-        arg_specs.append(
-            ArgumentSpec(
-                name=name,
-                flags=flags,
-                type=type_str,
-                required=required,
-                default=default,
-                help=help_str,
-                choices=choices,
-            )
-        )
-    return arg_specs
+    meta_col = app.meta.assemble_argument_collection()
+    return [_build_argument_spec(arg) for arg in meta_col if arg.show]
 
 
 def _hidden_command_names(node: App) -> set[str]:
@@ -375,12 +374,14 @@ def _build_command_spec(path: str, sub_app: App) -> CommandSpec:
     requires_confirm = contract.get("requires_confirm", False)
     examples = contract.get("examples", [])
     arguments = _inspect_command_arguments(sub_app)
+    session_options = get_session_options_specs()
 
     return CommandSpec(
         path=path,
         summary=summary,
         description=description,
         arguments=arguments,
+        session_options=session_options,
         side_effects=side_effects,
         requires_confirm=requires_confirm,
         examples=examples,
@@ -417,19 +418,42 @@ def get_command_spec(path: str, full: bool = False) -> CommandSpec:
         ArgumentSpec(
             name=arg.name,
             flags=arg.flags,
+            negative_flags=arg.negative_flags,
             type="",
+            items=None,
             required=arg.required,
             default=arg.default,
             help="",
             choices=None,
+            positional=arg.positional,
+            keyword_only=arg.keyword_only,
+            allow_repeating=arg.allow_repeating,
         )
         for arg in spec.arguments
+    ]
+    compact_session_options = [
+        ArgumentSpec(
+            name=opt.name,
+            flags=opt.flags,
+            negative_flags=opt.negative_flags,
+            type="",
+            items=None,
+            required=opt.required,
+            default=opt.default,
+            help="",
+            choices=None,
+            positional=opt.positional,
+            keyword_only=opt.keyword_only,
+            allow_repeating=opt.allow_repeating,
+        )
+        for opt in spec.session_options
     ]
     return CommandSpec(
         path=spec.path,
         summary=spec.summary,
         description=spec.description,
         arguments=compact_args,
+        session_options=compact_session_options,
         side_effects=spec.side_effects,
         requires_confirm=spec.requires_confirm,
         examples=spec.examples,
@@ -463,11 +487,16 @@ NEXT_ACTION_SCHEMA = NextActionSchema()
 class ParameterSchema(Model):
     name: str
     flags: list[str]
+    negative_flags: list[str] = Field(default_factory=list, exclude_if=lambda v: not v)
     required: bool = False
     default: JsonValue = None
     type: str | None = Field(default=None, exclude_if=lambda v: v is None)
-    help: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    items: str | None = Field(default=None, exclude_if=lambda v: v is None)
     choices: list[str] | None = Field(default=None, exclude_if=lambda v: v is None)
+    help: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    positional: bool = False
+    keyword_only: bool = False
+    allow_repeating: bool = False
 
 
 class CommandContractSchema(Model):
@@ -478,6 +507,7 @@ class CommandContractSchema(Model):
     requires_confirm: bool
     examples: list[str]
     parameters: list[ParameterSchema]
+    session_options: list[ParameterSchema] = Field(default_factory=list)
     next_action_schema: NextActionSchema = Field(default_factory=NextActionSchema)
 
 
@@ -490,39 +520,52 @@ class GroupIndexSchema(Model):
     type: str = "group_index"
     group: str
     commands: list[CommandSummary]
+    session_options: list[ParameterSchema] = Field(default_factory=list)
 
 
 class RootIndexSchema(Model):
     type: str = "command_index"
     groups: dict[str, list[CommandSummary]]
+    session_options: list[ParameterSchema] = Field(default_factory=list)
     next_action_schema: NextActionSchema = Field(default_factory=NextActionSchema)
+
+
+def _build_parameter_schema(arg: ArgumentSpec, full: bool) -> ParameterSchema:
+    return ParameterSchema(
+        name=arg.name,
+        flags=arg.flags,
+        negative_flags=arg.negative_flags,
+        required=arg.required,
+        default=arg.default,
+        type=arg.type if full else None,
+        items=arg.items if full else None,
+        choices=arg.choices if full else None,
+        help=arg.help if full else None,
+        positional=arg.positional,
+        keyword_only=arg.keyword_only,
+        allow_repeating=arg.allow_repeating,
+    )
 
 
 def get_command_schema(path: str | None = None, full: bool = False) -> dict[str, JsonValue]:
     """生成指定路径或全局命令的强类型 Schema。"""
     registry = command_registry()
+    session_options_specs = get_session_options_specs()
+    global_session_options = [_build_parameter_schema(opt, full=full) for opt in session_options_specs]
+
     if not path:
         root_groups: dict[str, list[CommandSummary]] = {}
         for cmd_path, spec in registry.items():
             grp = cmd_path.split()[0]
             root_groups.setdefault(grp, []).append(CommandSummary(command=cmd_path, summary=spec.summary))
-        return RootIndexSchema(groups=root_groups).model_dump()
+        return RootIndexSchema(groups=root_groups, session_options=global_session_options).model_dump()
 
     path = path.strip()
+
     if path in registry:
         spec = registry[path]
-        params = [
-            ParameterSchema(
-                name=arg.name,
-                flags=arg.flags,
-                required=arg.required,
-                default=arg.default,
-                type=arg.type if full else None,
-                help=arg.help if full else None,
-                choices=arg.choices if full else None,
-            )
-            for arg in spec.arguments
-        ]
+        params = [_build_parameter_schema(arg, full=full) for arg in spec.arguments]
+        cmd_session_options = [_build_parameter_schema(opt, full=full) for opt in spec.session_options]
         contract = CommandContractSchema(
             command=spec.path,
             summary=spec.summary,
@@ -531,6 +574,7 @@ def get_command_schema(path: str | None = None, full: bool = False) -> dict[str,
             requires_confirm=spec.requires_confirm,
             examples=spec.examples,
             parameters=params,
+            session_options=cmd_session_options,
         )
         return contract.model_dump()
 
@@ -538,6 +582,25 @@ def get_command_schema(path: str | None = None, full: bool = False) -> dict[str,
     matching = [spec for cmd_path, spec in registry.items() if cmd_path.startswith(path + " ")]
     if matching:
         group_cmds = [CommandSummary(command=s.path, summary=s.summary) for s in matching]
-        return GroupIndexSchema(group=path, commands=group_cmds).model_dump()
+        return GroupIndexSchema(group=path, commands=group_cmds, session_options=global_session_options).model_dump()
 
     raise KeyError(f"未知的命令路径: {path}")
+
+
+__all__ = [
+    "ArgumentSpec",
+    "COMMAND_CONTRACTS",
+    "CommandContractSchema",
+    "CommandSpec",
+    "CommandSummary",
+    "GroupIndexSchema",
+    "NEXT_ACTION_SCHEMA",
+    "NextActionFieldSchema",
+    "NextActionSchema",
+    "ParameterSchema",
+    "RootIndexSchema",
+    "command_registry",
+    "get_command_schema",
+    "get_command_spec",
+    "get_session_options_specs",
+]
