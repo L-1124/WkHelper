@@ -246,12 +246,23 @@ def extract_answer_submission(events: list[dict[str, Any]], problem_id: str | in
             if hit is None:
                 continue
             raw_answer = hit.get("result")
+            answers: list[str] = []
             if isinstance(raw_answer, list):
-                answers = [str(value) for value in raw_answer if str(value).strip()]
-            elif raw_answer is None or str(raw_answer).strip() == "":
-                answers = []
-            else:
-                answers = [str(raw_answer)]
+                for val in raw_answer:
+                    if isinstance(val, dict) and "content" in val:
+                        import re
+
+                        plain = re.sub(r"<[^>]+>", "", str(val["content"])).strip()
+                        answers.append(plain)
+                    elif str(val).strip():
+                        answers.append(str(val).strip())
+            elif isinstance(raw_answer, dict) and "content" in raw_answer:
+                import re
+
+                plain = re.sub(r"<[^>]+>", "", str(raw_answer["content"])).strip()
+                answers.append(plain)
+            elif raw_answer is not None and str(raw_answer).strip():
+                answers.append(str(raw_answer).strip())
             request = {"request_id": params.get("requestId"), "answer": answers}
         elif method == "Network.responseReceived" and request is not None:
             if params.get("requestId") == request["request_id"]:

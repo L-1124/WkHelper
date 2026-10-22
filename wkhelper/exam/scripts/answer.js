@@ -127,22 +127,34 @@ async (args) => {
         await tick();
         return true;
     };
-    if (type === 1) {
+    if (type === 1 || type === 6) {
         await clickOption(wanted[0]);
     } else {
-        for (const key of wanted) {
-            if (!await clickOption(key)) return {success: false, error: '考场页面未找到选项: ' + key};
+        if (target && item) {
+            target.$set(item, 'result', expected);
         }
-        // 取消勾选不在答案里的多余选项
-        for (const key of liveOptions().map((item) => item.id)) {
-            if (wanted.includes(key)) continue;
-            const extra = liveOptions().find((item) => item.id === key);
-            if (extra && checked(extra.label)) {
-                extra.label.click();
+        for (const opt of liveOptions()) {
+            const isWanted = expected.includes(opt.id);
+            const isCurChecked = checked(opt.label);
+            if (isWanted !== isCurChecked) {
+                opt.label.scrollIntoView({block: 'center'});
+                opt.label.click();
                 clicked += 1;
                 await tick();
             }
         }
+        if (target && item) {
+            target.$set(item, 'result', expected);
+        }
+        let cur = target;
+        while (cur) {
+            if (typeof cur.submitAnswer === 'function') {
+                cur.submitAnswer(item);
+                break;
+            }
+            cur = cur.$parent;
+        }
+        await tick();
     }
 
     const selected = liveOptions().filter((option) => checked(option.label)).map((option) => option.id);

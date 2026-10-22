@@ -245,10 +245,16 @@ class BasePlatform(ABC):
         self._exam_room_binding = (host, eid, login_url)
 
     async def _open_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
-        """返回 (exam_host, exam_id, 考场直达 URL)；已绑定会话时直接复用。"""
+        """返回 (exam_host, exam_id, 考场直达 URL)；已绑定或检测到活跃会话时直接复用。"""
         binding = getattr(self, "_exam_room_binding", None)
         if binding is not None:
             return binding
+        from wkhelper.exam.session import load_session
+
+        session = load_session()
+        if session is not None and str(session.exam_id) == str(leaf_id):
+            self.bind_exam_room(session.host, session.eid, session.web_url)
+            return session.host, session.eid, session.web_url
         return await self._mint_exam_room(leaf_id, course)
 
     async def _mint_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
