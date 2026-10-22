@@ -2,8 +2,8 @@
 
 import pytest
 
-from wkhelper.core.browser_cdp import find_chromium_browser, solve_captcha_interactive
-from wkhelper.core.exceptions import RiskControlError
+from wkhelper.domain.errors import RiskControlError
+from wkhelper.infra.browser.challenge import find_chromium_browser, solve_captcha_interactive
 
 
 def test_find_chromium_browser() -> None:
@@ -16,6 +16,6 @@ def test_find_chromium_browser() -> None:
 @pytest.mark.asyncio
 async def test_solve_captcha_interactive_no_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     """未安装 Chromium 浏览器时抛出 RiskControlError。"""
-    monkeypatch.setattr("wkhelper.core.browser_cdp.find_chromium_browser", lambda: None)
+    monkeypatch.setattr("wkhelper.infra.browser.challenge.find_chromium_browser", lambda: None)
     with pytest.raises(RiskControlError, match="未检测到本地 Chromium 浏览器"):
         await solve_captcha_interactive("https://test.com", "get_exercise", {})

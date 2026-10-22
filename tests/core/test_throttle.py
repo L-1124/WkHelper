@@ -6,10 +6,10 @@ from typing import Any
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
-from wkhelper.core.base_platform import BasePlatform
-from wkhelper.core.exceptions import APIError
-from wkhelper.core.throttle import RateGate, RetryPolicy, parse_retry_hint
-from wkhelper.core.transport import HTTPError
+from wkhelper.domain.errors import APIError
+from wkhelper.infra.http import HTTPError
+from wkhelper.infra.throttle import RateGate, RetryPolicy, parse_retry_hint
+from wkhelper.platform.base import BasePlatform
 
 
 class _Resp:
@@ -32,6 +32,8 @@ class _Session:
     def __init__(self, responses: list[_Resp]) -> None:
         self._responses = list(responses)
         self.calls = 0
+        self.cookies: dict[str, str] = {}
+        self.headers: dict[str, str] = {}
 
     async def request(self, method: str, url: str, **kwargs: Any) -> _Resp:
         self.calls += 1

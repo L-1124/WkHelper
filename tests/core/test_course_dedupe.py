@@ -1,6 +1,6 @@
 """课程引用与去重测试：同一慕课课程挂在多个课堂下时不能互相顶掉。"""
 
-from wkhelper.core.entities import Course, course_reference, dedupe_courses
+from wkhelper.domain.courses import Course, course_reference, dedupe_courses
 
 
 def test_dedupe_courses_keeps_distinct_classrooms() -> None:

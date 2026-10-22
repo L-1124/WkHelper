@@ -3,27 +3,29 @@
 from pathlib import Path
 from typing import Annotated
 
-import msgspec
 from cyclopts import App, Parameter
 
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
-from wkhelper.core.entities import Homework
-from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
-from wkhelper.core.exporter import export_questions_to_markdown, html_to_md, localize_question_detail
-from wkhelper.core.homework import normalize_judgement_answer, question_type
-from wkhelper.core.json_types import json_int
-from wkhelper.core.results import (
-    ExportResult,
+from wkhelper.domain.errors import APIError, ConfirmationRequiredError
+from wkhelper.domain.exporting import ExportResult, OutputFileResult
+from wkhelper.domain.homework import (
+    Homework,
     OptionItem,
-    OutputFileResult,
     QuestionDetail,
     QuestionListData,
     QuestionSubmitPreview,
     QuestionSubmitResult,
     QuestionSummary,
 )
+from wkhelper.domain.json_types import json_int
+from wkhelper.domain.questions import normalize_judgement_answer, question_type
+from wkhelper.exporting.markdown import html_to_md
+from wkhelper.exporting.questions import export_questions_to_markdown
+from wkhelper.exporting.resources import localize_question_detail
+from wkhelper.homework.service import submit_question
+from wkhelper.infra.serialization import encode_json
 
 question_app = App(name="question", help="单题与按页题目检索")
 questions_app = App(name="questions", help="课程题目导出")
@@ -116,7 +118,7 @@ async def question_get_cmd(
             detail = await localize_question_detail(plat.fetch_bytes, detail, target_assets_dir)
 
         if output is not None:
-            Path(output).write_bytes(msgspec.json.encode(detail))
+            Path(output).write_bytes(encode_json(detail))
             return CommandResult[OutputFileResult](data=OutputFileResult(output_file=output, written=True))
         return CommandResult[QuestionDetail](data=detail)
 
@@ -185,7 +187,8 @@ async def question_submit_cmd(
 
             actual_delay = max(0.05, delay + random.uniform(-delay_jitter, delay_jitter) if delay_jitter > 0 else delay)
             await asyncio.sleep(actual_delay)
-        result = await plat.submit_question(
+        result = await submit_question(
+            plat,
             Homework(id=str(homework), name=str(homework)),
             matched,
             question,

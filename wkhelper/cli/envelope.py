@@ -1,14 +1,13 @@
-"""统一输出信封与强类型结果模型（JSON 值契约，msgspec 编码）。"""
+"""统一输出信封与强类型结果模型（JSON 值契约）。"""
 
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-import msgspec
-
-from wkhelper.core.json_types import JsonDict
-from wkhelper.core.results import NextAction
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.json_types import JsonDict
+from wkhelper.infra.serialization import encode_json
 
 SCHEMA_VERSION = 1
 
@@ -114,8 +113,8 @@ def create_error_envelope(
 def print_json(envelope: Mapping[str, Any]) -> None:
     """向标准输出打印单行 JSON 字符串并刷新。
 
-    使用 msgspec 编码：原生支持 dataclass、嵌套结构与 UTF-8 中文，
+    统一编码支持 dataclass、输入模型、嵌套结构与 UTF-8 中文，
     遇到不可序列化类型直接抛错，不会输出半截 JSON。
     """
-    sys.stdout.write(msgspec.json.encode(envelope).decode("utf-8") + "\n")
+    sys.stdout.write(encode_json(envelope).decode("utf-8") + "\n")
     sys.stdout.flush()

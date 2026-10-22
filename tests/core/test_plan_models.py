@@ -2,13 +2,13 @@
 
 import pytest
 
-from wkhelper.core.json_types import JsonValue
-from wkhelper.core.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
-from wkhelper.core.video import VideoWatchOptions
+from wkhelper.domain.json_types import JsonValue
+from wkhelper.video.engine import VideoWatchOptions
+from wkhelper.video.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
 
 
 def test_video_plan_parses_structure() -> None:
-    plan = VideoPlan.from_mapping(
+    plan = VideoPlan.model_validate(
         {
             "schema_version": 1,
             "platform": "ykt",
@@ -45,7 +45,7 @@ def test_video_plan_parses_structure() -> None:
 )
 def test_video_plan_rejects_invalid_input(raw: dict[str, JsonValue]) -> None:
     with pytest.raises(ValueError):
-        VideoPlan.from_mapping(raw)
+        VideoPlan.model_validate(raw)
 
 
 def test_parameter_layering_precedence() -> None:
@@ -84,15 +84,7 @@ def test_parameter_layering_precedence() -> None:
 )
 def test_video_parameters_reject_invalid_values(raw: dict[str, JsonValue]) -> None:
     with pytest.raises(ValueError):
-        VideoParameters.from_mapping(raw)
-
-
-def test_video_parameters_rejects_invalid_video_timeout() -> None:
-    """验证 video_timeout 校验生效且报错信息准确。"""
-    with pytest.raises(ValueError, match="video_timeout.*必须为正数"):
-        VideoParameters.from_mapping({"video_timeout": 0})
-    with pytest.raises(ValueError, match="video_timeout.*必须为正数"):
-        VideoParameters.from_mapping({"video_timeout": -10})
+        VideoParameters.model_validate(raw)
 
 
 def test_execution_overrides_layering() -> None:
@@ -103,9 +95,73 @@ def test_execution_overrides_layering() -> None:
     assert effective.total_timeout == 900.0
 
     with pytest.raises(ValueError):
-        ExecutionOverrides(on_error="abort").overlay(base)
+        ExecutionOverrides.model_validate({"on_error": "abort"}).overlay(base)
 
 
 def test_video_target_rejects_unknown_field() -> None:
     with pytest.raises(ValueError):
-        VideoTarget.from_mapping({"course_id": "c_1", "video_id": "v_1", "extra": "x"})
+        VideoTarget.model_validate({"course_id": "c_1", "video_id": "v_1", "extra": "x"})
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "location"),
+    [
+        ("execution", {"concurrency": True}, ("execution", "concurrency")),
+        ("schema_version", True, ("schema_version",)),
+        ("execution", {"total_timeout": float("inf")}, ("execution", "total_timeout")),
+        ("video_defaults", {"video_timeout": float("nan")}, ("video_defaults", "video_timeout")),
+        ("video_defaults", {"unexpected": 1}, ("video_defaults", "unexpected")),
+        ("targets", [], ("targets",)),
+        ("targets", [{"course_id": " ", "video_id": "v"}], ("targets", 0, "course_id")),
+        ("targets", [{"course_id": "c", "video_id": " "}], ("targets", 0, "video_id")),
+    ],
+)
+def test_plan_rejects_invalid_fields(field, value, location) -> None:
+    from pydantic import ValidationError
+
+    raw = {"targets": [{"course_id": "c", "video_id": "v"}], field: value}
+    with pytest.raises(ValidationError) as error:
+        VideoPlan.model_validate(raw)
+    assert location in {item["loc"] for item in error.value.errors()}
+
+
+def test_plan_null_defaults_and_local_id_normalization() -> None:
+    plan = VideoPlan.model_validate(
+        {
+            "targets": [{"course_id": " c ", "video_id": " v ", "name": " 原名 "}],
+            "execution": None,
+            "video_defaults": None,
+        }
+    )
+    assert plan.execution == ExecutionSettings()
+    assert plan.video_defaults == VideoParameters()
+    assert (plan.targets[0].course_id, plan.targets[0].video_id, plan.targets[0].name) == ("c", "v", " 原名 ")
+    assert VideoParameters(video_timeout=None).video_timeout is None
+
+
+def test_invalid_construction_and_assignment_preserve_valid_state() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        VideoParameters(video_timeout=0)  # type: ignore[bad-argument-type]
+    settings = ExecutionSettings(concurrency=2)
+    with pytest.raises(ValidationError):
+        settings.concurrency = 0
+    assert settings.concurrency == 2
+    plan = VideoPlan(targets=[VideoTarget(course_id="c", video_id="v")])
+    with pytest.raises(ValidationError):
+        plan.execution.concurrency = 0
+    assert plan.execution.concurrency == 1
+    with pytest.raises(ValidationError):
+        plan.video_defaults.video_timeout = -1
+    assert plan.video_defaults.model_dump()["video_timeout"] is None
+
+
+def test_input_defaults_are_validated() -> None:
+    from pydantic import Field, ValidationError
+
+    class InvalidSettings(ExecutionSettings):
+        concurrency: int = Field(default=0, ge=1)  # type: ignore[bad-argument-type]
+
+    with pytest.raises(ValidationError):
+        InvalidSettings()

@@ -9,9 +9,10 @@ from rich.markdown import Markdown
 from rich.theme import Theme
 
 from wkhelper.cli.context import get_effective_format
-from wkhelper.cli.envelope import CommandResult, NextAction, create_success_envelope, print_json
+from wkhelper.cli.envelope import CommandResult, create_success_envelope, print_json
 from wkhelper.cli.markdown import format_error_markdown, format_result_markdown
-from wkhelper.core.json_types import JsonDict, JsonValue
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.json_types import JsonDict, JsonValue
 
 TERMINAL_THEME = Theme(
     {

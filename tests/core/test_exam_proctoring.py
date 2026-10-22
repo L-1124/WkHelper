@@ -2,8 +2,8 @@
 
 import pytest
 
-from wkhelper.core.exam_proctoring import ProctoringRestrictionError, ensure_exam_operation_allowed
-from wkhelper.core.results import ExamCoverDetail
+from wkhelper.domain.exam import ExamCoverDetail
+from wkhelper.exam.proctoring import ProctoringRestrictionError, ensure_exam_operation_allowed
 
 
 def _cover() -> ExamCoverDetail:

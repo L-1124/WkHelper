@@ -8,23 +8,22 @@ from unittest.mock import patch
 
 import pytest
 
-from wkhelper.core.entities import Course, Homework
-from wkhelper.core.exceptions import APIError, OutputExistsError
-from wkhelper.core.exporter import (
-    _publish_file_no_clobber,
-    export_exam_paper_to_markdown,
-    export_questions_to_markdown,
-    html_to_md,
-    localize_question_detail,
-)
-from wkhelper.core.results import ExamPaperData, ExamProblemItem, OptionItem, QuestionDetail
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError, OutputExistsError
+from wkhelper.domain.exam import ExamPaperData, ExamProblemItem
+from wkhelper.domain.homework import Homework, OptionItem, QuestionDetail
+from wkhelper.exam.export import export_exam_paper_to_markdown
+from wkhelper.exporting.markdown import html_to_md
+from wkhelper.exporting.questions import export_questions_to_markdown
+from wkhelper.exporting.resources import localize_question_detail
+from wkhelper.infra.files import publish_file_no_clobber
 
 
 @pytest.mark.asyncio
-async def test_export_writes_markdown_and_refuses_overwrite(fake_platform, tmp_path: Path) -> None:
+async def test_export_writes_markdown_and_refuses_overwrite(fake_platform, tmp_path: Path, monkeypatch) -> None:
     course = Course(id="c1", name="测试课程", platform_id="test")
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [Homework(id="hw1", name="作业一")]
 
     async def fake_leaf_questions(leaf_id: str | int, current: Course) -> list[dict[str, Any]]:
@@ -36,7 +35,7 @@ async def test_export_writes_markdown_and_refuses_overwrite(fake_platform, tmp_p
             }
         ]
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
 
     target = tmp_path / "course.md"
@@ -53,13 +52,13 @@ async def test_export_writes_markdown_and_refuses_overwrite(fake_platform, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_export_returns_empty_result_without_homeworks(fake_platform, tmp_path: Path) -> None:
+async def test_export_returns_empty_result_without_homeworks(fake_platform, tmp_path: Path, monkeypatch) -> None:
     course = Course(id="c1", name="空课程", platform_id="test")
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return []
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
 
     result = await export_questions_to_markdown(fake_platform, course, output_path=tmp_path / "empty.md")
 
@@ -92,7 +91,7 @@ async def test_export_questions_with_download_resources(fake_platform, tmp_path:
     """验证带 --download-resources 导出时下载图片并改写相对路径。"""
     course = Course(id="c1", name="高数", platform_id="test")
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [Homework(id="hw1", name="第1讲")]
 
     async def fake_leaf_questions(leaf_id: str | int, current: Course) -> list[dict[str, Any]]:
@@ -107,7 +106,7 @@ async def test_export_questions_with_download_resources(fake_platform, tmp_path:
             }
         ]
 
-    fake_platform.get_homeworks = fake_homeworks
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions
 
     class FakeResp:
@@ -139,17 +138,17 @@ async def test_export_questions_with_download_resources(fake_platform, tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_export_reports_each_homework_failure(fake_platform, tmp_path: Path) -> None:
+async def test_export_reports_each_homework_failure(fake_platform, tmp_path: Path, monkeypatch) -> None:
     """全部作业抓取失败时必须保留节点与原因，不能退化成笼统内部错误。"""
     course = Course(id="c1", name="测试课程", platform_id="test")
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [Homework(id="hw1", name="第一章作业"), Homework(id="hw2", name="第二章作业")]
 
     async def fake_leaf_questions(leaf_id: str | int, current: Course) -> list[dict[str, Any]]:
         raise APIError(f"节点 {leaf_id} 是考试（leaf_type=5）", retryable=False)
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
 
     target = tmp_path / "failed.md"
@@ -204,11 +203,11 @@ async def test_localize_question_detail(fake_platform, tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_export_duplicate_homework_names(fake_platform, tmp_path: Path) -> None:
+async def test_export_duplicate_homework_names(fake_platform, tmp_path: Path, monkeypatch) -> None:
     """同名作业应由唯一作业 ID 索引，不得互相覆盖、丢题或产生错误统计计数。"""
     course = Course(id="c1", name="测试同名课程", platform_id="test")
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [
             Homework(id="hw_101", name="第一讲随堂测验"),
             Homework(id="hw_102", name="第一讲随堂测验"),
@@ -236,7 +235,7 @@ async def test_export_duplicate_homework_names(fake_platform, tmp_path: Path) ->
             }
         ]
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
 
     target = tmp_path / "duplicate_names.md"
@@ -254,11 +253,11 @@ async def test_export_duplicate_homework_names(fake_platform, tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_export_partial_failure_raises_api_error_and_does_not_publish(fake_platform, tmp_path: Path) -> None:
+async def test_export_partial_failure_raises_api_error_and_does_not_publish(fake_platform, tmp_path: Path, monkeypatch) -> None:
     """任一作业抓取失败不得普通成功或半份导出，必须统一携带节点与原因抛出 APIError 且不发布文件。"""
     course = Course(id="c1", name="部分失败课程", platform_id="test")
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [
             Homework(id="hw_ok", name="正常作业"),
             Homework(id="hw_bad", name="异常作业"),
@@ -274,7 +273,7 @@ async def test_export_partial_failure_raises_api_error_and_does_not_publish(fake
             ]
         raise RuntimeError("平台网关超时 504")
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
 
     target = tmp_path / "partial_fail.md"
@@ -290,12 +289,12 @@ async def test_export_partial_failure_raises_api_error_and_does_not_publish(fake
 
 
 @pytest.mark.asyncio
-async def test_export_publish_target_race_collision(fake_platform, tmp_path: Path) -> None:
+async def test_export_publish_target_race_collision(fake_platform, tmp_path: Path, monkeypatch) -> None:
     """导出过程中若目标文件被竞态新建，发布时必须拒绝覆盖并清理临时文件。"""
     course = Course(id="c1", name="竞态测试课程", platform_id="test")
     target = tmp_path / "race_target.md"
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [Homework(id="hw1", name="作业")]
 
     async def fake_leaf_questions(leaf_id: str | int, current: Course) -> list[dict[str, Any]]:
@@ -303,7 +302,7 @@ async def test_export_publish_target_race_collision(fake_platform, tmp_path: Pat
         target.write_text("外部已有关键文件内容", encoding="utf-8")
         return [{"problem_id": 1, "content": {"Body": "<p>抓取到的题目</p>"}}]
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
 
     with pytest.raises(OutputExistsError) as excinfo:
@@ -315,19 +314,19 @@ async def test_export_publish_target_race_collision(fake_platform, tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_export_concurrent_double_export(fake_platform, tmp_path: Path) -> None:
+async def test_export_concurrent_double_export(fake_platform, tmp_path: Path, monkeypatch) -> None:
     """并发双导出同一路径时，仅一份能成功发布，另一份必须报 OutputExistsError，文件无损坏且无临时文件残留。"""
     course = Course(id="c1", name="并发双导出课程", platform_id="test")
     target = tmp_path / "double_export.md"
 
-    async def fake_homeworks(current: Course) -> list[Homework]:
+    async def fake_homeworks(platform, current: Course) -> list[Homework]:
         return [Homework(id="hw1", name="作业一")]
 
     async def fake_leaf_questions(leaf_id: str | int, current: Course) -> list[dict[str, Any]]:
         await asyncio.sleep(0.01)
         return [{"problem_id": 1, "content": {"Body": "<p>并发题目内容</p>"}}]
 
-    fake_platform.get_homeworks = fake_homeworks  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_homeworks)
     fake_platform.get_leaf_questions = fake_leaf_questions  # type: ignore[method-assign]
 
     results = await asyncio.gather(
@@ -391,7 +390,7 @@ def test_publish_non_file_exists_os_error_raised_directly(tmp_path: Path) -> Non
 
     with patch("os.link", side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
         with pytest.raises(OSError) as excinfo:
-            _publish_file_no_clobber(str(src), dst)
+            publish_file_no_clobber(str(src), dst)
 
     assert not isinstance(excinfo.value, OutputExistsError)
     assert excinfo.value.errno == errno.EXDEV

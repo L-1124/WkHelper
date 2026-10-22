@@ -4,9 +4,11 @@ from typing import Any
 
 import pytest
 
-from wkhelper.core.entities import Course, UserInfo
-from wkhelper.core.transport import AsyncSession
+from wkhelper.domain.accounts import UserInfo
+from wkhelper.domain.courses import Course
+from wkhelper.infra.http import AsyncSession
 from wkhelper.platform.yuketang import YuketangPlatform
+from wkhelper.video.service import get_videos
 
 
 def _course() -> Course:
@@ -41,7 +43,7 @@ async def test_completed_video_ids_reads_watched_record(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        assert await platform._get_completed_video_ids(_course()) == {91317672}
+        assert await platform.get_completed_video_ids(_course()) == {91317672}
 
 
 @pytest.mark.asyncio
@@ -56,7 +58,7 @@ async def test_completed_video_ids_returns_none_on_error(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", boom)
 
-        assert await platform._get_completed_video_ids(_course()) is None
+        assert await platform.get_completed_video_ids(_course()) is None
 
 
 @pytest.mark.asyncio
@@ -71,7 +73,7 @@ async def test_completed_video_ids_returns_none_on_bad_payload(monkeypatch) -> N
 
         monkeypatch.setattr(platform, "_request_json", bad_payload)
 
-        assert await platform._get_completed_video_ids(_course()) is None
+        assert await platform.get_completed_video_ids(_course()) is None
 
 
 @pytest.mark.asyncio
@@ -103,11 +105,11 @@ async def test_build_videos_marks_completed_from_platform(monkeypatch) -> None:
         async def forbidden_schedules(current: Course) -> dict[int, float]:
             raise AssertionError("有权威完成集合时不应再请求章节进度")
 
-        monkeypatch.setattr(platform, "_get_chapter_data", fake_chapter_data)
-        monkeypatch.setattr(platform, "_get_completed_video_ids", fake_completed)
-        monkeypatch.setattr(platform, "_get_leaf_schedules", forbidden_schedules)
+        monkeypatch.setattr(platform, "get_chapter_data", fake_chapter_data)
+        monkeypatch.setattr(platform, "get_completed_video_ids", fake_completed)
+        monkeypatch.setattr(platform, "get_leaf_schedules", forbidden_schedules)
 
-        videos = await platform.get_videos(course)
+        videos = await get_videos(platform, course)
 
         assert set(videos) == {11, 12}
         assert "[已完成]" in videos[11]

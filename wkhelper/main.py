@@ -12,7 +12,7 @@ from cyclopts import CycloptsError
 from wkhelper.cli.app import app, ctx
 from wkhelper.cli.envelope import create_error_envelope
 from wkhelper.cli.output import emit_error
-from wkhelper.core.exceptions import (
+from wkhelper.domain.errors import (
     APIError,
     AuthError,
     ConfirmationRequiredError,
@@ -21,7 +21,7 @@ from wkhelper.core.exceptions import (
     RiskControlError,
     WKError,
 )
-from wkhelper.core.json_types import JsonDict
+from wkhelper.domain.json_types import JsonDict
 
 logger = logging.getLogger("wkhelper")
 

@@ -6,10 +6,11 @@ from io import StringIO
 
 import pytest
 
-from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
-from wkhelper.core.events import is_debug_enabled, set_debug_enabled
-from wkhelper.core.transport import AsyncSession
+from wkhelper.infra.events import is_debug_enabled, set_debug_enabled
+from wkhelper.infra.http import AsyncSession
 from wkhelper.main import async_main
+from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.protocol_types import HeartbeatProfile
 
 
 @pytest.mark.asyncio
@@ -85,29 +86,26 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
         def _build_submit_payload(self, problem_id: int, answer: list[str], submit_ctx=None, question=None):
             return {}
 
-        async def _prepare_submit_context(self, homework, course):
+        async def prepare_submit_context(self, homework, course):
             return {}
 
-        async def _prepare_video_context(self, video_id: str, course):
+        async def prepare_video_context(self, video_id: str, course):
             raise NotImplementedError
 
-        async def _login_with_cookies(self, cookies):
+        async def login_with_cookies(self, cookies):
             raise NotImplementedError
 
-        async def _qr_exchange_cookies(self, login_data):
+        async def qr_exchange_cookies(self, login_data):
 
             return {}
-
-        async def _login_with_qrcode(self, display="image", open_browser=False, timeout=120):
-            raise NotImplementedError
 
         async def get_courses(self):
             return []
 
-        async def _get_chapter_data(self, course):
+        async def get_chapter_data(self, course):
             return []
 
-        async def _get_leaf_schedules(self, course):
+        async def get_leaf_schedules(self, course):
             return {}
 
         def _build_leaf_info_url(self, leaf_id, course):
@@ -154,3 +152,26 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
         assert "duration_ms" in trace_events[0]["payload"]
     finally:
         set_debug_enabled(False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["cookie", "plan"])
+async def test_debug_validation_does_not_disclose_input_values(kind, tmp_path, monkeypatch) -> None:
+    secret = "redaction-regression-sentinel"
+    path = tmp_path / "input.json"
+    if kind == "cookie":
+        payload = {"sessionid": [secret]}
+        args = ["auth", "login", "-p", "ykt", "-m", "cookie", "--cookie-file", str(path)]
+    else:
+        payload = {"targets": [{"course_id": [secret], "video_id": "v"}]}
+        args = ["video", "learn", "--plan-file", str(path), "--dry-run"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    stdout, stderr = StringIO(), StringIO()
+    monkeypatch.setattr("sys.stdout", stdout)
+    monkeypatch.setattr("sys.stderr", stderr)
+    code = await async_main(["--debug", "--credential-mode", "session", *args])
+    assert code == 2
+    envelope = json.loads(stdout.getvalue())
+    assert envelope["error"]["code"] == "INVALID_ARGUMENT"
+    assert secret not in stdout.getvalue() + stderr.getvalue()
+    assert "input_value" not in stdout.getvalue()

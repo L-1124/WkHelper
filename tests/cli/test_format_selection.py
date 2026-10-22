@@ -6,41 +6,35 @@ from io import StringIO
 import pytest
 
 from wkhelper.cli.markdown import format_error_markdown, format_result_markdown
-from wkhelper.core.entities import AccountSummary, StorageStatus
-from wkhelper.core.plan import ExecutionSettings, VideoTarget
-from wkhelper.core.results import (
-    AccountListData,
+from wkhelper.domain.accounts import AccountListData, AccountSummary, AuthStatusResult, LoginResult, RemoveResult, StatusData, StorageStatus
+from wkhelper.domain.content import (
     ArticleItem,
     ArticleListData,
     ArticleReadResult,
-    AuthStatusResult,
-    CourseDetail,
-    CourseItem,
-    CourseListData,
     DiscussionCommentResult,
     DiscussionItem,
     DiscussionListData,
     DiscussionTopicDetail,
-    ExportResult,
+)
+from wkhelper.domain.courses import CourseDetail, CourseItem, CourseListData
+from wkhelper.domain.exporting import ExportResult, OutputFileResult
+from wkhelper.domain.homework import (
     HomeworkItem,
     HomeworkListData,
     HomeworkOutline,
     HomeworkSubmitPreview,
     HomeworkSubmitResult,
-    LoginResult,
     OptionItem,
-    OutputFileResult,
     QuestionDetail,
     QuestionListData,
     QuestionOutline,
     QuestionSubmitPreview,
     QuestionSubmitResult,
     QuestionSummary,
-    RemoveResult,
-    StatusData,
     SubmitItem,
+)
+from wkhelper.domain.video import (
     VideoItem,
-    VideoLearnPreview,
     VideoListData,
     VideoPlanSummary,
     VideoProgress,
@@ -49,6 +43,7 @@ from wkhelper.core.results import (
     VideoTargetResult,
 )
 from wkhelper.main import async_main
+from wkhelper.video.plan import ExecutionSettings, VideoLearnPreview, VideoTarget
 
 
 @pytest.mark.asyncio
@@ -291,8 +286,8 @@ def test_unregistered_payload_falls_back_safely() -> None:
 
 def test_next_actions_without_argv_renders_description() -> None:
     """当 NextAction 没有 argv 时，优雅展示 description 且不输出空反引号。"""
-    from wkhelper.cli.envelope import NextAction
-    from wkhelper.core.results import ExamListData
+    from wkhelper.domain.actions import NextAction
+    from wkhelper.domain.exam import ExamListData
 
     action = NextAction(reason="请自主完成", argv=[], description="登录官网考场页作答")
     md = format_result_markdown(ExamListData(exams=[]), next_actions=[action])

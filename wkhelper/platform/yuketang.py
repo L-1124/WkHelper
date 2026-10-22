@@ -4,15 +4,20 @@ import logging
 from typing import Any, override
 from urllib.parse import quote
 
-from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
-from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
-from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.homework import is_fill_in_question, normalize_judgement_answer
-from wkhelper.core.json_types import json_int
-from wkhelper.core.markdown import html_to_md
-from wkhelper.core.qr_login import QrCodeSession
-from wkhelper.core.results import ExamCoverDetail, ExamStartResult, NoticeDetail
-from wkhelper.core.time_types import epoch_millis
+from wkhelper.auth.qr import QrCodeSession
+from wkhelper.domain.accounts import UserInfo
+from wkhelper.domain.content import NoticeDetail
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError, AuthError
+from wkhelper.domain.exam import ExamCoverDetail, ExamStartResult
+from wkhelper.domain.homework import Homework
+from wkhelper.domain.json_types import json_int
+from wkhelper.domain.questions import is_fill_in_question, normalize_judgement_answer
+from wkhelper.domain.time_types import epoch_millis
+from wkhelper.domain.video import VideoContext
+from wkhelper.exporting.markdown import html_to_md
+from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.protocol_types import HeartbeatProfile
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,13 @@ def _first_text(data: dict[str, Any], *keys: str) -> str:
 
 
 class YuketangPlatform(BasePlatform):
+    def format_web_task_url(self, course: Course, leaf_id: str | int, task_type: str = "exercise") -> str | None:
+        cid = self._classroom_id(course)
+        lid = str(leaf_id)
+        if task_type == "video":
+            return f"https://www.yuketang.cn/v2/web/xcloud/video-student/{cid}/{lid}"
+        return f"https://www.yuketang.cn/v2/web/studentLog/{cid}/{lid}"
+
     """雨课堂平台。"""
 
     api_base = "https://www.yuketang.cn"
@@ -40,7 +52,7 @@ class YuketangPlatform(BasePlatform):
         return HeartbeatProfile(lob="ykt")
 
     @override
-    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+    async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         csrftoken = cookies.get("csrftoken", "")
         sessionid = cookies.get("sessionid", "")
         if not csrftoken or not sessionid:
@@ -71,7 +83,7 @@ class YuketangPlatform(BasePlatform):
     qr_platform_name = "雨课堂"
 
     @override
-    def _qr_request_payload(self) -> dict[str, Any]:
+    def qr_request_payload(self) -> dict[str, Any]:
         return {
             "op": "requestlogin",
             "role": "web",
@@ -82,14 +94,14 @@ class YuketangPlatform(BasePlatform):
         }
 
     @override
-    async def _qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
+    async def qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
         qrcode_data = message.get("qrcode")
         if qrcode_data:
             qr_session.create_image(qrcode_data)
             qr_session.emit_challenge(expires_in=expires_in)
 
     @override
-    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
         # 前端容错：UserID || user_id、Auth || auth
         auth = login_data.get("Auth") or login_data.get("auth")
         user_id = login_data.get("UserID") or login_data.get("user_id")
@@ -165,7 +177,7 @@ class YuketangPlatform(BasePlatform):
         return resp["data"]
 
     @override
-    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         info = await self._get_classroom_info(course)
         course.metadata["sign"] = info.get("course_sign", "")
         course.metadata["free_sku_id"] = info.get("free_sku_id")
@@ -192,7 +204,7 @@ class YuketangPlatform(BasePlatform):
         return resp["data"]["course_chapter"]
 
     @override
-    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
+    async def get_leaf_schedules(self, course: Course) -> dict[int, float]:
         cid = course.metadata["classroom_id"]
         uid = course.metadata["university_id"]
         sign = course.metadata.get("sign", "")
@@ -248,14 +260,14 @@ class YuketangPlatform(BasePlatform):
         return schedules
 
     @override
-    async def _get_completed_video_ids(self, course: Course) -> set[int] | None:
+    async def get_completed_video_ids(self, course: Course) -> set[int] | None:
         """用视频进度接口判断哪些视频已完成。"""
         if not self.user:
             raise AuthError("未登录平台")
         user_id = int(self.user.id)
 
         if "course_id" not in course.metadata:
-            await self._get_chapter_data(course)
+            await self.get_chapter_data(course)
 
         kwargs = self._get_course_kwargs(course)
         try:
@@ -309,7 +321,7 @@ class YuketangPlatform(BasePlatform):
         return f"{self.api_base}/{self.api_prefix}/v1/lms/exercise/get_exercise_list/{leaf_type_id}/"
 
     @override
-    def _get_request_kwargs(self, course: Course) -> dict[str, Any] | None:
+    def get_request_kwargs(self, course: Course) -> dict[str, Any] | None:
         return self._get_course_kwargs(course)
 
     @override
@@ -334,13 +346,13 @@ class YuketangPlatform(BasePlatform):
         return payload
 
     @override
-    async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
+    async def prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
         if not self.user:
             raise AuthError("未登录平台")
 
         user_id = int(self.user.id)
         if "free_sku_id" not in course.metadata or "course_id" not in course.metadata:
-            await self._get_chapter_data(course)
+            await self.get_chapter_data(course)
 
         cid = str(course.metadata["classroom_id"])
         course_id = course.metadata["course_id"]
@@ -395,16 +407,16 @@ class YuketangPlatform(BasePlatform):
         )
 
     @override
-    async def _prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
+    async def prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
         return {
             "classroom_id": int(course.metadata["classroom_id"]),
         }
 
     @override
-    async def _fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+    async def fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         cid = self._classroom_id(course)
         url = f"{self.api_base}/v/discussion/v2/unit/discussion/"
-        kwargs = self._get_request_kwargs(course) or {}
+        kwargs = self.get_request_kwargs(course) or {}
         params: dict[str, Any] = {
             "classroom_id": cid,
             "leaf_id": str(leaf_id),
@@ -421,16 +433,16 @@ class YuketangPlatform(BasePlatform):
         return data
 
     @override
-    async def _discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
+    async def discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
         if int(topic_info.get("user_comment_num") or 0) > 0:
             return True
-        return bool(await self._discussion_leaf_completed(leaf_id, course))
+        return bool(await self.discussion_leaf_completed(leaf_id, course))
 
     @override
-    async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
+    async def discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
         cid = self._classroom_id(course)
         url = f"{self.api_base}/v/discussion/v2/student/comment/status/"
-        kwargs = self._get_request_kwargs(course) or {}
+        kwargs = self.get_request_kwargs(course) or {}
         resp = await self._request_json(
             "GET",
             url,
@@ -440,7 +452,7 @@ class YuketangPlatform(BasePlatform):
         return bool(resp.get("data"))
 
     @override
-    async def _post_discussion_comment(
+    async def post_discussion_comment(
         self,
         topic_info: dict[str, Any],
         content: str,
@@ -457,7 +469,7 @@ class YuketangPlatform(BasePlatform):
                 "accessory_list": [],
             },
         }
-        kwargs = self._get_request_kwargs(course) or {}
+        kwargs = self.get_request_kwargs(course) or {}
         return await self._request_json("POST", url, json=payload, **kwargs)
 
     @override

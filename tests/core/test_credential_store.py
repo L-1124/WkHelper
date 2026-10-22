@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from wkhelper.core.credential_store import CredentialStore, SecretBackend
-from wkhelper.core.entities import StorageStatus, UserInfo
+from wkhelper.domain.accounts import StorageStatus, UserInfo
+from wkhelper.infra.credentials import CredentialStore, SecretBackend
 
 
 class MockKeyringBackend(SecretBackend):

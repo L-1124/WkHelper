@@ -5,10 +5,11 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from wkhelper.cli.context import ctx
-from wkhelper.cli.envelope import CommandResult, NextAction
+from wkhelper.cli.envelope import CommandResult
 from wkhelper.cli.spec import get_command_schema
-from wkhelper.core.json_types import JsonDict
-from wkhelper.core.results import StatusData
+from wkhelper.domain.accounts import StatusData
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.json_types import JsonDict
 
 
 async def status_cmd() -> CommandResult[StatusData]:

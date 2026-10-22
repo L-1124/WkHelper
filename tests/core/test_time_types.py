@@ -1,6 +1,6 @@
 """时间戳单位归一化测试。"""
 
-from wkhelper.core.time_types import EpochMillis, epoch_millis, now_millis
+from wkhelper.domain.time_types import EpochMillis, epoch_millis, now_millis
 
 
 def test_epoch_millis_normalizes_seconds_and_millis() -> None:

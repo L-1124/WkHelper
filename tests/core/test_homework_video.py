@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from wkhelper.core.entities import Course
-from wkhelper.core.homework import generic_submit_homework
-from wkhelper.core.results import QuestionSubmitOutcome
-from wkhelper.core.transport import AsyncSession
-from wkhelper.core.video import VideoWatchOptions, generic_watch_video
+from wkhelper.domain.courses import Course
+from wkhelper.domain.homework import QuestionSubmitOutcome
+from wkhelper.homework.submission import generic_submit_homework
+from wkhelper.infra.http import AsyncSession
+from wkhelper.video.engine import VideoWatchOptions, generic_watch_video
 
 
 @pytest.mark.asyncio
@@ -366,7 +366,7 @@ async def test_submit_respects_unlimited_retry_count():
 
 def test_judgement_answer_normalization() -> None:
     """判断题答案必须归一为平台约定的 true/false。"""
-    from wkhelper.core.homework import normalize_judgement_answer
+    from wkhelper.domain.questions import normalize_judgement_answer
 
     question = {"content": {"ProblemType": "6"}}
     assert normalize_judgement_answer(question, ["A"]) == ["true"]
@@ -439,7 +439,7 @@ async def test_completed_video_sends_videoend_event():
 
 def test_parse_progress_completed_ignores_other_videos_and_blank() -> None:
     """验证 parse_progress_completed 能够忽略空白字符串与其他视频的 completed 标识。"""
-    from wkhelper.core.video import parse_progress_completed
+    from wkhelper.video.engine import parse_progress_completed
 
     assert not parse_progress_completed("", "v1")
     assert not parse_progress_completed("   \n\t", "v1")

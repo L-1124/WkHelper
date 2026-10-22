@@ -7,8 +7,9 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
-from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
-from wkhelper.core.results import DiscussionCommentResult, DiscussionListData, DiscussionTopicDetail
+from wkhelper.discussion.service import get_discussion_detail, get_discussions, submit_discussion
+from wkhelper.domain.content import DiscussionCommentResult, DiscussionListData, DiscussionTopicDetail
+from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 
 discussion_app = App(name="discussion", help="讨论题查询与互动回复")
 
@@ -24,7 +25,7 @@ async def discussion_list_cmd(
 ) -> CommandResult[DiscussionListData]:
     """查询课程讨论题列表。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        discussions = await plat.get_discussions(matched)
+        discussions = await get_discussions(plat, matched)
         items = [
             d
             for d in discussions
@@ -43,7 +44,7 @@ async def discussion_inspect_cmd(
 ) -> CommandResult[DiscussionTopicDetail]:
     """查看讨论题详情与教师要求。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        detail = await plat.get_discussion_detail(discussion, matched)
+        detail = await get_discussion_detail(plat, discussion, matched)
         return CommandResult(data=detail)
 
 
@@ -74,7 +75,7 @@ async def discussion_reply_cmd(
     if not confirm:
         raise ConfirmationRequiredError("发表讨论回复必须显式附加 `--confirm` 参数")
     async with _open_course(course, platform, account) as (plat, matched):
-        result = await plat.submit_discussion(discussion, matched, content.strip())
+        result = await submit_discussion(plat, discussion, matched, content.strip())
         if not result.success:
             raise APIError(f"讨论题回复失败: {result.message}")
         return CommandResult(data=result)

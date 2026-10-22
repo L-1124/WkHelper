@@ -5,21 +5,22 @@ from pathlib import Path
 
 import pytest
 
-from wkhelper.core.entities import Course
-from wkhelper.core.plan import VideoTarget
-from wkhelper.core.results import VideoWatchResult
-from wkhelper.core.video import VideoWatchOptions
-from wkhelper.core.video_runner import VideoPlanRunner
+from wkhelper.domain.courses import Course
+from wkhelper.domain.video import VideoWatchResult
+from wkhelper.video.engine import VideoWatchOptions
+from wkhelper.video.plan import VideoTarget
+from wkhelper.video.runner import VideoPlanRunner
 
 
 @pytest.mark.asyncio
-async def test_runner_execute_video_plan(fake_platform):
+async def test_runner_execute_video_plan(fake_platform, monkeypatch):
     """验证 Runner 计划并发执行与结果收集。"""
     runner = VideoPlanRunner(fake_platform)
     course = Course(id="c1", name="测试课程", platform_id="test")
     courses_map = {"c1": course}
 
     async def fake_do_video(
+        platform,
         video_id: str,
         video_name: str,
         course: Course,
@@ -37,7 +38,7 @@ async def test_runner_execute_video_plan(fake_platform):
             message="已完成",
         )
 
-    fake_platform.do_video = fake_do_video  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.video.runner.do_video", fake_do_video)
 
     targets = [
         VideoTarget(course_id="c1", video_id="v1", name="视频1"),
@@ -61,7 +62,7 @@ async def test_runner_execute_video_plan(fake_platform):
 
 
 @pytest.mark.asyncio
-async def test_runner_execute_video_plan_resume(fake_platform):
+async def test_runner_execute_video_plan_resume(fake_platform, monkeypatch):
     """验证从检查点恢复时跳过已完成项。"""
     runner = VideoPlanRunner(fake_platform)
     course = Course(id="c1", name="测试课程", platform_id="test")
@@ -70,6 +71,7 @@ async def test_runner_execute_video_plan_resume(fake_platform):
     called_videos: list[str] = []
 
     async def fake_do_video(
+        platform,
         video_id: str,
         video_name: str,
         course: Course,
@@ -88,7 +90,7 @@ async def test_runner_execute_video_plan_resume(fake_platform):
             message="已完成",
         )
 
-    fake_platform.do_video = fake_do_video  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.video.runner.do_video", fake_do_video)
 
     with tempfile.TemporaryDirectory() as td:
         cp_file = Path(td) / "checkpoint.json"
@@ -114,7 +116,7 @@ async def test_runner_execute_video_plan_resume(fake_platform):
 
 
 @pytest.mark.asyncio
-async def test_runner_execute_video_plan_total_timeout_cancellation(fake_platform):
+async def test_runner_execute_video_plan_total_timeout_cancellation(fake_platform, monkeypatch):
     """验证总预算耗尽时取消已启动任务，并为已启动和未启动任务记录明确状态。"""
     import asyncio
 
@@ -123,6 +125,7 @@ async def test_runner_execute_video_plan_total_timeout_cancellation(fake_platfor
     courses_map = {"c1": course}
 
     async def hanging_do_video(
+        platform,
         video_id: str,
         video_name: str,
         course: Course,
@@ -131,7 +134,7 @@ async def test_runner_execute_video_plan_total_timeout_cancellation(fake_platfor
         await asyncio.sleep(5.0)
         return VideoWatchResult(video_id=video_id, video_name=video_name, status="completed")
 
-    fake_platform.do_video = hanging_do_video  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.video.runner.do_video", hanging_do_video)
 
     targets = [
         VideoTarget(course_id="c1", video_id="v1", name="视频1"),
@@ -155,7 +158,7 @@ async def test_runner_execute_video_plan_total_timeout_cancellation(fake_platfor
 
 
 @pytest.mark.asyncio
-async def test_runner_execute_video_plan_resume_respects_higher_threshold(fake_platform):
+async def test_runner_execute_video_plan_resume_respects_higher_threshold(fake_platform, monkeypatch):
     """验证从检查点恢复时，提高阈值后 final_rate 低于新有效阈值的任务不得跳过。"""
     runner = VideoPlanRunner(fake_platform)
     course = Course(id="c1", name="测试课程", platform_id="test")
@@ -164,6 +167,7 @@ async def test_runner_execute_video_plan_resume_respects_higher_threshold(fake_p
     called_videos: list[str] = []
 
     async def fake_do_video(
+        platform,
         video_id: str,
         video_name: str,
         course: Course,
@@ -180,7 +184,7 @@ async def test_runner_execute_video_plan_resume_respects_higher_threshold(fake_p
             message="达到新阈值",
         )
 
-    fake_platform.do_video = fake_do_video  # type: ignore[method-assign]
+    monkeypatch.setattr("wkhelper.video.runner.do_video", fake_do_video)
 
     with tempfile.TemporaryDirectory() as td:
         cp_file = Path(td) / "checkpoint.json"

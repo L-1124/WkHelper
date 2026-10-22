@@ -1,6 +1,6 @@
 """字体反混淆标签匹配测试。"""
 
-from wkhelper.core.deobfuscator import _deobfuscate_html_str
+from wkhelper.platform.deobfuscator import _deobfuscate_html_str
 
 
 def test_encrypted_tags_with_attributes_are_replaced() -> None:

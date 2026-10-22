@@ -3,8 +3,8 @@
 import sys
 from typing import Literal
 
-from wkhelper.core.credential_store import CredentialStore
-from wkhelper.core.events import set_debug_enabled
+from wkhelper.infra.credentials import CredentialStore
+from wkhelper.infra.events import set_debug_enabled
 
 type OutputFormat = Literal["json", "md", "markdown"]
 type CredentialMode = Literal["system", "session"]

@@ -5,9 +5,11 @@ from typing import Any
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
-from wkhelper.core.entities import Course
-from wkhelper.core.exceptions import APIError
-from wkhelper.core.transport import AsyncSession
+from wkhelper.discussion.service import get_discussions
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError
+from wkhelper.infra.http import AsyncSession
+from wkhelper.notice.service import get_notices
 from wkhelper.platform.yuketang import YuketangPlatform
 
 
@@ -16,7 +18,7 @@ def _course() -> Course:
 
 
 class _NoticeTreePlatform(FakeAsyncPlatform):
-    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         return [
             {
                 "name": "第一章",
@@ -28,7 +30,7 @@ class _NoticeTreePlatform(FakeAsyncPlatform):
             }
         ]
 
-    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
+    async def get_leaf_schedules(self, course: Course) -> dict[int, float]:
         return {10: 1.0}
 
 
@@ -37,8 +39,8 @@ async def test_notice_list_only_leaf_type_10() -> None:
     """公告列表只收 leaf_type=10，讨论与作业不得混入。"""
     async with AsyncSession() as client:
         platform = _NoticeTreePlatform(client)
-        notices = await platform.get_notices(_course())
-        discussions = await platform.get_discussions(_course())
+        notices = await get_notices(platform, _course())
+        discussions = await get_discussions(platform, _course())
 
     assert [notice.id for notice in notices] == ["10"]
     assert notices[0].completed is True

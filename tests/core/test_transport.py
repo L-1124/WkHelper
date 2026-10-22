@@ -2,8 +2,8 @@
 
 import pytest
 
-from wkhelper.core.base_platform import BasePlatform
-from wkhelper.core.transport import DISABLED, resolve_impersonate
+from wkhelper.infra.http import DISABLED, resolve_impersonate
+from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 

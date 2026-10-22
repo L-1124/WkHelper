@@ -7,18 +7,24 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from pydantic import TypeAdapter, ValidationError
+
+from wkhelper.auth.cookies import parse_cookie_string
 from wkhelper.cli.context import ctx
-from wkhelper.core.base_platform import BasePlatform
-from wkhelper.core.credential_store import CredentialStore
-from wkhelper.core.entities import Course, PaginationMeta, course_reference, dedupe_courses
-from wkhelper.core.exceptions import AuthError
-from wkhelper.core.json_types import JsonValue, json_str_list, parse_json_text
-from wkhelper.core.plan import VideoPlan
-from wkhelper.core.transport import AsyncSession, build_session
+from wkhelper.domain.courses import Course, course_reference, dedupe_courses
+from wkhelper.domain.errors import AuthError
+from wkhelper.domain.json_types import JsonValue, json_str_list, parse_json_text
+from wkhelper.domain.pagination import PaginationMeta
+from wkhelper.domain.validation import validate_input, validation_message
+from wkhelper.infra.credentials import CredentialStore
+from wkhelper.infra.http import AsyncSession, build_session
+from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
+from wkhelper.video.plan import VideoPlan
 
 logger = logging.getLogger("wkhelper")
+_COOKIE_ADAPTER = TypeAdapter(dict[str, str])
 
 
 def _create_http_session(timeout: float = 15.0, impersonate: str | None = None) -> AsyncSession:
@@ -46,17 +52,13 @@ def _read_json_file_or_stdin(file_path: str) -> JsonValue:
 
 
 def _parse_cookie_payload(raw: JsonValue) -> dict[str, str]:
-    """解析 Cookie 输入：浏览器 Cookie 字符串或 {名称: 字符串值} 对象。"""
+    """保留 Cookie 字符串语法，对对象执行严格类型校验。"""
     if isinstance(raw, str):
-        return BasePlatform.parse_cookie_string(raw)
-    if isinstance(raw, dict):
-        cookies: dict[str, str] = {}
-        for name, value in raw.items():
-            if not isinstance(value, str):
-                raise ValueError(f"Cookie '{name}' 的值必须为字符串")
-            cookies[str(name)] = value
-        return cookies
-    raise ValueError("Cookie 输入必须为 Cookie 字符串或 {名称: 字符串值} 的 JSON 对象")
+        return parse_cookie_string(raw)
+    try:
+        return _COOKIE_ADAPTER.validate_python(raw, strict=True)
+    except ValidationError as exc:
+        raise ValueError(validation_message(exc)) from None
 
 
 def _parse_answers_payload(raw: JsonValue) -> dict[str, list[str]]:
@@ -133,7 +135,7 @@ def _create_platform_instance(platform_code: str, client: AsyncSession) -> BaseP
 
 def _load_plan(plan_file: str) -> VideoPlan:
     """加载视频学习计划文件。"""
-    return VideoPlan.from_mapping(_read_json_file_or_stdin(plan_file))
+    return validate_input(VideoPlan, _read_json_file_or_stdin(plan_file))
 
 
 def _resolve_account_and_platform(

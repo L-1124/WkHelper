@@ -7,7 +7,8 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
-from wkhelper.core.results import NoticeDetail, NoticeListData
+from wkhelper.domain.content import NoticeDetail, NoticeListData
+from wkhelper.notice.service import get_notices
 
 notice_app = App(name="notice", help="课程公告与通知")
 
@@ -23,7 +24,7 @@ async def notice_list_cmd(
 ) -> CommandResult[NoticeListData]:
     """查询课程公告/通知节点列表。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        notices = await plat.get_notices(matched)
+        notices = await get_notices(plat, matched)
         items = [
             n for n in notices if status == "all" or (status == "completed" and n.completed) or (status == "pending" and not n.completed)
         ]

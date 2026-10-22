@@ -4,9 +4,10 @@ from typing import Any
 
 import pytest
 
-from wkhelper.core.entities import Course, UserInfo
-from wkhelper.core.exceptions import APIError
-from wkhelper.core.transport import AsyncSession
+from wkhelper.domain.accounts import UserInfo
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError
+from wkhelper.infra.http import AsyncSession
 from wkhelper.platform.yuketang import YuketangPlatform
 
 

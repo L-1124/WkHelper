@@ -11,10 +11,10 @@ from wkhelper.cli.deps import (
     _parse_cookie_payload,
     _read_json_file_or_stdin,
 )
-from wkhelper.cli.envelope import CommandResult, NextAction
-from wkhelper.core.entities import StorageStatus
-from wkhelper.core.exceptions import ConfirmationRequiredError
-from wkhelper.core.results import AccountListData, AuthStatusResult, LoginResult, RemoveResult
+from wkhelper.cli.envelope import CommandResult
+from wkhelper.domain.accounts import AccountListData, AuthStatusResult, LoginResult, RemoveResult, StorageStatus
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.errors import ConfirmationRequiredError
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 
