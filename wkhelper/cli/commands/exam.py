@@ -501,6 +501,7 @@ async def exam_result_cmd(
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
+        ensure_exam_operation_allowed(cover)
         raw = await plat.get_exam_result(exam, matched)
         problems = raw.get("problem_results") if isinstance(raw.get("problem_results"), list) else []
         grade = raw.get("grade")
@@ -534,6 +535,8 @@ async def exam_status_cmd(
     """汇总考场 cover/refresh_time/cache_results/problem_results 状态（只读诊断）。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
+        cover = await plat.get_exam_cover(exam, matched)
+        ensure_exam_operation_allowed(cover)
         raw = await plat.get_exam_status_snapshot(exam, matched)
         return CommandResult[ExamStatusData](
             data=ExamStatusData(
