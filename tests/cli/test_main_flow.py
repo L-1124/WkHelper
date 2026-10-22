@@ -27,6 +27,15 @@ async def test_cli_status_command(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("argv", [["--help"], ["exam", "--help"], ["video", "list", "--help"]])
+async def test_cli_help_flag_returns_zero(argv, capsys) -> None:
+    code = await async_main(argv)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Usage:" in out
+
+
+@pytest.mark.asyncio
 async def test_cli_schema_command(monkeypatch):
     """测试 wkhelper schema video learn 命令输出。"""
     buf = StringIO()
