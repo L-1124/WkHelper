@@ -154,8 +154,45 @@ def _render_course_detail(data: CourseDetail) -> list[str]:
         f"- **课程引用 ID**：`{data.id}`",
         f"- **所属平台**：`{data.platform}`",
     ]
+    if data.scores:
+        s = data.scores
+        if s.modules:
+            lines.extend(["", "### 考核大纲与完成度看板", ""])
+            rows = [
+                [
+                    m.name,
+                    f"{m.weight * 100:.0f}%" if m.weight is not None else "-",
+                    f"{m.completed_count} / {m.total_count}",
+                    f"{m.rate * 100:.1f}%",
+                    f"{m.score:.2f} 分" if m.score is not None else "-",
+                ]
+                for m in s.modules
+            ]
+            lines.extend(_table(["考核模块", "权重占比", "完成进度", "完成/得分率", "折算得分"], rows))
+
+        if s.exams:
+            lines.extend(["", "### 考试出分看板", ""])
+            exam_rows = [
+                [
+                    ex.title,
+                    ex.status,
+                    f"{ex.done_count} / {ex.problem_count}" if ex.problem_count > 0 else "-",
+                    f"{ex.user_score} / {ex.total_score}" if ex.user_score is not None and ex.total_score is not None else "-",
+                ]
+                for ex in s.exams
+            ]
+            lines.extend(_table(["考试名称", "状态", "答题进度", "卷面得分"], exam_rows))
+
+        if s.total_predicted_score is not None:
+            lines.extend(
+                [
+                    "",
+                    f"> **综合预估总评**：**{s.total_predicted_score:.1f} 分**",
+                ]
+            )
+
     if data.metadata:
-        lines.extend(["", "### 元数据"])
+        lines.extend(["", "### 平台元数据"])
         lines.extend(f"- **{_cell(key)}**：`{_cell(value)}`" for key, value in sorted(data.metadata.items()))
     return lines
 
