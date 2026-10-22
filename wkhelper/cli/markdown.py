@@ -686,8 +686,13 @@ def _render_exam_status(data: ExamStatusData) -> list[str]:
         *([f"- **暂存样例**：`{data.cached_sample}`"] if data.cached_sample else []),
         f"- **problem_results**：{data.result_code} {data.result_message}".rstrip(),
         *(
-            ["> **说明**：`problem_results` 返回 10107，表示试卷进度异常，建议联系任课老师核对作答与提交记录"]
+            ["> **说明**：封面状态显示已交卷，但 `problem_results` 返回 10107，表示试卷进度异常，建议联系任课老师核对作答与提交记录"]
             if data.result_code == 10107
+            and (
+                (data.room_status_raw is not None and data.room_status_raw > 1)
+                or (data.lms_status is not None and data.lms_status > 1)
+                or data.room_status == "已交卷"
+            )
             else []
         ),
     ]

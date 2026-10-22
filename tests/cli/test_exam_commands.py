@@ -1113,8 +1113,8 @@ async def test_exam_start_begin_browser_failure_exits(mock_exam_env: None, monke
 
 
 @pytest.mark.asyncio
-async def test_exam_result_reports_progress_anomaly(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """10107 表示试卷进度异常，不能显示成待批阅。"""
+async def test_exam_result_reports_not_submitted_when_unstarted(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未交卷时 10107 表示尚未提交，不能误报进度异常。"""
 
     async def fake_result(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, Any]:
         return {"errcode": 10107, "errmsg": "试卷尚未提交", "problem_results": []}
@@ -1126,6 +1126,29 @@ async def test_exam_result_reports_progress_anomaly(mock_exam_env: None, monkeyp
     code = await async_main(["--format", "json", "exam", "result", "-c", "1001", "-e", "3001", "-p", "xtzx"])
     assert code == 0
     message = json.loads(buf.getvalue())["data"]["message"]
-    assert "试卷进度异常" in message
+    assert "答卷尚未提交" in message
+    assert "试卷进度异常" not in message
+
+
+@pytest.mark.asyncio
+async def test_exam_result_reports_progress_anomaly_when_submitted(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """封面已交卷但 10107 表示试卷进度异常，需联系老师。"""
+    orig_cover = _ExamMockPlatform.get_exam_cover
+
+    async def fake_cover(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> ExamCoverDetail:
+        base = await orig_cover(self, leaf_id, course)
+        return ExamCoverDetail.model_validate(dict(base.model_dump(exclude={"has_limit"}), status="已交卷", raw_status=2))
+
+    async def fake_result(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        return {"errcode": 10107, "errmsg": "试卷尚未提交", "problem_results": []}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", fake_cover)
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_result", fake_result)
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "result", "-c", "1001", "-e", "3001", "-p", "xtzx"])
+    assert code == 0
+    message = json.loads(buf.getvalue())["data"]["message"]
+    assert "试卷已交卷但进度异常" in message
     assert "老师" in message
-    assert "待批阅" not in message

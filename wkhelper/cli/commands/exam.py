@@ -500,13 +500,19 @@ async def exam_result_cmd(
     """读取考场成绩与作答结果概览（只读）。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
+        cover = await plat.get_exam_cover(exam, matched)
         raw = await plat.get_exam_result(exam, matched)
         problems = raw.get("problem_results") if isinstance(raw.get("problem_results"), list) else []
         grade = raw.get("grade")
         duration = raw.get("duration")
+        errcode = int(raw.get("errcode") or 0)
         message = f"{raw.get('errmsg') or ''} (errcode: {raw.get('errcode')})".strip()
-        if int(raw.get("errcode") or 0) == 10107:
-            message = "试卷进度异常（平台返回 10107），建议联系任课老师核对作答与提交记录"
+        if errcode == 10107:
+            is_submitted = (cover.raw_status is not None and cover.raw_status > 1) or cover.status == "已交卷"
+            if is_submitted:
+                message = "试卷已交卷但进度异常（平台返回 10107），建议联系任课老师核对作答与提交记录"
+            else:
+                message = "答卷尚未提交，暂无成绩"
         return CommandResult[ExamResultData](
             data=ExamResultData(
                 exam_id=str(exam),
