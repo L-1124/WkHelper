@@ -4,11 +4,12 @@ from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
 
+from wkhelper.article.service import get_articles, read_article
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
-from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
-from wkhelper.core.results import ArticleListData, ArticleReadResult
+from wkhelper.domain.content import ArticleListData, ArticleReadResult
+from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 
 article_app = App(name="article", help="资料与图文任务管理")
 
@@ -24,7 +25,7 @@ async def article_list_cmd(
 ) -> CommandResult[ArticleListData]:
     """查询课程资料/图文节点列表。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        articles = await plat.get_articles(matched)
+        articles = await get_articles(plat, matched)
         items = [
             a for a in articles if status == "all" or (status == "completed" and a.completed) or (status == "pending" and not a.completed)
         ]
@@ -55,7 +56,7 @@ async def article_read_cmd(
     if not confirm:
         raise ConfirmationRequiredError("标记资料已读必须显式附加 `--confirm` 参数")
     async with _open_course(course, platform, account) as (plat, matched):
-        result = await plat.read_article(article, matched)
+        result = await read_article(plat, article, matched)
         if not result.success or not result.completed:
             raise APIError(f"资料 {article} 标记完成失败，平台未确认成功", retryable=False)
         return CommandResult(data=result)

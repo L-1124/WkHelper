@@ -11,21 +11,19 @@
 from collections.abc import Callable, Sequence
 from typing import cast
 
-import msgspec
-
-from wkhelper.cli.envelope import NextAction
-from wkhelper.core.entities import StorageStatus
-from wkhelper.core.json_types import JsonDict, json_int
-from wkhelper.core.results import (
-    AccountListData,
+from wkhelper.domain.accounts import AccountListData, AuthStatusResult, LoginResult, RemoveResult, StatusData, StorageStatus
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.content import (
     ArticleListData,
     ArticleReadResult,
-    AuthStatusResult,
-    CourseDetail,
-    CourseListData,
     DiscussionCommentResult,
     DiscussionListData,
     DiscussionTopicDetail,
+    NoticeDetail,
+    NoticeListData,
+)
+from wkhelper.domain.courses import CourseDetail, CourseListData
+from wkhelper.domain.exam import (
     ExamAnswerResult,
     ExamBrowserCloseResult,
     ExamCoverDetail,
@@ -36,28 +34,23 @@ from wkhelper.core.results import (
     ExamStartPreview,
     ExamStartResult,
     ExamStatusData,
-    ExportResult,
+)
+from wkhelper.domain.exporting import ExportResult, OutputFileResult
+from wkhelper.domain.homework import (
     HomeworkListData,
     HomeworkOutline,
     HomeworkSubmitPreview,
     HomeworkSubmitResult,
-    LoginResult,
-    NoticeDetail,
-    NoticeListData,
-    OutputFileResult,
     QuestionDetail,
     QuestionListData,
     QuestionSubmitPreview,
     QuestionSubmitResult,
-    RemoveResult,
-    StatusData,
-    VideoLearnPreview,
-    VideoListData,
-    VideoPlanSummary,
-    VideoProgress,
-    VideoSnapshotData,
 )
-from wkhelper.core.time_types import EpochMillis
+from wkhelper.domain.json_types import JsonDict, json_int
+from wkhelper.domain.time_types import EpochMillis
+from wkhelper.domain.video import VideoListData, VideoPlanSummary, VideoProgress, VideoSnapshotData
+from wkhelper.infra.serialization import encode_json, to_json_value
+from wkhelper.video.plan import VideoLearnPreview
 
 type Renderer = Callable[[object], list[str]]
 
@@ -131,8 +124,8 @@ def _pagination_hint(meta: JsonDict) -> str:
 def _render_fallback(data: object) -> list[str]:
     """未登记模型的兜底渲染：优先结构化 JSON，不可序列化时降级为原始文本。"""
     try:
-        payload = msgspec.to_builtins(data)
-        return ["```json", msgspec.json.format(msgspec.json.encode(payload), indent=2).decode("utf-8"), "```"]
+        payload = to_json_value(data)
+        return ["```json", encode_json(payload, indent=2).decode("utf-8"), "```"]
     except (TypeError, ValueError):
         return [f"> 无法结构化渲染：`{_cell(data)}`"]
 
@@ -504,7 +497,7 @@ def format_error_markdown(
             lines.extend(["```text", *(str(item) for item in traceback_items), "```"])
         others = {key: value for key, value in details.items() if key not in ("exception_type", "traceback")}
         if others:
-            payload = msgspec.json.encode(others).decode("utf-8")
+            payload = encode_json(others).decode("utf-8")
             lines.append(f"- **附加详情**：`{payload}`")
         lines.append("")
 
@@ -682,7 +675,11 @@ def _render_exam_status(data: ExamStatusData) -> list[str]:
         f"- **暂存作答数**：{data.cached_count}",
         *([f"- **暂存样例**：`{data.cached_sample}`"] if data.cached_sample else []),
         f"- **problem_results**：{data.result_code} {data.result_message}".rstrip(),
-        *(["> **说明**：raw 2 表示已交卷待批阅，含主观题的试卷在批阅前不会返回结果"] if data.room_status_raw == 2 else []),
+        *(
+            ["> **说明**：`problem_results` 返回 10107，表示试卷进度异常，建议联系任课老师核对作答与提交记录"]
+            if data.result_code == 10107
+            else []
+        ),
     ]
 
 

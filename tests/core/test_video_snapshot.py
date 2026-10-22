@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from wkhelper.core.browser_manager import BrowserProcess
-from wkhelper.core.results import VideoSnapshotData, VideoSnapshotFrame
-from wkhelper.core.video_snapshot import _extract_frames_cdp, capture_video_frames
+from wkhelper.domain.video import VideoSnapshotData, VideoSnapshotFrame
+from wkhelper.infra.browser.process import BrowserProcess
+from wkhelper.video.snapshot import _extract_frames_cdp, capture_video_frames
 
 
 def test_video_snapshot_models() -> None:
@@ -64,7 +64,7 @@ async def test_capture_video_frames_explicit_timestamps(monkeypatch: pytest.Monk
             pass
 
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+        "wkhelper.infra.browser.process.BrowserManager.acquire_session",
         lambda *a, **kw: MockContextManager(),
     )
 
@@ -111,7 +111,7 @@ async def test_capture_video_frames_explicit_timestamps(monkeypatch: pytest.Monk
     mock_cdp_call.side_effect = fake_call
     with (
         patch("curl_cffi.requests.AsyncSession.ws_connect", new=AsyncMock(return_value=MockWs())),
-        patch("wkhelper.core.video_snapshot.CdpClient.call", side_effect=fake_call),
+        patch("wkhelper.video.snapshot.CdpClient.call", side_effect=fake_call),
     ):
         frames = await capture_video_frames(
             web_url="https://test.com/video/1",
@@ -154,7 +154,7 @@ async def test_capture_video_frames_step_and_range(monkeypatch: pytest.MonkeyPat
             pass
 
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+        "wkhelper.infra.browser.process.BrowserManager.acquire_session",
         lambda *a, **kw: MockContextManager(),
     )
 
@@ -198,7 +198,7 @@ async def test_capture_video_frames_step_and_range(monkeypatch: pytest.MonkeyPat
 
     with (
         patch("curl_cffi.requests.AsyncSession.ws_connect", new=AsyncMock(return_value=MockWs())),
-        patch("wkhelper.core.video_snapshot.CdpClient.call", side_effect=fake_call),
+        patch("wkhelper.video.snapshot.CdpClient.call", side_effect=fake_call),
     ):
         frames = await capture_video_frames(
             web_url="https://test.com/video/1",
@@ -238,7 +238,7 @@ async def test_capture_video_frames_canvas_fallback_to_screenshot(monkeypatch: p
             pass
 
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+        "wkhelper.infra.browser.process.BrowserManager.acquire_session",
         lambda *a, **kw: MockContextManager(),
     )
 
@@ -287,7 +287,7 @@ async def test_capture_video_frames_canvas_fallback_to_screenshot(monkeypatch: p
 
     with (
         patch("curl_cffi.requests.AsyncSession.ws_connect", new=AsyncMock(return_value=MockWs())),
-        patch("wkhelper.core.video_snapshot.CdpClient.call", side_effect=fake_call),
+        patch("wkhelper.video.snapshot.CdpClient.call", side_effect=fake_call),
     ):
         frames = await capture_video_frames(
             web_url="https://test.com/video/1",
@@ -336,7 +336,7 @@ async def test_video_snapshot_cmd_validation() -> None:
 
 
 def test_resolve_timestamps_validation_and_clamping() -> None:
-    from wkhelper.core.video_snapshot import _resolve_timestamps
+    from wkhelper.video.snapshot import _resolve_timestamps
 
     # 正常分段
     ts = _resolve_timestamps(duration=100.0, start=10.0, end=30.0, step=10.0)
@@ -392,7 +392,7 @@ async def test_capture_video_frames_seek_timeout(monkeypatch: pytest.MonkeyPatch
             pass
 
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+        "wkhelper.infra.browser.process.BrowserManager.acquire_session",
         lambda *a, **kw: MockContextManager(),
     )
 
@@ -433,7 +433,7 @@ async def test_capture_video_frames_seek_timeout(monkeypatch: pytest.MonkeyPatch
 
     with (
         patch("curl_cffi.requests.AsyncSession.ws_connect", new=AsyncMock(return_value=MockWs())),
-        patch("wkhelper.core.video_snapshot.CdpClient.call", side_effect=fake_call),
+        patch("wkhelper.video.snapshot.CdpClient.call", side_effect=fake_call),
     ):
         frames = await capture_video_frames(
             web_url="https://test.com/video/1",
@@ -452,7 +452,7 @@ async def test_capture_video_frames_seek_timeout(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_video_snapshot_cmd_partial_and_total_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     from wkhelper.cli.commands.video import video_snapshot_cmd
-    from wkhelper.core.exceptions import APIError, PartialFailureError
+    from wkhelper.domain.errors import APIError, PartialFailureError
 
     # 模拟全部失败
     monkeypatch.setattr(
@@ -515,19 +515,19 @@ async def test_capture_video_frames_warm_pool_skip_navigate(monkeypatch: pytest.
     )
 
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager.launch_browser",
+        "wkhelper.infra.browser.process.BrowserManager.launch_browser",
         lambda **kwargs: mock_proc,
     )
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager._wait_debugger",
+        "wkhelper.infra.browser.process.BrowserManager.wait_debugger",
         AsyncMock(return_value=("ws://browser", "ws://page_warm")),
     )
     monkeypatch.setattr(
-        "wkhelper.core.video_session_pool.spawn_watchdog",
+        "wkhelper.video.session_pool.spawn_watchdog",
         lambda **kwargs: 1234,
     )
     monkeypatch.setattr(
-        "wkhelper.core.video_session_pool.check_cdp_alive",
+        "wkhelper.video.session_pool.check_cdp_alive",
         lambda port, timeout=1.0: True,
     )
 
@@ -582,7 +582,7 @@ async def test_capture_video_frames_warm_pool_skip_navigate(monkeypatch: pytest.
                 }
         return {"result": {}}
 
-    monkeypatch.setattr("wkhelper.core.browser_manager.CdpClient.call", fake_call)
+    monkeypatch.setattr("wkhelper.infra.browser.cdp.CdpClient.call", fake_call)
 
     # 第一次调用：冷启动，执行 Page.navigate
     frames1 = await capture_video_frames(
@@ -639,7 +639,7 @@ async def test_capture_video_frames_no_cache_bypasses_pool(monkeypatch: pytest.M
             pass
 
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+        "wkhelper.infra.browser.process.BrowserManager.acquire_session",
         lambda *a, **kw: MockContextManager(),
     )
 
@@ -670,7 +670,7 @@ async def test_capture_video_frames_no_cache_bypasses_pool(monkeypatch: pytest.M
                 return {"result": {"value": {"ok": True, "dataUrl": f"data:image/jpeg;base64,{dummy_b64}", "width": 800, "height": 600}}}
         return {"result": {}}
 
-    monkeypatch.setattr("wkhelper.core.browser_manager.CdpClient.call", fake_call)
+    monkeypatch.setattr("wkhelper.infra.browser.cdp.CdpClient.call", fake_call)
 
     frames = await capture_video_frames(
         web_url="https://example.com/video/1",
@@ -758,7 +758,7 @@ async def test_capture_video_frames_warm_pool_failure_falls_back_to_ephemeral(mo
         )
         # 热池启动返回 mock_warm_proc
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager.launch_browser",
+            "wkhelper.infra.browser.process.BrowserManager.launch_browser",
             lambda **kwargs: mock_warm_proc,
         )
 
@@ -770,19 +770,19 @@ async def test_capture_video_frames_warm_pool_failure_falls_back_to_ephemeral(mo
                 pass
 
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+            "wkhelper.infra.browser.process.BrowserManager.acquire_session",
             lambda **kwargs: MockEphemeralCtx(),
         )
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager._wait_debugger",
+            "wkhelper.infra.browser.process.BrowserManager.wait_debugger",
             AsyncMock(return_value=("ws://browser", "ws://page_warm")),
         )
         monkeypatch.setattr(
-            "wkhelper.core.video_session_pool.spawn_watchdog",
+            "wkhelper.video.session_pool.spawn_watchdog",
             lambda **kwargs: 3333,
         )
         monkeypatch.setattr(
-            "wkhelper.core.video_session_pool.check_cdp_alive",
+            "wkhelper.video.session_pool.check_cdp_alive",
             lambda port, timeout=1.0: True,
         )
 
@@ -808,7 +808,7 @@ async def test_capture_video_frames_warm_pool_failure_falls_back_to_ephemeral(mo
             extract_calls.append("ephemeral")
             return [VideoSnapshotFrame(timestamp=5.0, file_path=str(temp_dir / "f.jpg"), size_bytes=100)]
 
-        monkeypatch.setattr("wkhelper.core.video_snapshot._extract_frames_cdp", mock_extract_frames_cdp)
+        monkeypatch.setattr("wkhelper.video.snapshot._extract_frames_cdp", mock_extract_frames_cdp)
 
         frames = await capture_video_frames(
             web_url="https://example.com/video",
@@ -836,7 +836,7 @@ async def test_capture_video_frames_lock_timeout_preserves_session_file(monkeypa
     temp_dir = Path(tempfile.mkdtemp(prefix="test_lock_timeout_preserve_"))
     session_dir = Path(tempfile.mkdtemp(prefix="test_lock_sess_"))
     try:
-        from wkhelper.core.video_session_pool import get_session_file
+        from wkhelper.video.session_pool import get_session_file
 
         sess_file = get_session_file("c_pres", "v_pres", session_dir=session_dir)
         sess_file.write_text('{"course_id": "c_pres", "video_id": "v_pres"}', encoding="utf-8")
@@ -848,7 +848,7 @@ async def test_capture_video_frames_lock_timeout_preserves_session_file(monkeypa
                 raise TimeoutError("获取会话文件锁超时")
             yield
 
-        monkeypatch.setattr("wkhelper.core.video_snapshot.async_file_lock", fake_async_file_lock)
+        monkeypatch.setattr("wkhelper.video.snapshot.async_file_lock", fake_async_file_lock)
 
         mock_ephemeral_proc = BrowserProcess(
             pid=4444,
@@ -868,7 +868,7 @@ async def test_capture_video_frames_lock_timeout_preserves_session_file(monkeypa
                 pass
 
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager.acquire_session",
+            "wkhelper.infra.browser.process.BrowserManager.acquire_session",
             lambda **kwargs: MockEphemeralCtx(),
         )
 
@@ -887,7 +887,7 @@ async def test_capture_video_frames_lock_timeout_preserves_session_file(monkeypa
         async def mock_extract(**kwargs: object) -> list[VideoSnapshotFrame]:
             return [VideoSnapshotFrame(timestamp=1.0, file_path=str(temp_dir / "f.jpg"), size_bytes=50)]
 
-        monkeypatch.setattr("wkhelper.core.video_snapshot._extract_frames_cdp", mock_extract)
+        monkeypatch.setattr("wkhelper.video.snapshot._extract_frames_cdp", mock_extract)
 
         frames = await capture_video_frames(
             web_url="https://example.com/video",

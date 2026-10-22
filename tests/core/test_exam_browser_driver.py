@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from wkhelper.core.exam_browser_driver import (
+from wkhelper.exam.browser import (
     ExamPageClient,
     _select_page,
     extract_answer_submission,

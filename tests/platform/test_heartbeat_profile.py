@@ -2,15 +2,16 @@
 
 import pytest
 
-from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
-from wkhelper.core.json_types import JsonDict
-from wkhelper.core.transport import AsyncSession
+from wkhelper.domain.json_types import JsonDict
+from wkhelper.infra.http import AsyncSession
+from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.protocol_types import HeartbeatProfile
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 
 
 def _build(platform: BasePlatform) -> JsonDict:
-    return platform._build_heartbeat_payload(
+    return platform.build_heartbeat_payload(
         video_id="1001",
         classroom_id="2001",
         user_id=7,
@@ -61,25 +62,25 @@ def test_heartbeat_profile_is_required() -> None:
     """未声明心跳档案的平台无法实例化，避免再次出现静默继承。"""
 
     class IncompletePlatform(BasePlatform):
-        async def _login_with_cookies(self, cookies):  # noqa: ANN001, ANN202
+        async def login_with_cookies(self, cookies):  # noqa: ANN001, ANN202
             raise NotImplementedError
 
-        async def _qr_exchange_cookies(self, login_data):  # noqa: ANN001, ANN202
+        async def qr_exchange_cookies(self, login_data):  # noqa: ANN001, ANN202
             return {}
 
         async def get_courses(self):
             return []
 
-        async def _get_chapter_data(self, course):  # noqa: ANN001, ANN202
+        async def get_chapter_data(self, course):  # noqa: ANN001, ANN202
             return []
 
-        async def _get_leaf_schedules(self, course):  # noqa: ANN001, ANN202
+        async def get_leaf_schedules(self, course):  # noqa: ANN001, ANN202
             return {}
 
-        async def _prepare_video_context(self, video_id, course):  # noqa: ANN001, ANN202
+        async def prepare_video_context(self, video_id, course):  # noqa: ANN001, ANN202
             raise NotImplementedError
 
-        async def _prepare_submit_context(self, homework, course):  # noqa: ANN001, ANN202
+        async def prepare_submit_context(self, homework, course):  # noqa: ANN001, ANN202
             return {}
 
     with pytest.raises(TypeError):

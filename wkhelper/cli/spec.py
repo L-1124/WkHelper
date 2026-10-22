@@ -14,7 +14,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from cyclopts import App
 
-from wkhelper.core.json_types import JsonDict, JsonValue
+from wkhelper.domain.json_types import JsonDict, JsonValue
 
 
 @dataclass
@@ -226,7 +226,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
     "exam answer": {
         "description": (
             "在已打开的前台考场浏览器页面中模拟点击选项或输入文本完成单题作答，由考场前端页面自动暂存。"
-            "必须先用 `exam start --confirm` 拉起考场浏览器；直接调用 REST 作答接口的路径已移除。"
+            "必须先用 `exam start --confirm` 打开前台考场浏览器。"
             "`saved` 要求页面请求内容一致且返回有效业务成功码；未捕获请求或响应证据未知时回读一次暂存作答，明确拒绝不回读。"
             "强监考考试（在线监考/人脸核验/网页截屏/线下考场）一律拒绝执行，已交卷或已缺考的考试同样拒绝。"
             "客观题用逗号分隔多个选项键（判断题自动映射正确/错误），填空题按空逗号分隔，主观题整段填入。"
@@ -250,8 +250,9 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "exam start": {
         "description": (
-            "显式确认后向平台申请考场会话令牌，并默认拉起前台可见浏览器保持考场页面（监考与心跳采集）。"
-            "传入 `--begin` 才会真正开始作答并启动服务端计时；强监考考试拒绝进入。"
+            "显式确认后向平台申请考场会话令牌并打开前台考场浏览器，保持考场页面以维持监考与心跳采集。"
+            "传入 `--begin` 会在前台浏览器中点击开始答题按钮，经网页发出开始答题请求并验证进入答题页后生效；"
+            "`--dry-run` 仅预览；强监考考试拒绝进入。"
         ),
         "side_effects": "remote_write",
         "requires_confirm": True,

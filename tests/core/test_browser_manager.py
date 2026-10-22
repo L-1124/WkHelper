@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from wkhelper.core.browser_manager import (
+from wkhelper.infra.browser.cdp import CdpClient
+from wkhelper.infra.browser.process import (
     _ACTIVE_PROCESSES,
     BrowserManager,
     BrowserProcess,
-    CdpClient,
     _cleanup_all,
-    _find_free_port,
     find_chromium_browser,
+    find_free_port,
 )
 
 
@@ -40,8 +40,8 @@ def test_find_chromium_browser_linux(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_find_free_port() -> None:
-    p1 = _find_free_port()
-    p2 = _find_free_port()
+    p1 = find_free_port()
+    p2 = find_free_port()
     assert isinstance(p1, int) and p1 > 0
     assert isinstance(p2, int) and p2 > 0
 
@@ -59,14 +59,14 @@ def test_browser_process_equality_and_hash() -> None:
 
 
 def test_launch_browser_no_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("wkhelper.core.browser_manager.find_chromium_browser", lambda: None)
+    monkeypatch.setattr("wkhelper.infra.browser.process.find_chromium_browser", lambda: None)
     with pytest.raises(RuntimeError, match="未检测到本地 Chromium 浏览器"):
         BrowserManager.launch_browser()
 
 
 def test_launch_and_close_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     temp_dir = tempfile.mkdtemp(prefix="test_bm_")
-    monkeypatch.setattr("wkhelper.core.browser_manager.find_chromium_browser", lambda: "/usr/bin/chrome")
+    monkeypatch.setattr("wkhelper.infra.browser.process.find_chromium_browser", lambda: "/usr/bin/chrome")
     monkeypatch.setattr("tempfile.mkdtemp", lambda **kw: temp_dir)
 
     mock_proc = MagicMock(spec=subprocess.Popen)
@@ -88,7 +88,7 @@ def test_launch_and_close_browser(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_launch_detached_not_tracked(monkeypatch: pytest.MonkeyPatch) -> None:
     temp_dir = tempfile.mkdtemp(prefix="test_detached_")
-    monkeypatch.setattr("wkhelper.core.browser_manager.find_chromium_browser", lambda: "/usr/bin/chrome")
+    monkeypatch.setattr("wkhelper.infra.browser.process.find_chromium_browser", lambda: "/usr/bin/chrome")
     monkeypatch.setattr("tempfile.mkdtemp", lambda **kw: temp_dir)
 
     mock_proc = MagicMock(spec=subprocess.Popen)
@@ -125,11 +125,11 @@ async def test_acquire_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> Non
     mock_proc.pid = 6666
     mock_proc.poll.return_value = None
 
-    monkeypatch.setattr("wkhelper.core.browser_manager.find_chromium_browser", lambda: "/usr/bin/chrome")
+    monkeypatch.setattr("wkhelper.infra.browser.process.find_chromium_browser", lambda: "/usr/bin/chrome")
     monkeypatch.setattr("tempfile.mkdtemp", lambda **kw: temp_dir)
     monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: mock_proc)
     monkeypatch.setattr(
-        "wkhelper.core.browser_manager._wait_debugger",
+        "wkhelper.infra.browser.process.wait_debugger",
         AsyncMock(return_value=("ws://127.0.0.1:9222/browser", "ws://127.0.0.1:9222/page")),
     )
 

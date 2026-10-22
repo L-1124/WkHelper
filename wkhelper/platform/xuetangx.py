@@ -4,19 +4,31 @@ import logging
 from typing import Any, override
 from urllib.parse import quote
 
-from wkhelper.core.base_platform import BasePlatform, BasePlatformParser, HeartbeatProfile
-from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
-from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.homework import is_fill_in_question, normalize_judgement_answer
-from wkhelper.core.json_types import json_int
-from wkhelper.core.qr_login import QrCodeSession
-from wkhelper.core.results import ExamCoverDetail, ExamStartResult, NoticeDetail
-from wkhelper.core.time_types import epoch_millis
+from wkhelper.auth.qr import QrCodeSession
+from wkhelper.domain.accounts import UserInfo
+from wkhelper.domain.content import NoticeDetail
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError, AuthError
+from wkhelper.domain.exam import ExamCoverDetail, ExamStartResult
+from wkhelper.domain.homework import Homework
+from wkhelper.domain.json_types import json_int
+from wkhelper.domain.questions import is_fill_in_question, normalize_judgement_answer
+from wkhelper.domain.time_types import epoch_millis
+from wkhelper.domain.video import VideoContext
+from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.parsing import parse_leaf_schedules
+from wkhelper.platform.protocol_types import HeartbeatProfile
 
 logger = logging.getLogger(__name__)
 
 
 class XuetangXPlatform(BasePlatform):
+    def format_web_task_url(self, course: Course, leaf_id: str | int, task_type: str = "exercise") -> str | None:
+        cid = self._classroom_id(course)
+        lid = str(leaf_id)
+        sign = str(course.metadata.get("sign") or "")
+        return f"https://www.xuetangx.com/learn/{sign}/{course.id}/{cid}/{task_type}/{lid}"
+
     """学堂在线平台。"""
 
     api_base = "https://www.xuetangx.com"
@@ -30,7 +42,7 @@ class XuetangXPlatform(BasePlatform):
         return HeartbeatProfile(lob="xt")
 
     @override
-    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+    async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         csrftoken = cookies.get("csrftoken", "")
         sessionid = cookies.get("sessionid", "")
         if not csrftoken or not sessionid:
@@ -64,11 +76,11 @@ class XuetangXPlatform(BasePlatform):
     qr_platform_name = "学堂在线"
 
     @override
-    def _qr_ws_url(self) -> str:
+    def qr_ws_url(self) -> str:
         return "wss://www.xuetangx.com/wsapp/"
 
     @override
-    def _qr_request_payload(self) -> dict[str, Any]:
+    def qr_request_payload(self) -> dict[str, Any]:
         return {
             "op": "requestlogin",
             "role": "web",
@@ -79,7 +91,7 @@ class XuetangXPlatform(BasePlatform):
         }
 
     @override
-    async def _qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
+    async def qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
         ticket = message.get("ticket")
         if not ticket:
             return
@@ -89,7 +101,7 @@ class XuetangXPlatform(BasePlatform):
             qr_session.emit_challenge(expires_in=expires_in)
 
     @override
-    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
         # 前端：s_s = msg.is_new ? msg.s_s : msg.token
         if login_data.get("is_new"):
             token_val = login_data.get("s_s")
@@ -157,7 +169,7 @@ class XuetangXPlatform(BasePlatform):
         return list(courses.values())
 
     @override
-    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         resp = await self._request_json(
             "GET",
             f"{self.api_base}/api/v1/lms/learn/course/chapter",
@@ -170,7 +182,7 @@ class XuetangXPlatform(BasePlatform):
         return chapters
 
     @override
-    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
+    async def get_leaf_schedules(self, course: Course) -> dict[int, float]:
         resp = await self._request_json(
             "GET",
             f"{self.api_base}/api/v1/lms/learn/course/schedule",
@@ -179,7 +191,7 @@ class XuetangXPlatform(BasePlatform):
         if not resp.get("success"):
             return {}
         data = resp.get("data")
-        return BasePlatformParser.parse_leaf_schedules(data.get("leaf_schedules") if isinstance(data, dict) else None)
+        return parse_leaf_schedules(data.get("leaf_schedules") if isinstance(data, dict) else None)
 
     @override
     def _get_leaf_info_params(self, leaf_id: str | int, course: Course) -> dict[str, Any] | None:
@@ -219,7 +231,7 @@ class XuetangXPlatform(BasePlatform):
         }
 
     @override
-    async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
+    async def prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
         cid = self._classroom_id(course)
         resp = await self._request_json(
             "GET",
@@ -271,7 +283,7 @@ class XuetangXPlatform(BasePlatform):
         )
 
     @override
-    async def _prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
+    async def prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
         resp = await self._request_json(
             "GET",
             self._build_leaf_info_url(homework.id, course),
@@ -295,7 +307,7 @@ class XuetangXPlatform(BasePlatform):
         return {"cid": self._classroom_id(course), "sid": course.metadata.get("sku_id")}
 
     @override
-    async def _fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+    async def fetch_discussion_unit(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         url = f"{self.api_base}/api/v1/lms/forum/unit/discussion/"
         params = {
             "product_sign": course.metadata.get("sign"),
@@ -312,17 +324,17 @@ class XuetangXPlatform(BasePlatform):
         return data
 
     @override
-    async def _discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
+    async def discussion_completed(self, topic_info: dict[str, Any], course: Course, leaf_id: str | int) -> bool:
         return int(topic_info.get("user_comment_num") or 0) > 0
 
     @override
-    async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
+    async def discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
         """学堂在线详情以本人评论数为准；列表按同一来源补查未完成项。"""
-        unit = await self._fetch_discussion_unit(leaf_id, course)
+        unit = await self.fetch_discussion_unit(leaf_id, course)
         return int(unit.get("user_comment_num") or 0) > 0
 
     @override
-    async def _post_discussion_comment(
+    async def post_discussion_comment(
         self,
         topic_info: dict[str, Any],
         content: str,

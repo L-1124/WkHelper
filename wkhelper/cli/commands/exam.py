@@ -10,19 +10,10 @@ from cyclopts import App, Parameter
 
 from wkhelper.cli.context import PlatformCode, ctx
 from wkhelper.cli.deps import _open_course, _paginate
-from wkhelper.cli.envelope import CommandResult, NextAction
-from wkhelper.core.events import emit_event
-from wkhelper.core.exam_browser_driver import (
-    connect_exam_page,
-    simulate_browser_answer,
-    wait_for_answer_submission,
-)
-from wkhelper.core.exam_proctoring import assess_proctoring_risk, ensure_exam_operation_allowed
-from wkhelper.core.exam_session import browser_cookies, close_exam_browser, load_session, open_exam_browser
-from wkhelper.core.exceptions import APIError, ConfirmationRequiredError
-from wkhelper.core.exporter import export_exam_paper_to_markdown
-from wkhelper.core.json_types import JsonValue
-from wkhelper.core.results import (
+from wkhelper.cli.envelope import CommandResult
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.errors import APIError, ConfirmationRequiredError
+from wkhelper.domain.exam import (
     ExamAnswerResult,
     ExamBrowserCloseResult,
     ExamCoverDetail,
@@ -35,6 +26,18 @@ from wkhelper.core.results import (
     ExamStartResult,
     ExamStatusData,
 )
+from wkhelper.domain.json_types import JsonValue
+from wkhelper.exam.browser import (
+    begin_browser_exam,
+    connect_exam_page,
+    simulate_browser_answer,
+    wait_for_answer_submission,
+)
+from wkhelper.exam.export import export_exam_paper_to_markdown
+from wkhelper.exam.proctoring import assess_proctoring_risk, ensure_exam_operation_allowed
+from wkhelper.exam.service import get_exams
+from wkhelper.exam.session import browser_cookies, close_exam_browser, load_session, open_exam_browser
+from wkhelper.infra.events import emit_event
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,7 @@ def _warn_proctoring(cover: ExamCoverDetail) -> None:
 
 
 async def _bind_browser_session(plat: Any, exam: str) -> None:
-    """有活跃考场浏览器会话时复用它：注入浏览器 Cookie，并禁止再换票。"""
+    """有活跃考场浏览器会话时复用它：注入浏览器 Cookie 并绑定会话。"""
     session = load_session(ctx.data_dir)
     if session is None or session.exam_id != str(exam):
         return
@@ -122,7 +125,7 @@ async def exam_list_cmd(
 ) -> CommandResult[ExamListData]:
     """有界分页列出指定课程的期中/期末考试、开考时间与截止时间。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        exams = await plat.get_exams(matched)
+        exams = await get_exams(plat, matched)
         page_items, meta = _paginate(exams, limit, cursor)
         return CommandResult(data=ExamListData(exams=page_items), meta=meta.to_dict())
 
@@ -182,19 +185,18 @@ async def exam_start_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验并预览考场信息，不触发开始考试")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认进入考场会话（不开始作答，需配合 --begin）")] = False,
-    browser: Annotated[bool, Parameter(name=["--browser"], help="进入考场后拉起前台可见浏览器窗口保持考场页面（监考与心跳采集）")] = True,
-    begin: Annotated[bool, Parameter(name=["--begin"], help="调用 start_paper 真正开始作答并启动服务端计时")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认打开前台考场浏览器（不开始答题，答题需配合 --begin）")] = False,
+    begin: Annotated[bool, Parameter(name=["--begin"], help="在浏览器中点击开始答题，核验网页响应并验证进入答题页")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamStartResult] | CommandResult[ExamStartPreview]:
-    """建立考场会话并返回考场直达地址；传入 `--begin` 才真正开始作答。"""
+    """打开前台考场浏览器；传入 `--begin` 在浏览器中点击开始答题并验证进入答题页。"""
     if not confirm and not dry_run:
         raise ConfirmationRequiredError(
-            f"进入考场将启动服务端限时倒计时，请传入 `--confirm` 确认进入，或使用 `--dry-run` 预览。\n目标考试 ID: {exam}",
+            f"进入考场需传入 `--confirm`；传入 `--begin` 会在浏览器中点击开始答题。\n目标考试 ID: {exam}",
             next_actions=[
                 NextAction(
-                    reason="确认进入考场并启动考试会话",
+                    reason="确认进入考场并打开考场浏览器",
                     argv=["wkhelper", "exam", "start", "-c", course, "-e", exam, "--confirm"],
                 ),
                 NextAction(
@@ -225,29 +227,31 @@ async def exam_start_cmd(
 
         ensure_exam_operation_allowed(cover)
 
-        result = await plat.start_exam(exam, matched) if not begin else await plat.begin_exam(exam, matched)
+        result = await plat.start_exam(exam, matched)
         result.notice = _CLI_NOTICE
         if not result.started:
             raise APIError(f"进入考场未获平台确认: {result.message or '平台未确认开始'}", retryable=False)
-        if browser:
-            from urllib.parse import parse_qs, urlparse
+        from urllib.parse import parse_qs, urlparse
 
-            parsed = urlparse(result.web_url)
-            eid = int(parse_qs(parsed.query).get("exam_id", ["0"])[0])
-            session = await open_exam_browser(
-                exam_id=str(exam),
-                platform=plat.__class__.__name__,
-                host=f"{parsed.scheme}://{parsed.netloc}",
-                eid=eid,
-                web_url=result.web_url,
-                cookies={k: v for k, v in plat.client.cookies.items()},
-                data_dir=ctx.data_dir,
-            )
-            result.browser_port = session.port
-            emit_event(
-                "exam.browser_opened",
-                {"exam_id": str(exam), "port": session.port, "web_url": session.web_url},
-            )
+        parsed = urlparse(result.web_url)
+        eid = int(parse_qs(parsed.query).get("exam_id", ["0"])[0])
+        session = await open_exam_browser(
+            exam_id=str(exam),
+            platform=plat.__class__.__name__,
+            host=f"{parsed.scheme}://{parsed.netloc}",
+            eid=eid,
+            web_url=result.web_url,
+            cookies={k: v for k, v in plat.client.cookies.items()},
+            data_dir=ctx.data_dir,
+        )
+        result.browser_port = session.port
+        emit_event(
+            "exam.browser_opened",
+            {"exam_id": str(exam), "port": session.port, "web_url": session.web_url},
+        )
+        if begin:
+            await begin_browser_exam(session)
+            result.message = "已在浏览器中点击开始答题，服务端计时已启动"
         return CommandResult[ExamStartResult](data=result)
 
 
@@ -363,7 +367,7 @@ async def exam_answer_cmd(
             raise APIError(
                 f"考场作答必须依托已打开的前台考场浏览器会话。\n"
                 f"请先运行：wkhelper exam start -c {course} -e {exam} --confirm\n"
-                "拉起考场浏览器窗口并在前台保持打开后重试。",
+                "打开考场浏览器窗口并在前台保持打开后重试。",
                 retryable=False,
             )
 
@@ -467,7 +471,7 @@ async def exam_answer_cmd(
 
 @exam_app.command(name="close")
 async def exam_close_cmd() -> CommandResult[ExamBrowserCloseResult]:
-    """关闭 `exam start --browser` 拉起的考场浏览器会话。"""
+    """关闭 `exam start` 拉起的考场浏览器会话。"""
     session = load_session(ctx.data_dir)
     if session is None:
         return CommandResult[ExamBrowserCloseResult](
@@ -498,17 +502,16 @@ async def exam_result_cmd(
         problems = raw.get("problem_results") if isinstance(raw.get("problem_results"), list) else []
         grade = raw.get("grade")
         duration = raw.get("duration")
+        message = f"{raw.get('errmsg') or ''} (errcode: {raw.get('errcode')})".strip()
+        if int(raw.get("errcode") or 0) == 10107:
+            message = "试卷进度异常（平台返回 10107），建议联系任课老师核对作答与提交记录"
         return CommandResult[ExamResultData](
             data=ExamResultData(
                 exam_id=str(exam),
                 grade=float(grade) if isinstance(grade, (int, float)) else None,
                 duration=int(duration) if isinstance(duration, (int, float)) else None,
                 problem_count=len(problems),
-                message=(
-                    "成绩待批阅（试卷含主观题，批阅前不返回结果）"
-                    if int(raw.get("errcode") or 0) == 10107
-                    else f"{raw.get('errmsg') or ''} (errcode: {raw.get('errcode')})".strip()
-                ),
+                message=message,
             )
         )
 

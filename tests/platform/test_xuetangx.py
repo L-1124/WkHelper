@@ -4,9 +4,10 @@ from typing import Any
 
 import pytest
 
-from wkhelper.core.entities import Course, Homework
-from wkhelper.core.exceptions import APIError, AuthError
-from wkhelper.core.transport import AsyncSession
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError, AuthError
+from wkhelper.domain.homework import Homework
+from wkhelper.infra.http import AsyncSession
 from wkhelper.platform.xuetangx import XuetangXPlatform
 
 
@@ -34,7 +35,7 @@ async def test_xuetangx_login_with_cookies_success(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        user = await platform._login_with_cookies({"csrftoken": "token123", "sessionid": "sess456"})
+        user = await platform.login_with_cookies({"csrftoken": "token123", "sessionid": "sess456"})
         assert user.id == 12345
         assert user.name == "学堂用户"
         assert user.school == "清华大学"
@@ -54,7 +55,7 @@ async def test_xuetangx_login_with_cookies_missing_token() -> None:
     async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
         with pytest.raises(AuthError, match="缺少 csrftoken 或 sessionid"):
-            await platform._login_with_cookies({"csrftoken": "only_token"})
+            await platform.login_with_cookies({"csrftoken": "only_token"})
 
 
 @pytest.mark.asyncio
@@ -163,10 +164,10 @@ async def test_xuetangx_get_chapter_and_schedule(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        chapters = await platform._get_chapter_data(course)
+        chapters = await platform.get_chapter_data(course)
         assert len(chapters) == 1
 
-        schedules = await platform._get_leaf_schedules(course)
+        schedules = await platform.get_leaf_schedules(course)
         assert schedules == {3001: 1.0, 3002: 0.5}
 
 
@@ -192,7 +193,7 @@ async def test_xuetangx_submit_payload_and_context(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        ctx = await platform._prepare_submit_context(hw, course)
+        ctx = await platform.prepare_submit_context(hw, course)
         assert ctx["leaf_id"] == "5001"
         assert ctx["exercise_id"] == 7777
         assert ctx["sign"] == "mock-sign-123"
@@ -247,7 +248,7 @@ async def test_xuetangx_video_context(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        ctx = await platform._prepare_video_context("9001", course)
+        ctx = await platform.prepare_video_context("9001", course)
         assert ctx.video_id == "9001"
         assert ctx.user_id == 111
         assert ctx.sku_id == 222
@@ -291,12 +292,12 @@ async def test_xuetangx_article_and_discussions(monkeypatch) -> None:
 
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
 
-        unit = await platform._fetch_discussion_unit("leaf_456", course)
+        unit = await platform.fetch_discussion_unit("leaf_456", course)
         assert unit["id"] == 101
-        assert await platform._discussion_completed(unit, course, "leaf_456") is True
-        assert await platform._discussion_completed({"user_comment_num": 0}, course, "leaf_456") is False
+        assert await platform.discussion_completed(unit, course, "leaf_456") is True
+        assert await platform.discussion_completed({"user_comment_num": 0}, course, "leaf_456") is False
 
-        resp = await platform._post_discussion_comment(unit, "hello", course, "leaf_456")
+        resp = await platform.post_discussion_comment(unit, "hello", course, "leaf_456")
         assert resp["success"] is True
 
 
@@ -308,11 +309,11 @@ async def test_web_task_url_matches_spa_route() -> None:
         course = _sample_course()
 
         assert (
-            platform._format_web_task_url(course, "75369926", "exercise")
+            platform.format_web_task_url(course, "75369926", "exercise")
             == "https://www.xuetangx.com/learn/mock-sign-123/1001/2001/exercise/75369926"
         )
         assert (
-            platform._format_web_task_url(course, "75369927", "video")
+            platform.format_web_task_url(course, "75369927", "video")
             == "https://www.xuetangx.com/learn/mock-sign-123/1001/2001/video/75369927"
         )
 

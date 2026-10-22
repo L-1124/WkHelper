@@ -1,15 +1,15 @@
 """课程查询命令。"""
 
-from typing import Annotated
+from typing import Annotated, cast
 
-import msgspec
 from cyclopts import App, Parameter
 
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _open_platform, _paginate
-from wkhelper.cli.envelope import CommandResult, NextAction
-from wkhelper.core.entities import course_reference, dedupe_courses
-from wkhelper.core.results import CourseDetail, CourseItem, CourseListData
+from wkhelper.cli.envelope import CommandResult
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.courses import CourseDetail, CourseItem, CourseListData, course_reference, dedupe_courses
+from wkhelper.infra.serialization import to_json_value
 
 course_app = App(name="course", help="课程查询")
 
@@ -29,7 +29,7 @@ async def course_list_cmd(
                 id=course_reference(course),
                 name=course.name,
                 platform=course.platform_id,
-                classroom_id=msgspec.to_builtins(course.metadata.get("classroom_id")),
+                classroom_id=cast(str | int | None, to_json_value(course.metadata.get("classroom_id"))),
             )
             for course in courses
         ]
@@ -49,7 +49,7 @@ async def course_inspect_cmd(
     """查看指定课程的详细信息。"""
     async with _open_course(course, platform, account) as (_, matched):
         clean_meta = {
-            str(k): msgspec.to_builtins(v) for k, v in matched.metadata.items() if not str(k).startswith("_") and not isinstance(v, set)
+            str(k): to_json_value(v) for k, v in matched.metadata.items() if not str(k).startswith("_") and not isinstance(v, set)
         }
         return CommandResult(
             data=CourseDetail(

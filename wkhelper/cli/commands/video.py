@@ -7,22 +7,18 @@ from cyclopts import App, Parameter
 
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _load_plan, _open_course, _open_platform, _paginate
-from wkhelper.cli.envelope import CommandResult, NextAction
-from wkhelper.core.entities import course_reference, dedupe_courses
-from wkhelper.core.exceptions import APIError, ConfirmationRequiredError, PartialFailureError
-from wkhelper.core.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
-from wkhelper.core.results import (
-    VideoItem,
-    VideoLearnPreview,
-    VideoListData,
-    VideoPlanSummary,
-    VideoProgress,
-    VideoSnapshotData,
-)
-from wkhelper.core.video import VideoWatchOptions
-from wkhelper.core.video_runner import VideoPlanRunner
-from wkhelper.core.video_session_pool import cleanup_all_warm_sessions
-from wkhelper.core.video_snapshot import capture_video_frames
+from wkhelper.cli.envelope import CommandResult
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.courses import course_reference, dedupe_courses
+from wkhelper.domain.errors import APIError, ConfirmationRequiredError, PartialFailureError
+from wkhelper.domain.validation import validate_input
+from wkhelper.domain.video import VideoItem, VideoListData, VideoPlanSummary, VideoProgress, VideoSnapshotData
+from wkhelper.video.engine import VideoWatchOptions
+from wkhelper.video.plan import ExecutionOverrides, ExecutionSettings, VideoLearnPreview, VideoParameters, VideoPlan, VideoTarget
+from wkhelper.video.runner import VideoPlanRunner
+from wkhelper.video.service import get_video_progress, get_videos
+from wkhelper.video.session_pool import cleanup_all_warm_sessions
+from wkhelper.video.snapshot import capture_video_frames
 
 video_app = App(name="video", help="视频学习与查询")
 
@@ -38,7 +34,7 @@ async def video_list_cmd(
 ) -> CommandResult[VideoListData]:
     """查询课程视频列表。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        videos = await plat.get_videos(matched)
+        videos = await get_videos(plat, matched)
         raw_completed = matched.metadata.get("completed_video_ids")
         completed_ids: set[int] = raw_completed if isinstance(raw_completed, set) else set()
 
@@ -64,7 +60,7 @@ async def video_inspect_cmd(
 ) -> CommandResult[VideoProgress]:
     """查询单视频进度与执行约束。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        return CommandResult(data=await plat.get_video_progress(video, matched))
+        return CommandResult(data=await get_video_progress(plat, video, matched))
 
 
 @video_app.command(name="learn")
@@ -116,28 +112,35 @@ async def video_learn_cmd(
         video_ids = video or []
         if not video_ids:
             raise ValueError("必须通过 `--course` 与 `--video`，或通过 `--plan-file` 指定学习目标")
-        targets = [VideoTarget(course_id=str(course), video_id=str(video_id)) for video_id in video_ids]
+        targets = [validate_input(VideoTarget, {"course_id": str(course), "video_id": str(video_id)}) for video_id in video_ids]
         base_execution = ExecutionSettings()
         plan_defaults = VideoParameters()
         confirm_argv += ["--course", str(course)]
         for video_id in video_ids:
             confirm_argv += ["--video", str(video_id)]
 
-    cli_parameters = VideoParameters(
-        learning_rate=learning_rate,
-        heartbeat_interval=heartbeat_interval,
-        progress_interval=progress_interval,
-        completion_threshold=completion_threshold,
-        video_timeout=video_timeout,
-        stall_timeout=stall_timeout,
-        max_heartbeats=max_heartbeats,
-        jitter=jitter,
-        video_delay=video_delay,
+    cli_parameters = validate_input(
+        VideoParameters,
+        {
+            "learning_rate": learning_rate,
+            "heartbeat_interval": heartbeat_interval,
+            "progress_interval": progress_interval,
+            "completion_threshold": completion_threshold,
+            "video_timeout": video_timeout,
+            "stall_timeout": stall_timeout,
+            "max_heartbeats": max_heartbeats,
+            "jitter": jitter,
+            "video_delay": video_delay,
+        },
     )
-    cli_parameters.validate("命令行参数")
-    effective_execution = ExecutionOverrides(concurrency=concurrency, on_error=on_error, total_timeout=total_timeout).overlay(
-        base_execution
-    )
+    effective_execution = validate_input(
+        ExecutionOverrides,
+        {
+            "concurrency": concurrency,
+            "on_error": on_error,
+            "total_timeout": total_timeout,
+        },
+    ).overlay(base_execution)
 
     if dry_run:
         return CommandResult[VideoLearnPreview](

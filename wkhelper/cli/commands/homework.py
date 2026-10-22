@@ -12,12 +12,9 @@ from wkhelper.cli.deps import (
     _read_json_file_or_stdin,
 )
 from wkhelper.cli.envelope import CommandResult
-from wkhelper.core.entities import Homework
-from wkhelper.core.exceptions import ConfirmationRequiredError, PartialFailureError
-from wkhelper.core.homework import normalize_judgement_answer
-from wkhelper.core.homework_runner import run_homework_submit
-from wkhelper.core.json_types import parse_json_text
-from wkhelper.core.results import (
+from wkhelper.domain.errors import ConfirmationRequiredError, PartialFailureError
+from wkhelper.domain.homework import (
+    Homework,
     HomeworkItem,
     HomeworkListData,
     HomeworkOutline,
@@ -25,6 +22,10 @@ from wkhelper.core.results import (
     HomeworkSubmitResult,
     QuestionOutline,
 )
+from wkhelper.domain.json_types import parse_json_text
+from wkhelper.domain.questions import normalize_judgement_answer
+from wkhelper.homework.runner import run_homework_submit
+from wkhelper.homework.service import get_homeworks
 
 homework_app = App(name="homework", help="作业查询与提交")
 
@@ -40,7 +41,7 @@ async def homework_list_cmd(
 ) -> CommandResult[HomeworkListData]:
     """查询课程作业列表。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        homeworks = await plat.get_homeworks(matched)
+        homeworks = await get_homeworks(plat, matched)
 
         items: list[HomeworkItem] = []
         for homework in homeworks:

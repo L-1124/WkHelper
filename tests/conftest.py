@@ -6,10 +6,14 @@ from typing import Any, override
 
 import pytest_asyncio
 
-from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
-from wkhelper.core.entities import Course, Homework, UserInfo, VideoContext
-from wkhelper.core.transport import AsyncSession
+from wkhelper.domain.accounts import UserInfo
+from wkhelper.domain.courses import Course
+from wkhelper.domain.homework import Homework
+from wkhelper.domain.video import VideoContext
+from wkhelper.infra.http import AsyncSession
 from wkhelper.main import _loop_factory
+from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.protocol_types import HeartbeatProfile
 
 
 def pytest_asyncio_loop_factories() -> dict[str, Callable[[], asyncio.AbstractEventLoop]]:
@@ -44,11 +48,11 @@ class FakeAsyncPlatform(BasePlatform):
         return [Course(id="1", name="测试课程1", platform_id="test")]
 
     @override
-    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         return []
 
     @override
-    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
+    async def get_leaf_schedules(self, course: Course) -> dict[int, float]:
         return {}
 
     @override
@@ -70,7 +74,7 @@ class FakeAsyncPlatform(BasePlatform):
         return {"problem_id": problem_id, "answer": answer}
 
     @override
-    async def _prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
+    async def prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
         return VideoContext(
             video_id=video_id,
             classroom_id="0",
@@ -83,27 +87,17 @@ class FakeAsyncPlatform(BasePlatform):
         )
 
     @override
-    async def _prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
+    async def prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:
         return {"homework_id": homework.id}
 
     @override
-    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+    async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         self.user = UserInfo(id="1", name="tester")
         return self.user
 
     @override
-    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
         return {"csrf": "stub", "session": "stub"}
-
-    @override
-    async def _login_with_qrcode(
-        self,
-        display: str = "image",
-        open_browser: bool = False,
-        timeout: int = 120,
-    ) -> UserInfo:
-        self.user = UserInfo(id="1", name="tester")
-        return self.user
 
 
 @pytest_asyncio.fixture

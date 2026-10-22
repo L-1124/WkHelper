@@ -5,11 +5,13 @@ from typing import Any, override
 
 import pytest
 
-from wkhelper.core import base_platform
-from wkhelper.core.base_platform import BasePlatform, HeartbeatProfile
-from wkhelper.core.entities import Course, UserInfo
-from wkhelper.core.transport import AsyncSession
-from wkhelper.core.video import VideoWatchOptions, generic_watch_video
+from wkhelper.auth import service as auth_service
+from wkhelper.domain.accounts import UserInfo
+from wkhelper.domain.courses import Course
+from wkhelper.infra.http import AsyncSession
+from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.protocol_types import HeartbeatProfile
+from wkhelper.video.engine import VideoWatchOptions, generic_watch_video
 
 
 class _FakeSocket:
@@ -60,29 +62,29 @@ class _QrPlatform(BasePlatform):
         return HeartbeatProfile(lob="test")
 
     @override
-    def _qr_ws_url(self) -> str:
+    def qr_ws_url(self) -> str:
         return "wss://login.test/wsapp/"
 
     @override
-    def _qr_request_payload(self) -> dict[str, Any]:
+    def qr_request_payload(self) -> dict[str, Any]:
         return {"op": "requestlogin"}
 
     @override
-    def _qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
+    def qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
         raw = message.get("expire_seconds")
         return float(raw) if raw is not None else None
 
     @override
-    async def _qr_publish_image(self, message: dict[str, Any], qr_session: Any, expires_in: float) -> None:
+    async def qr_publish_image(self, message: dict[str, Any], qr_session: Any, expires_in: float) -> None:
         self.published.append(message)
 
     @override
-    async def _qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
+    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
         self.receipt = login_data
         return {"csrftoken": "csrf", "sessionid": "sid"}
 
     @override
-    async def _login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
+    async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         assert cookies == {"csrftoken": "csrf", "sessionid": "sid"}
         self.user = UserInfo(id="42", name="测试用户")
         return self.user
@@ -92,11 +94,11 @@ class _QrPlatform(BasePlatform):
         return []
 
     @override
-    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         return []
 
     @override
-    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
+    async def get_leaf_schedules(self, course: Course) -> dict[int, float]:
         return {}
 
     @override
@@ -110,11 +112,11 @@ class _QrPlatform(BasePlatform):
         return {}
 
     @override
-    async def _prepare_video_context(self, video_id: str, course: Course):  # type: ignore[override]
+    async def prepare_video_context(self, video_id: str, course: Course):  # type: ignore[override]
         raise NotImplementedError
 
     @override
-    async def _prepare_submit_context(self, homework: Any, course: Course) -> dict[str, Any]:
+    async def prepare_submit_context(self, homework: Any, course: Course) -> dict[str, Any]:
         return {}
 
 
@@ -127,7 +129,7 @@ async def test_qr_login_template_drives_hooks(monkeypatch) -> None:
             {"op": "loginsuccess", "token": "tk-123"},
         ]
     )
-    monkeypatch.setattr(base_platform, "build_session", lambda **kwargs: _FakeWsSession(socket))
+    monkeypatch.setattr(auth_service, "build_session", lambda **kwargs: _FakeWsSession(socket))
 
     async with AsyncSession() as client:
         platform = _QrPlatform(client)

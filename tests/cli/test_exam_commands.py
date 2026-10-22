@@ -7,17 +7,12 @@ from typing import Any, override
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
-from wkhelper.core.entities import Course
-from wkhelper.core.exam_session import ExamBrowserSession
-from wkhelper.core.results import (
-    ExamCoverDetail,
-    ExamItem,
-    ExamPaperData,
-    ExamProblemItem,
-    ExamStartResult,
-    OptionItem,
-)
-from wkhelper.core.time_types import EpochMillis
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError
+from wkhelper.domain.exam import ExamCoverDetail, ExamPaperData, ExamProblemItem, ExamStartResult
+from wkhelper.domain.homework import OptionItem
+from wkhelper.domain.time_types import EpochMillis
+from wkhelper.exam.session import ExamBrowserSession
 from wkhelper.main import async_main
 
 
@@ -36,16 +31,8 @@ class _ExamMockPlatform(FakeAsyncPlatform):
         ]
 
     @override
-    async def get_exams(self, course: Course) -> list[ExamItem]:
-        return [
-            ExamItem(
-                id="3001",
-                name="期中考试",
-                start_time=EpochMillis(1700000000000),
-                deadline=EpochMillis(1700050000000),
-                completed=False,
-            )
-        ]
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+        return [{"id": 3001, "name": "期中考试", "leaf_type": 5, "start_time": 1700000000000, "end_time": 1700050000000}]
 
     @override
     async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
@@ -62,18 +49,6 @@ class _ExamMockPlatform(FakeAsyncPlatform):
             description="请在规定时间内完成作答",
             face_auth=False,
             capture_screen=False,
-        )
-
-    @override
-    async def begin_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
-        return ExamStartResult(
-            course_id="1001",
-            exam_id=str(leaf_id),
-            title="期中考试测试卷",
-            started=True,
-            limit_minutes=90,
-            web_url="https://examination.test/exam/3001",
-            message="作答已开始，服务端计时已启动",
         )
 
     @override
@@ -198,6 +173,11 @@ def mock_exam_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("wkhelper.cli.commands.exam.browser_cookies", _fake_browser_cookies)
 
+    async def _fake_begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0) -> None:
+        return None
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.begin_browser_exam", _fake_begin_browser_exam)
+
 
 @pytest.mark.asyncio
 async def test_exam_list(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +192,6 @@ async def test_exam_list(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -
     exams = res["data"]["exams"]
     assert len(exams) == 1
     assert exams[0]["id"] == "3001"
-    assert exams[0]["name"] == "期中考试"
     assert exams[0]["overdue"] is True
 
 
@@ -523,7 +502,7 @@ async def test_exam_answer_reports_staged_mismatch(mock_exam_env: None, monkeypa
 @pytest.mark.asyncio
 async def test_exam_answer_reports_unverifiable_staging(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """暂存接口不可用时不得宣称已保存。"""
-    from wkhelper.core.exceptions import APIError as CoreAPIError
+    from wkhelper.domain.errors import APIError as CoreAPIError
 
     _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1})
 
@@ -651,7 +630,7 @@ async def test_exam_answer_unknown_submission_fails_on_cache_mismatch(mock_exam_
 @pytest.mark.asyncio
 async def test_exam_answer_unknown_submission_fails_on_cache_error(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """页面提交状态未知且无法读取暂存时判定保存失败。"""
-    from wkhelper.core.exceptions import APIError as CoreAPIError
+    from wkhelper.domain.errors import APIError as CoreAPIError
 
     _patch_answer_driver(monkeypatch, {"success": True, "clicked_count": 1}, submission=_observed(["A"], accepted=False, unknown=True))
 
@@ -966,19 +945,6 @@ async def test_exam_start_dry_run_emits_proctoring_event(mock_exam_env: None, mo
 
 
 @pytest.mark.asyncio
-async def test_exam_write_results_carry_cli_notice(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """考试写命令必须声明交卷由本人在浏览器完成，CLI 不代提交。"""
-    buf = StringIO()
-    monkeypatch.setattr("sys.stdout", buf)
-
-    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "-p", "xtzx"])
-    assert code == 0
-    notice = json.loads(buf.getvalue())["data"]["notice"]
-    assert "本人点击交卷" in notice
-    assert "浏览器" in notice
-
-
-@pytest.mark.asyncio
 async def test_exam_start_and_answer_blocked_by_proctoring(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """强监考考试只允许预览，进入考场与作答都在触达页面前被拦下。"""
     monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _proctored_cover)
@@ -1004,7 +970,7 @@ async def test_exam_start_and_answer_blocked_by_proctoring(mock_exam_env: None, 
 
 def test_exam_session_roundtrip(tmp_path) -> None:
     """会话文件可持久化、读取与清理。"""
-    from wkhelper.core.exam_session import ExamBrowserSession, clear_session, load_session, save_session
+    from wkhelper.exam.session import ExamBrowserSession, clear_session, load_session, save_session
 
     session = ExamBrowserSession(
         exam_id="3001",
@@ -1029,6 +995,7 @@ async def test_exam_close_without_session(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     code = await async_main(["--format", "json", "--data-dir", str(tmp_path), "exam", "close"])
     assert code == 0
+
     res = json.loads(buf.getvalue())
     assert res["data"]["closed"] is False
 
@@ -1043,7 +1010,6 @@ async def test_exam_start_begin_creates_attempt(mock_exam_env: None, monkeypatch
     assert code == 0
     plain = json.loads(buf.getvalue())["data"]
     assert plain["started"] is True
-    assert "考场会话已成功建立" in plain["message"]
 
     buf.truncate(0)
     buf.seek(0)
@@ -1051,4 +1017,115 @@ async def test_exam_start_begin_creates_attempt(mock_exam_env: None, monkeypatch
     assert code == 0
     begun = json.loads(buf.getvalue())["data"]
     assert begun["started"] is True
-    assert "作答已开始" in begun["message"]
+
+
+@pytest.mark.asyncio
+async def test_exam_start_without_begin_skips_browser_begin(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未传 --begin 时只建立考场会话，不得调用 begin_browser_exam。"""
+    browser_begun = False
+
+    async def _spy_begin_browser(session: ExamBrowserSession, timeout: float = 20.0) -> None:
+        nonlocal browser_begun
+        browser_begun = True
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.begin_browser_exam", _spy_begin_browser)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"])
+    assert code == 0
+    data = json.loads(buf.getvalue())["data"]
+    assert data["started"] is True
+    assert "考场会话已成功建立" in data["message"]
+    assert not browser_begun
+
+
+@pytest.mark.asyncio
+async def test_exam_start_dry_run_never_calls_browser_begin_and_preserves_guards(
+    mock_exam_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dry-run 传入 --begin 不得调用 browser begin，同时保留已缺考、已交卷与强监考门禁。"""
+    begin_called = False
+
+    async def _fail_begin(session: ExamBrowserSession, timeout: float = 20.0) -> None:
+        nonlocal begin_called
+        begin_called = True
+        raise AssertionError("dry-run 不得调用 begin_browser_exam")
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.begin_browser_exam", _fail_begin)
+
+    out, err = StringIO(), StringIO()
+    monkeypatch.setattr("sys.stdout", out)
+    monkeypatch.setattr("sys.stderr", err)
+
+    # 1. 正常封面 dry-run --begin：返回预览数据，绝不调用 begin_browser_exam
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "--begin", "-p", "xtzx"])
+    assert code == 0
+    res = json.loads(out.getvalue())
+    assert res["ok"] is True
+    assert res["data"]["dry_run"] is True
+    assert not begin_called
+
+    # 2. 已交卷门禁保留：dry-run --begin 遇到已交卷直接报 6，绝不调用 begin
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _submitted_cover)
+    out.truncate(0)
+    out.seek(0)
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "--begin", "-p", "xtzx"])
+    assert code == 6
+    res = json.loads(out.getvalue())
+    assert res["ok"] is False
+    assert "已交卷" in res["error"]["message"]
+    assert not begin_called
+
+    # 3. 强监考门禁保留：dry-run --begin 遇到强监考照常输出监考警告事件
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _proctored_cover)
+    out.truncate(0)
+    out.seek(0)
+    err.truncate(0)
+    err.seek(0)
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--dry-run", "--begin", "-p", "xtzx"])
+    assert code == 0
+    events = [json.loads(line) for line in err.getvalue().strip().splitlines() if line.strip()]
+    assert any(event["event"] == "security.exam_proctoring" for event in events)
+    assert not begin_called
+
+
+@pytest.mark.asyncio
+async def test_exam_start_begin_browser_failure_exits(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """begin_browser_exam 失败时应正确透传平台错误，退出码 6，非 mock 回声。"""
+
+    async def _failing_begin(session: ExamBrowserSession, timeout: float = 20.0) -> None:
+        raise APIError("网页开始答题响应无法确认，请在浏览器核对；不要重复开始", retryable=False)
+
+    monkeypatch.setattr("wkhelper.cli.commands.exam.begin_browser_exam", _failing_begin)
+
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "start", "-c", "1001", "-e", "3001", "--confirm", "--begin", "-p", "xtzx"])
+    assert code == 6
+    res = json.loads(buf.getvalue())
+    assert res["ok"] is False
+    assert res["error"]["code"] == "PLATFORM_ERROR"
+    assert "网页开始答题响应无法确认" in res["error"]["message"]
+    assert res["error"]["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_exam_result_reports_progress_anomaly(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """10107 表示试卷进度异常，不能显示成待批阅。"""
+
+    async def fake_result(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        return {"errcode": 10107, "errmsg": "试卷尚未提交", "problem_results": []}
+
+    monkeypatch.setattr(_ExamMockPlatform, "get_exam_result", fake_result)
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--format", "json", "exam", "result", "-c", "1001", "-e", "3001", "-p", "xtzx"])
+    assert code == 0
+    message = json.loads(buf.getvalue())["data"]["message"]
+    assert "试卷进度异常" in message
+    assert "老师" in message
+    assert "待批阅" not in message

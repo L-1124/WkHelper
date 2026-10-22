@@ -4,14 +4,14 @@ import json
 from io import StringIO
 from typing import Any
 
-import msgspec
 import pytest
 from cyclopts import CycloptsError
 
 from wkhelper.cli.app import app
 from wkhelper.cli.envelope import create_error_envelope, create_success_envelope, print_json
 from wkhelper.cli.spec import command_registry, get_command_schema, get_command_spec
-from wkhelper.core.results import VideoItem
+from wkhelper.domain.video import VideoItem
+from wkhelper.infra.serialization import encode_json
 
 
 def _iter_leaf_commands(app_inst: Any, prefix: str = "") -> list[str]:
@@ -138,9 +138,9 @@ def test_envelope_structure():
 
 
 def test_envelope_encodes_dataclass_data() -> None:
-    """信封内的 dataclass 由 msgspec 直接展开，无需手写递归序列化。"""
+    """信封内的 dataclass 由编码边界直接展开。"""
     envelope = create_success_envelope(data=VideoItem(id="v1", name="测试视频", completed=True))
-    payload = json.loads(msgspec.json.encode(envelope))
+    payload = json.loads(encode_json(envelope))
 
     assert payload["data"] == {"id": "v1", "name": "测试视频", "completed": True}
 

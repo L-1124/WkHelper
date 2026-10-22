@@ -5,10 +5,14 @@ from typing import Any
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
-from wkhelper.core.entities import Course
-from wkhelper.core.exceptions import APIError
-from wkhelper.core.results import ExamCoverDetail
-from wkhelper.core.transport import AsyncSession
+from wkhelper.discussion.service import get_discussions
+from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError
+from wkhelper.domain.exam import ExamCoverDetail
+from wkhelper.exam.service import get_exams
+from wkhelper.homework.service import get_homeworks
+from wkhelper.infra.http import AsyncSession
+from wkhelper.video.service import get_videos
 
 
 def _course() -> Course:
@@ -18,7 +22,7 @@ def _course() -> Course:
 class _LeafTreePlatform(FakeAsyncPlatform):
     """章节树覆盖前端全部叶类型：5=考试 6=作业 7=课件 9=随堂测验 10=公告 4=讨论。"""
 
-    async def _get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
+    async def get_chapter_data(self, course: Course) -> list[dict[str, Any]]:
         return [
             {
                 "name": "第一章",
@@ -37,7 +41,7 @@ class _LeafTreePlatform(FakeAsyncPlatform):
             }
         ]
 
-    async def _get_leaf_schedules(self, course: Course) -> dict[int, float]:
+    async def get_leaf_schedules(self, course: Course) -> dict[int, float]:
         return {}
 
     async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
@@ -64,14 +68,14 @@ async def test_homework_and_exam_lists_split_by_leaf_type() -> None:
         platform = _LeafTreePlatform(client)
         course = _course()
 
-        homeworks = await platform.get_homeworks(course)
-        exams = await platform.get_exams(course)
+        homeworks = await get_homeworks(platform, course)
+        exams = await get_exams(platform, course)
 
     assert [hw.id for hw in homeworks] == ["2"]
     assert [exam.id for exam in exams] == ["1"]
 
-    videos = await platform.get_videos(course)
-    discussions = await platform.get_discussions(course)
+    videos = await get_videos(platform, course)
+    discussions = await get_discussions(platform, course)
 
     assert set(videos) == {8, 9, 10}  # 仅视频/音频/直播，线下课堂被排除
     assert [d.id for d in discussions] == ["6"]  # 公告不混入讨论
@@ -125,7 +129,7 @@ async def test_non_homework_leaf_rejected(monkeypatch: pytest.MonkeyPatch, leaf_
 
 
 class _DiscussionStatusPlatform(_LeafTreePlatform):
-    async def _discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
+    async def discussion_leaf_completed(self, leaf_id: str | int, course: Course) -> bool | None:
         return str(leaf_id) == "6"
 
 
@@ -134,7 +138,7 @@ async def test_discussion_list_uses_comment_status() -> None:
     """讨论列表完成态以发言状态为准，章节进度为 0 也不得把已发言判成未完成。"""
     async with AsyncSession() as client:
         platform = _DiscussionStatusPlatform(client)
-        discussions = await platform.get_discussions(_course())
+        discussions = await get_discussions(platform, _course())
 
     by_id = {item.id: item.completed for item in discussions}
     assert by_id["6"] is True
@@ -145,7 +149,7 @@ async def test_discussion_list_falls_back_to_schedule() -> None:
     """平台无法判定发言状态时保留章节进度结论。"""
     async with AsyncSession() as client:
         platform = _LeafTreePlatform(client)
-        discussions = await platform.get_discussions(_course())
+        discussions = await get_discussions(platform, _course())
 
     by_id = {item.id: item.completed for item in discussions}
     assert by_id["6"] is False

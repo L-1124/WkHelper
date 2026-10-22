@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from wkhelper.core.browser_manager import BrowserManager, BrowserProcess
-from wkhelper.core.results import VideoSnapshotFrame
-from wkhelper.core.video_session_pool import (
+from wkhelper.domain.video import VideoSnapshotFrame
+from wkhelper.infra.browser.process import BrowserManager, BrowserProcess
+from wkhelper.video.session_pool import (
     VideoWarmSession,
     _watchdog_main,
     acquire_warm_session,
@@ -253,8 +253,8 @@ def test_watchdog_exits_when_meta_file_missing() -> None:
     profile_dir.mkdir(parents=True, exist_ok=True)
     try:
         with (
-            patch("wkhelper.core.video_session_pool.is_pid_alive", return_value=True),
-            patch("wkhelper.core.video_session_pool.terminate_process_tree") as mock_term,
+            patch("wkhelper.video.session_pool.is_pid_alive", return_value=True),
+            patch("wkhelper.video.session_pool.terminate_process_tree") as mock_term,
         ):
             # meta_file 并不存在
             run_watchdog(
@@ -286,8 +286,8 @@ def test_watchdog_exits_on_ttl_timeout() -> None:
             encoding="utf-8",
         )
         with (
-            patch("wkhelper.core.video_session_pool.is_pid_alive", return_value=True),
-            patch("wkhelper.core.video_session_pool.terminate_process_tree") as mock_term,
+            patch("wkhelper.video.session_pool.is_pid_alive", return_value=True),
+            patch("wkhelper.video.session_pool.terminate_process_tree") as mock_term,
         ):
             run_watchdog(
                 port=9999,
@@ -352,15 +352,15 @@ async def test_get_or_create_warm_session_cold_launch(monkeypatch: pytest.Monkey
         )
 
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager.launch_browser",
+            "wkhelper.infra.browser.process.BrowserManager.launch_browser",
             lambda **kwargs: mock_proc,
         )
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager._wait_debugger",
+            "wkhelper.infra.browser.process.BrowserManager.wait_debugger",
             AsyncMock(return_value=("ws://browser", "ws://page")),
         )
         monkeypatch.setattr(
-            "wkhelper.core.video_session_pool.spawn_watchdog",
+            "wkhelper.video.session_pool.spawn_watchdog",
             lambda **kwargs: 8888,
         )
 
@@ -376,7 +376,7 @@ async def test_get_or_create_warm_session_cold_launch(monkeypatch: pytest.Monkey
             AsyncMock(return_value=MockWs()),
         )
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.CdpClient.call",
+            "wkhelper.infra.browser.cdp.CdpClient.call",
             AsyncMock(return_value={}),
         )
 
@@ -423,7 +423,7 @@ async def test_get_or_create_warm_session_warm_hit(monkeypatch: pytest.MonkeyPat
         )
         session_file.write_text(json.dumps(initial_sess.to_dict()), encoding="utf-8")
 
-        monkeypatch.setattr("wkhelper.core.video_session_pool.check_cdp_alive", lambda port, timeout=1.0: True)
+        monkeypatch.setattr("wkhelper.video.session_pool.check_cdp_alive", lambda port, timeout=1.0: True)
 
         session, is_new = await get_or_create_warm_session(
             course_id="101",
@@ -472,7 +472,7 @@ def test_spawn_watchdog_and_cli_parser(monkeypatch: pytest.MonkeyPatch) -> None:
         mock_popen.assert_called_once()
 
     with patch("sys.argv", ["pool", "--port", "9222", "--pid", "1234", "--profile-dir", "/tmp/p", "--meta-file", "/tmp/m", "--ttl", "60"]):
-        with patch("wkhelper.core.video_session_pool.run_watchdog") as mock_run:
+        with patch("wkhelper.video.session_pool.run_watchdog") as mock_run:
             _watchdog_main()
             mock_run.assert_called_once_with(
                 port=9222,
@@ -523,8 +523,8 @@ def test_watchdog_corrupted_meta_file() -> None:
     try:
         meta_file.write_text("{invalid json corrupt content...", encoding="utf-8")
         with (
-            patch("wkhelper.core.video_session_pool.is_pid_alive", return_value=True),
-            patch("wkhelper.core.video_session_pool.terminate_process_tree") as mock_term,
+            patch("wkhelper.video.session_pool.is_pid_alive", return_value=True),
+            patch("wkhelper.video.session_pool.terminate_process_tree") as mock_term,
         ):
             run_watchdog(
                 port=9999,
@@ -558,11 +558,11 @@ async def test_get_or_create_warm_session_cancelled_cleans_browser(monkeypatch: 
             created_at=time.time(),
         )
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager.launch_browser",
+            "wkhelper.infra.browser.process.BrowserManager.launch_browser",
             lambda **kwargs: mock_proc,
         )
         monkeypatch.setattr(
-            "wkhelper.core.browser_manager.BrowserManager._wait_debugger",
+            "wkhelper.infra.browser.process.BrowserManager.wait_debugger",
             AsyncMock(side_effect=asyncio.CancelledError("task cancelled")),
         )
         cleaned_sessions: list[VideoWarmSession] = []
@@ -570,7 +570,7 @@ async def test_get_or_create_warm_session_cancelled_cleans_browser(monkeypatch: 
         def fake_clean(sess: VideoWarmSession, meta: object = None) -> None:
             cleaned_sessions.append(sess)
 
-        monkeypatch.setattr("wkhelper.core.video_session_pool.clean_session_resources", fake_clean)
+        monkeypatch.setattr("wkhelper.video.session_pool.clean_session_resources", fake_clean)
 
         with pytest.raises(asyncio.CancelledError):
             await get_or_create_warm_session(
@@ -632,7 +632,7 @@ def test_file_lock_acquired_flag_on_failure() -> None:
             assert err_raised == [True]
             # 确认主线程的锁依然持有，没有被失败的线程 pop 掉
             norm_path = str(Path(str(lock_target) + ".lock").resolve())
-            from wkhelper.core.video_session_pool import _FILE_LOCK_OWNERS
+            from wkhelper.video.session_pool import _FILE_LOCK_OWNERS
 
             assert norm_path in _FILE_LOCK_OWNERS
     finally:
@@ -743,7 +743,7 @@ def test_cleanup_all_warm_sessions_skips_timeout_preserves_metadata_cleans_corru
             with real_file_lock(path, timeout=timeout):
                 yield
 
-        with patch("wkhelper.core.video_session_pool.file_lock", side_effect=fake_lock):
+        with patch("wkhelper.video.session_pool.file_lock", side_effect=fake_lock):
             cleaned = cleanup_all_warm_sessions(session_dir=temp_dir)
 
             # 活跃会话因为锁超时被跳过，元数据未被删除！
@@ -761,7 +761,8 @@ def test_cleanup_all_warm_sessions_skips_timeout_preserves_metadata_cleans_corru
 async def test_default_snapshot_identity_selects_own_cached_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """省略 CLI 身份时，切换用户必须命中各自已认证的缓存，而非共用旧会话。"""
     from wkhelper.cli.commands.video import video_snapshot_cmd
-    from wkhelper.core.entities import Course, UserInfo
+    from wkhelper.domain.accounts import UserInfo
+    from wkhelper.domain.courses import Course
 
     for account, pid in (("10001", 101), ("20002", 202)):
         session = VideoWarmSession(
@@ -770,8 +771,8 @@ async def test_default_snapshot_identity_selects_own_cached_session(monkeypatch:
         path = get_session_file("c1", "v1", session_dir=tmp_path, account_id=account, platform="ykt")
         path.write_text(json.dumps(session.to_dict()), encoding="utf-8")
 
-    monkeypatch.setattr("wkhelper.core.video_session_pool.is_pid_alive", lambda pid: True)
-    monkeypatch.setattr("wkhelper.core.video_session_pool.check_cdp_alive", lambda port: True)
+    monkeypatch.setattr("wkhelper.video.session_pool.is_pid_alive", lambda pid: True)
+    monkeypatch.setattr("wkhelper.video.session_pool.check_cdp_alive", lambda port: True)
 
     def forbid_launch(**kwargs: object):
         raise AssertionError("账号对应缓存应已命中，不应创建其他浏览器")

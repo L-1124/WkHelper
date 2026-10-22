@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
-from wkhelper.core.time_types import parse_http_date_ms
+from wkhelper.domain.time_types import parse_http_date_ms
 
 
 class _Resp:
@@ -28,6 +28,8 @@ class _Resp:
 class _Session:
     def __init__(self, response: _Resp) -> None:
         self._response = response
+        self.cookies = {}
+        self.headers = {}
 
     async def request(self, method: str, url: str, **kwargs: Any) -> _Resp:
         return self._response
@@ -65,8 +67,8 @@ async def test_payload_server_time_wins_over_date_header() -> None:
 async def test_heartbeat_ts_uses_server_clock() -> None:
     """心跳 ts 必须叠加已测量的时钟偏移。"""
     platform = FakeAsyncPlatform(_Session(_Resp()))  # type: ignore[arg-type]
-    platform._clock_offset_ms = 5000.0
-    payload = platform._build_heartbeat_payload(
+    platform.clock.offset_ms = 5000.0
+    payload = platform.build_heartbeat_payload(
         video_id="v1",
         classroom_id="c1",
         user_id=1,

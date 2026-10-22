@@ -3,15 +3,16 @@
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
-from wkhelper.core.entities import Course
-from wkhelper.core.results import ExamCoverDetail
-from wkhelper.core.transport import AsyncSession
+from wkhelper.domain.courses import Course
+from wkhelper.domain.exam import ExamCoverDetail
+from wkhelper.exam.service import get_exams
+from wkhelper.infra.http import AsyncSession
 
 
 class _ExamListPlatform(FakeAsyncPlatform):
     """章节树里带一个考试节点，封面返回已交卷。"""
 
-    async def _get_chapter_data(self, course: Course) -> list[dict]:
+    async def get_chapter_data(self, course: Course) -> list[dict]:
         return [{"name": "第一章", "leaf_list": [{"id": 1, "name": "期末考试", "leaf_type": 5}]}]
 
     async def get_exam_cover(self, leaf_id: str | int, course: Course) -> ExamCoverDetail:
@@ -37,7 +38,7 @@ async def test_exam_list_uses_cover_status() -> None:
     async with AsyncSession() as client:
         platform = _ExamListPlatform(client)
         course = Course(id="1", name="测试课程1", platform_id="test")
-        exams = await platform.get_exams(course)
+        exams = await get_exams(platform, course)
 
     assert len(exams) == 1
     assert exams[0].status == "已交卷"
