@@ -2,12 +2,12 @@
 
 架构约定：
 
-- 业务命令只返回 `CommandResult`，不直接打印；输出与退出码由 `result_action` 统一接管。
-- 全局会话参数（`--format`/`--debug`/`--proxy` 等）声明在 meta 应用上，由 Cyclopts 负责
-  解析、校验与帮助展示，不再手工扫描 `sys.argv`。
+- 业务命令只返回 `CommandResult`，不直接打印；输出与退出码由统一处理器接管。
+- 全局会话参数由 meta 应用的 Pydantic 参数模型声明，Cyclopts 负责解析与帮助展示。
 - 渲染相关的 `console` 与 `help_formatter` 只在根应用声明，子应用自动继承。
 """
 
+import inspect
 from collections.abc import Sequence
 from typing import Annotated
 
@@ -23,8 +23,9 @@ from wkhelper.cli.commands.notice import notice_app
 from wkhelper.cli.commands.question import question_app, questions_app
 from wkhelper.cli.commands.system import schema_cmd, status_cmd
 from wkhelper.cli.commands.video import video_app
-from wkhelper.cli.context import CredentialMode, OutputFormat, ctx
+from wkhelper.cli.context import SessionOptions, get_context
 from wkhelper.cli.output import CONSOLE, unified_result_action
+from wkhelper.infra.events import set_debug_enabled
 
 app = App(
     name="wkhelper",
@@ -65,39 +66,22 @@ app.meta.result_action = "return_value"
 @app.meta.default
 async def launcher(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
-    format: Annotated[OutputFormat | None, Parameter(name=["--format"], help="输出格式：json 或 md（缺省按 TTY 推断）")] = None,
-    data_dir: Annotated[str | None, Parameter(name=["--data-dir"], help="凭据与检查点数据目录")] = None,
-    credential_mode: Annotated[CredentialMode, Parameter(name=["--credential-mode"], help="凭据存储模式")] = "system",
-    cookie_file: Annotated[
-        str | None, Parameter(name=["--cookie-file"], help="会话 Cookie 文件（需配合 `--credential-mode session`）")
-    ] = None,
-    debug: Annotated[bool, Parameter(name=["--debug"], help="输出调试堆栈与 NDJSON 事件")] = False,
-    user_agent: Annotated[str | None, Parameter(name=["--user-agent"], help="覆盖请求 User-Agent")] = None,
-    proxy: Annotated[str | None, Parameter(name=["--proxy"], help="HTTP 代理地址")] = None,
+    options: Annotated[SessionOptions | None, Parameter(name="*")] = None,
 ) -> int:
     """解析全局会话参数后转交业务命令。"""
-    ctx.configure(
-        format=format,
-        data_dir=data_dir,
-        credential_mode=credential_mode,
-        cookie_file=cookie_file,
-        debug=debug,
-        user_agent=user_agent,
-        proxy=proxy,
-    )
+    options = options if options is not None else SessionOptions()
+    get_context().options = options
+    set_debug_enabled(options.debug)
     return await dispatch(tokens)
 
 
 async def dispatch(tokens: Sequence[str]) -> int:
-    """执行剥离全局参数后的业务命令；空命令时输出帮助。
-
-    Cyclopts 在嵌套调用（meta 启动器内）会把 `result_action` 强制降级为
-    `return_value`，因此这里显式调用统一的输出处理器完成渲染与退出码换算。
-    """
-    if not tokens:
-        await app.run_async(["--help"])
-        return 0
-    return int(unified_result_action(await app.run_async(list(tokens))) or 0)
+    """解析后执行命令，避免 Cyclopts 的共享调用栈跨越 await。"""
+    command, bound, _ = app.parse_args(list(tokens) if tokens else ["--help"])
+    result = command(*bound.args, **bound.kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    return unified_result_action(result)
 
 
 __all__ = [

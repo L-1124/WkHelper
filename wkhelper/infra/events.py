@@ -4,7 +4,9 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from pydantic import JsonValue
 
@@ -38,6 +40,8 @@ class NDJSONLogHandler(logging.Handler):
     """将 Python 标准 logging 输出桥接为结构化 NDJSON 事件。"""
 
     def emit(self, record: logging.LogRecord) -> None:
+        if not is_debug_enabled():
+            return
         try:
             msg = self.format(record)
             payload: dict[str, JsonValue] = {
@@ -50,29 +54,38 @@ class NDJSONLogHandler(logging.Handler):
             self.handleError(record)
 
 
-_DEBUG_ENABLED: bool = False
+_DEBUG_ENABLED: ContextVar[bool] = ContextVar("debug_enabled", default=False)
 
 
 def set_debug_enabled(enabled: bool) -> None:
-    """设置全局调试状态并同步配置日志。"""
-    global _DEBUG_ENABLED
-    _DEBUG_ENABLED = enabled
-    configure_debug_logging(enabled)
+    """只修改当前调用的调试状态，日志桥接器按需安装一次。"""
+    _DEBUG_ENABLED.set(enabled)
+    if enabled:
+        configure_debug_logging()
 
 
 def is_debug_enabled() -> bool:
-    """查询全局调试是否开启。"""
-    return _DEBUG_ENABLED
+    """查询当前调用的调试开关。"""
+    return _DEBUG_ENABLED.get()
 
 
-def configure_debug_logging(enabled: bool) -> None:
-    """按调试开关配置 wkhelper 根记录器。"""
+@contextmanager
+def debug_scope(enabled: bool) -> Generator[None]:
+    """退出后恢复外层调试状态，不拆装其他调用的日志处理器。"""
+    token = _DEBUG_ENABLED.set(enabled)
+    try:
+        if enabled:
+            configure_debug_logging()
+        yield
+    finally:
+        _DEBUG_ENABLED.reset(token)
+
+
+def configure_debug_logging() -> None:
+    """安装共享桥接器；是否发送日志由当前调用状态决定。"""
     logger = logging.getLogger("wkhelper")
-    logger.handlers = [h for h in logger.handlers if not isinstance(h, NDJSONLogHandler)]
-    if enabled:
+    if not any(isinstance(handler, NDJSONLogHandler) for handler in logger.handlers):
         handler = NDJSONLogHandler()
         handler.setLevel(logging.DEBUG)
         logger.addHandler(handler)
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)

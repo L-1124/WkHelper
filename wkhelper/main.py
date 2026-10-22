@@ -10,7 +10,8 @@ from typing import Any
 from cyclopts import CycloptsError
 from pydantic import JsonValue, ValidationError
 
-from wkhelper.cli.app import app, ctx
+from wkhelper.cli.app import app
+from wkhelper.cli.context import execution_context, get_context
 from wkhelper.cli.envelope import create_error_envelope
 from wkhelper.cli.output import emit_error
 from wkhelper.domain.errors import (
@@ -44,7 +45,7 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
     details: dict[str, JsonValue] = {}
     if hasattr(exc, "details") and isinstance(exc.details, dict):
         details.update(exc.details)
-    if ctx.debug:
+    if get_context().options.debug:
         details["exception_type"] = type(exc).__name__
         details["traceback"] = [line for line in traceback.format_exc().strip().splitlines()]
 
@@ -103,32 +104,34 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
 
 async def async_main(argv: Sequence[str]) -> int:
     """异步入口：供测试与嵌入调用，不产生 SystemExit。"""
-    ctx.configure()
-    try:
-        return int(await app.meta.run_async(list(argv)) or 0)
-    except BaseException as exc:
-        if isinstance(exc, SystemExit):
-            return exc.code if isinstance(exc.code, int) else 0
-        envelope, code = _handle_exception(exc)
-        emit_error(envelope)
-        return code
+    with execution_context():
+        try:
+            command, bound, _ = app.meta.parse_args(list(argv))
+            return int(await command(*bound.args, **bound.kwargs) or 0)
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            if isinstance(exc, SystemExit):
+                return exc.code if isinstance(exc.code, int) else 0
+            envelope, code = _handle_exception(exc)
+            emit_error(envelope)
+            return code
 
 
 def main() -> None:
     """同步入口：在受控事件循环中运行异步命令。
 
-    Cyclopts 的同步调用路径内部固定使用 `asyncio.run`（无法指定 loop factory），
-    因此这里改为自己创建循环并调用 `run_async`，以便在 Windows 上使用 selector
-    循环，避免 curl_cffi 的额外选择器线程。
+    Cyclopts 负责同步解析，业务协程由本入口的 selector 循环执行，
+    避免 curl_cffi 在 Windows 上退回额外选择器线程。
     """
-    ctx.configure()
     try:
         code = asyncio.run(async_main(sys.argv[1:]), loop_factory=_loop_factory)
     except BaseException as exc:
         if isinstance(exc, SystemExit):
             raise
-        envelope, exit_code = _handle_exception(exc)
-        emit_error(envelope)
+        with execution_context():
+            envelope, exit_code = _handle_exception(exc)
+            emit_error(envelope)
         sys.exit(exit_code)
     sys.exit(code or 0)
 

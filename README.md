@@ -47,6 +47,8 @@ flowchart LR
 
 数据契约统一使用 Pydantic v2：领域数据、输出信封、命令 Schema、执行配置和持久化会话采用模型声明校验、默认值与序列化省略规则。动态 JSON 使用 Pydantic 原生 `JsonValue`，不维护另一套递归类型或 `to_dict` / `from_dict` 转换；浏览器进程句柄等资源对象不属于数据契约。
 
+全局会话参数由 Cyclopts 直接构造不可变的 `SessionOptions`。`async_main(argv)` 为每次调用建立独立的 `ContextVar` 上下文，正常返回、异常及取消后恢复外层配置与调试开关；业务入口通过 `get_context()` 访问本次配置，不保留进程级可变 `ctx`。直接调用依赖上下文的命令时须显式进入 `execution_context(...)`。上下文隔离不等于输出流隔离，同进程并发调用仍共享 stdout/stderr。
+
 ---
 
 ## 安装与快速上手
