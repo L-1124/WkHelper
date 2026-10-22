@@ -1,6 +1,7 @@
 """WkHelper 命令行主程序入口（基于 Cyclopts）。"""
 
 import asyncio
+import inspect
 import logging
 import sys
 import traceback
@@ -107,7 +108,10 @@ async def async_main(argv: Sequence[str]) -> int:
     with execution_context():
         try:
             command, bound, _ = app.meta.parse_args(list(argv))
-            return int(await command(*bound.args, **bound.kwargs) or 0)
+            result = command(*bound.args, **bound.kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+            return int(result or 0)
         except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):
                 raise
