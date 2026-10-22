@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from wkhelper.auth.cookies import parse_cookie_string
-from wkhelper.cli.context import ctx
+from wkhelper.cli.context import get_context
 from wkhelper.cli.inputs import AnswersInput
 from wkhelper.domain.courses import Course, course_reference, dedupe_courses
 from wkhelper.domain.errors import AuthError
@@ -33,7 +33,8 @@ def _create_http_session(timeout: float = 15.0, impersonate: str | None = None) 
     指纹伪装由平台声明（`BasePlatform.impersonate`）：会话 Cookie 与签发时的
     TLS 指纹绑定，平台间不一致时必须分别处理，否则会被直接拒绝。
     """
-    return build_session(timeout=timeout, proxy=ctx.proxy, user_agent=ctx.user_agent, impersonate=impersonate)
+    options = get_context().options
+    return build_session(timeout=timeout, proxy=options.proxy, user_agent=options.user_agent, impersonate=impersonate)
 
 
 def _read_json_file_or_stdin(file_path: str) -> JsonValue:
@@ -115,12 +116,11 @@ def _resolve_account_and_platform(
     """解析目标平台代码、账号 ID 与可用 Cookies。"""
     _validate_platform_code(platform_code)
 
-    if ctx.cookie_file:
-        if ctx.credential_mode != "session":
-            raise ValueError("全局 `--cookie-file` 仅支持与 `--credential-mode session` 搭配使用")
+    options = get_context().options
+    if options.cookie_file:
         if not platform_code:
             raise ValueError("使用全局 `--cookie-file` 时必须显式提供 `--platform`")
-        cookies = _parse_cookie_payload(_read_json_file_or_stdin(ctx.cookie_file))
+        cookies = _parse_cookie_payload(_read_json_file_or_stdin(options.cookie_file))
         return platform_code, account_id or "session_user", cookies
 
     plat = platform_code
@@ -158,7 +158,7 @@ async def _open_platform(
     timeout: float = 15.0,
 ) -> AsyncIterator[BasePlatform]:
     """打开已认证的平台客户端上下文。"""
-    store = ctx.get_store()
+    store = get_context().get_store()
     platform_code, _account_id, cookies = _resolve_account_and_platform(store, platform, account)
     platform_cls = _PLATFORM_TYPES.get(platform_code)
     impersonate = platform_cls.impersonate if platform_cls is not None else None

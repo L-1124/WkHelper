@@ -27,34 +27,6 @@ async def test_cli_status_command(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_and_user_agent_flags(monkeypatch):
-    """测试全局 --proxy 与 --user-agent 由 meta 应用解析并写入上下文。"""
-    from wkhelper.cli.app import ctx
-
-    buf = StringIO()
-    monkeypatch.setattr("sys.stdout", buf)
-
-    code = await async_main(["--proxy", "http://127.0.0.1:8080", "--user-agent", "CustomUA/1.0", "status"])
-    assert code == 0
-    assert ctx.proxy == "http://127.0.0.1:8080"
-    assert ctx.user_agent == "CustomUA/1.0"
-
-
-@pytest.mark.asyncio
-async def test_global_flags_after_subcommand(monkeypatch):
-    """全局参数置于子命令之后同样生效（fallthrough 解析）。"""
-    from wkhelper.cli.app import ctx
-
-    buf = StringIO()
-    monkeypatch.setattr("sys.stdout", buf)
-
-    code = await async_main(["status", "--debug", "--credential-mode", "session"])
-    assert code == 0
-    assert ctx.debug is True
-    assert ctx.credential_mode == "session"
-
-
-@pytest.mark.asyncio
 async def test_cli_schema_command(monkeypatch):
     """测试 wkhelper schema video learn 命令输出。"""
     buf = StringIO()

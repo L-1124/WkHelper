@@ -136,4 +136,5 @@ uv run pytest -q
 - 叶节点分类以平台前端为准：`5=考试`、`6=作业`、`7=课件`、`8=线下课堂`、`9=随堂测验`、`10=公告`；协议与实测见 `.agents/work/protocol-js-audit.md`。
 - 导出目标已存在时返回 `FILE_EXISTS`（退出码 5），不覆盖既有文件。
 - 全局 `--cookie-file` 仅与 `--credential-mode session` 搭配，且必须显式 `--platform`；置于子命令之后时归属该命令的同名选项（如 `auth login --cookie-file`）。
-- meta 启动器内对子命令的调用是嵌套调用，Cyclopts 会强制 `result_action="return_value"`，因此 `dispatch()` 必须显式调用 `unified_result_action` 完成渲染与退出码换算。
+- 入口与 `dispatch()` 用 Cyclopts 公开 `parse_args()` 完成同步解析，再执行命令协程并显式调用 `unified_result_action`；不得让 Cyclopts 的共享调用栈跨越 `await`。
+- 全局配置由不可变 `SessionOptions` 声明，`async_main()` 用 `execution_context()` 建立调用级 `ContextVar` 作用域，异常、取消与嵌套调用均恢复外层状态；通过 `get_context()` 访问，不保留全局可变 `ctx`。
