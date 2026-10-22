@@ -966,6 +966,8 @@ async def test_exam_start_and_answer_blocked_by_proctoring(mock_exam_env: None, 
 
     assert await async_main(["exam", "start", "-c", "1001", "-e", "3001", "--confirm", "-p", "xtzx"]) == 6
     assert await async_main(["exam", "answer", "-c", "1001", "-e", "3001", "-q", "9001", "--answer", "A", "--confirm", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "status", "-c", "1001", "-e", "3001", "-p", "xtzx"]) == 6
+    assert await async_main(["exam", "result", "-c", "1001", "-e", "3001", "-p", "xtzx"]) == 6
 
 
 def test_exam_session_roundtrip(tmp_path) -> None:
