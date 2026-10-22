@@ -1,6 +1,6 @@
 [project]
 name = "wkhelper"
-version = "1.0.1"
+version = "1.1.0"
 description = "网课学习助手"
 readme = "README.md"
 requires-python = ">=3.12"
