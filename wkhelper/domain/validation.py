@@ -1,10 +1,6 @@
 """显式用户输入的严格校验边界。"""
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-
-
-class InputModel(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False, validate_default=True, validate_assignment=True)
+from pydantic import BaseModel, ValidationError
 
 
 def validation_message(error: ValidationError) -> str:

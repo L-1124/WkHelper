@@ -37,7 +37,7 @@ async def course_list_cmd(
         next_actions = (
             [NextAction(reason="查看首门课程视频", argv=["wkhelper", "video", "list", "--course", page_items[0].id])] if page_items else []
         )
-        return CommandResult(data=CourseListData(courses=page_items), meta=meta.to_dict(), next_actions=next_actions)
+        return CommandResult(data=CourseListData(courses=page_items), meta=meta.model_dump(), next_actions=next_actions)
 
 
 @course_app.command(name="inspect")

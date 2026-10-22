@@ -117,7 +117,7 @@ async def solve_captcha_interactive(
 
                 _notify(
                     "security.captcha_solved",
-                    {"web_url": web_url, "cookie_names": sorted(fresh)},
+                    {"web_url": web_url, "cookie_names": [name for name in sorted(fresh)]},
                 )
                 return captured, fresh
             finally:

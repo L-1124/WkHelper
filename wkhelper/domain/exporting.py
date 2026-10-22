@@ -1,16 +1,14 @@
 """导出结果。"""
 
-from dataclasses import dataclass
+from wkhelper.domain.model import Model
 
 
-@dataclass
-class OutputFileResult:
+class OutputFileResult(Model):
     output_file: str
     written: bool
 
 
-@dataclass
-class ExportResult:
+class ExportResult(Model):
     file_path: str | None
     homeworks_count: int
     questions_count: int

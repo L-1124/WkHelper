@@ -7,6 +7,7 @@ import random
 from typing import Annotated, Any
 
 from cyclopts import App, Parameter
+from pydantic import JsonValue
 
 from wkhelper.cli.context import PlatformCode, ctx
 from wkhelper.cli.deps import _open_course, _paginate
@@ -26,7 +27,6 @@ from wkhelper.domain.exam import (
     ExamStartResult,
     ExamStatusData,
 )
-from wkhelper.domain.json_types import JsonValue
 from wkhelper.exam.browser import (
     begin_browser_exam,
     connect_exam_page,
@@ -53,7 +53,7 @@ def proctoring_payload(cover: ExamCoverDetail) -> dict[str, JsonValue] | None:
         return None
     return {
         "exam_id": cover.exam_id,
-        "reasons": reasons,
+        "reasons": [reason for reason in reasons],
         "online_proctor": cover.online_proctor,
         "capture_screen": cover.capture_screen,
         "app_capture_screen": cover.app_capture_screen,
@@ -127,7 +127,7 @@ async def exam_list_cmd(
     async with _open_course(course, platform, account) as (plat, matched):
         exams = await get_exams(plat, matched)
         page_items, meta = _paginate(exams, limit, cursor)
-        return CommandResult(data=ExamListData(exams=page_items), meta=meta.to_dict())
+        return CommandResult(data=ExamListData(exams=page_items), meta=meta.model_dump())
 
 
 @exam_app.command(name="inspect")

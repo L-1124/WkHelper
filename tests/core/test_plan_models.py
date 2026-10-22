@@ -1,8 +1,8 @@
 """计划与参数模型的解析、校验与优先级测试。"""
 
 import pytest
+from pydantic import JsonValue
 
-from wkhelper.domain.json_types import JsonValue
 from wkhelper.video.engine import VideoWatchOptions
 from wkhelper.video.plan import ExecutionOverrides, ExecutionSettings, VideoParameters, VideoPlan, VideoTarget
 

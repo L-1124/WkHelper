@@ -137,8 +137,8 @@ def test_envelope_structure():
     assert details["field"] == "test"
 
 
-def test_envelope_encodes_dataclass_data() -> None:
-    """信封内的 dataclass 由编码边界直接展开。"""
+def test_envelope_encodes_model_data() -> None:
+    """信封保留模型数据的对外字段。"""
     envelope = create_success_envelope(data=VideoItem(id="v1", name="测试视频", completed=True))
     payload = json.loads(encode_json(envelope))
 

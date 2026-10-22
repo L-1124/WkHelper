@@ -1,15 +1,14 @@
 """视频学习计划与执行参数模型。"""
 
-from dataclasses import dataclass
 from typing import Annotated
 
 from pydantic import Field, StringConstraints, field_validator
 
-from wkhelper.domain.validation import InputModel
+from wkhelper.domain.model import Model
 from wkhelper.domain.video import ExecutionMode
 
 
-class VideoParameters(InputModel):
+class VideoParameters(Model):
     """None 表示未指定，按优先级回退。"""
 
     learning_rate: float | None = Field(default=None, gt=0)
@@ -28,13 +27,13 @@ class VideoParameters(InputModel):
         return VideoParameters.model_validate(values | self.model_dump(exclude_none=True))
 
 
-class ExecutionSettings(InputModel):
+class ExecutionSettings(Model):
     concurrency: int = Field(default=1, ge=1)
     on_error: ExecutionMode = "stop"
     total_timeout: float = Field(default=3600.0, gt=0)
 
 
-class ExecutionOverrides(InputModel):
+class ExecutionOverrides(Model):
     concurrency: int | None = Field(default=None, ge=1)
     on_error: ExecutionMode | None = None
     total_timeout: float | None = Field(default=None, gt=0)
@@ -46,14 +45,14 @@ class ExecutionOverrides(InputModel):
 type TargetId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-class VideoTarget(InputModel):
+class VideoTarget(Model):
     course_id: TargetId
     video_id: TargetId
     name: str | None = None
     parameters: VideoParameters | None = None
 
 
-class VideoPlan(InputModel):
+class VideoPlan(Model):
     platform: str | None = None
     account: str | None = None
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
@@ -67,8 +66,7 @@ class VideoPlan(InputModel):
         return {} if value is None else value
 
 
-@dataclass
-class VideoLearnPreview:
+class VideoLearnPreview(Model):
     dry_run: bool
     targets_count: int
     targets: list[VideoTarget]

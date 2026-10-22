@@ -45,6 +45,8 @@ flowchart LR
     F --> H[结构化 NDJSON 事件流]
 ```
 
+数据契约统一使用 Pydantic v2：领域数据、输出信封、命令 Schema、执行配置和持久化会话采用模型声明校验、默认值与序列化省略规则。动态 JSON 使用 Pydantic 原生 `JsonValue`，不维护另一套递归类型或 `to_dict` / `from_dict` 转换；浏览器进程句柄等资源对象不属于数据契约。
+
 ---
 
 ## 安装与快速上手

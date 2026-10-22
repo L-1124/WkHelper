@@ -18,10 +18,12 @@ import threading
 import time
 import urllib.request
 from collections.abc import AsyncGenerator, Generator
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
+from pydantic import BeforeValidator, ConfigDict, Field
+
+from wkhelper.domain.model import Model
 from wkhelper.infra.browser.cdp import CdpClient
 from wkhelper.infra.browser.process import BrowserManager
 from wkhelper.infra.http import build_session
@@ -29,44 +31,29 @@ from wkhelper.infra.http import build_session
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class VideoWarmSession:
+_CoerceStr = Annotated[str, BeforeValidator(str)]
+_CoerceInt = Annotated[int, BeforeValidator(int)]
+_CoerceFloat = Annotated[float, BeforeValidator(float)]
+
+
+class VideoWarmSession(Model):
     """热池视频会话元数据。"""
 
-    course_id: str
-    video_id: str
-    pid: int
-    port: int
-    profile_dir: str
+    model_config = ConfigDict(extra="ignore")
+
+    course_id: _CoerceStr = ""
+    video_id: _CoerceStr = ""
+    pid: _CoerceInt = 0
+    port: _CoerceInt = 0
+    profile_dir: _CoerceStr = ""
     page_ws: str | None = None
     browser_ws: str | None = None
-    last_active_at: float = field(default_factory=time.time)
-    ttl_seconds: float = 120.0
-    web_url: str = ""
-    watchdog_pid: int | None = None
-    account_id: str | None = None
-    platform: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VideoWarmSession":
-        return cls(
-            course_id=str(data.get("course_id", "")),
-            video_id=str(data.get("video_id", "")),
-            pid=int(data.get("pid", 0)),
-            port=int(data.get("port", 0)),
-            profile_dir=str(data.get("profile_dir", "")),
-            page_ws=data.get("page_ws"),
-            browser_ws=data.get("browser_ws"),
-            last_active_at=float(data.get("last_active_at", time.time())),
-            ttl_seconds=float(data.get("ttl_seconds", 120.0)),
-            web_url=str(data.get("web_url", "")),
-            watchdog_pid=int(data["watchdog_pid"]) if data.get("watchdog_pid") is not None else None,
-            account_id=str(data["account_id"]) if data.get("account_id") is not None else None,
-            platform=str(data["platform"]) if data.get("platform") is not None else None,
-        )
+    last_active_at: _CoerceFloat = Field(default_factory=time.time)
+    ttl_seconds: _CoerceFloat = 120.0
+    web_url: _CoerceStr = ""
+    watchdog_pid: _CoerceInt | None = None
+    account_id: _CoerceStr | None = None
+    platform: _CoerceStr | None = None
 
 
 def get_default_video_session_dir(base_dir: Path | None = None) -> Path:
@@ -335,9 +322,9 @@ def touch_session(session_file: Path | str) -> None:
     try:
         with file_lock(path, timeout=3.0):
             if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                data["last_active_at"] = time.time()
-                path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                sess = VideoWarmSession.model_validate_json(path.read_text(encoding="utf-8"))
+                sess.last_active_at = time.time()
+                path.write_text(sess.model_dump_json(indent=2), encoding="utf-8")
     except Exception as exc:
         logger.debug(f"更新会话活跃时间戳失败: {exc}")
 
@@ -408,10 +395,10 @@ def run_watchdog(
                     break
                 try:
                     content = meta_path.read_text(encoding="utf-8")
-                    data = json.loads(content)
+                    sess = VideoWarmSession.model_validate_json(content)
                     consecutive_corrupted = 0
-                    last_active_at = float(data.get("last_active_at", 0.0))
-                    session_ttl = float(data.get("ttl_seconds", ttl_seconds))
+                    last_active_at = sess.last_active_at if "last_active_at" in sess.model_fields_set else 0.0
+                    session_ttl = sess.ttl_seconds if "ttl_seconds" in sess.model_fields_set else ttl_seconds
                 except Exception:
                     consecutive_corrupted += 1
                     if consecutive_corrupted >= 3:
@@ -501,12 +488,11 @@ async def get_or_create_warm_session(
     async with async_file_lock(session_file, timeout=10.0):
         if session_file.exists():
             try:
-                data = json.loads(session_file.read_text(encoding="utf-8"))
-                existing = VideoWarmSession.from_dict(data)
+                existing = VideoWarmSession.model_validate_json(session_file.read_text(encoding="utf-8"))
                 if is_pid_alive(existing.pid) and check_cdp_alive(existing.port):
                     existing.last_active_at = time.time()
                     existing.web_url = web_url or existing.web_url
-                    session_file.write_text(json.dumps(existing.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+                    session_file.write_text(existing.model_dump_json(indent=2), encoding="utf-8")
                     return existing, False
                 else:
                     clean_session_resources(existing, session_file)
@@ -555,7 +541,7 @@ async def get_or_create_warm_session(
                 account_id=account_id,
                 platform=platform,
             )
-            session_file.write_text(json.dumps(new_session.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+            session_file.write_text(new_session.model_dump_json(indent=2), encoding="utf-8")
             return new_session, True
         except BaseException:
             clean_session_resources(
@@ -628,8 +614,7 @@ def cleanup_all_warm_sessions(session_dir: Path | None = None) -> int:
                 if not file_path.exists():
                     continue
                 try:
-                    data = json.loads(file_path.read_text(encoding="utf-8"))
-                    sess = VideoWarmSession.from_dict(data)
+                    sess = VideoWarmSession.model_validate_json(file_path.read_text(encoding="utf-8"))
                     clean_session_resources(sess, file_path)
                     cleaned += 1
                 except Exception as exc:

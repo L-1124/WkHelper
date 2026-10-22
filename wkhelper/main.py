@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from cyclopts import CycloptsError
+from pydantic import JsonValue, ValidationError
 
 from wkhelper.cli.app import app, ctx
 from wkhelper.cli.envelope import create_error_envelope
@@ -21,7 +22,6 @@ from wkhelper.domain.errors import (
     RiskControlError,
     WKError,
 )
-from wkhelper.domain.json_types import JsonDict
 
 logger = logging.getLogger("wkhelper")
 
@@ -41,12 +41,12 @@ def _loop_factory() -> asyncio.AbstractEventLoop:
 
 def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
     """统一异常到退出码映射，在 --debug 时注入堆栈与类型诊断。"""
-    details: JsonDict = {}
+    details: dict[str, JsonValue] = {}
     if hasattr(exc, "details") and isinstance(exc.details, dict):
         details.update(exc.details)
     if ctx.debug:
         details["exception_type"] = type(exc).__name__
-        details["traceback"] = traceback.format_exc().strip().splitlines()
+        details["traceback"] = [line for line in traceback.format_exc().strip().splitlines()]
 
     if isinstance(exc, CycloptsError):
         return create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False, details=details), 2
@@ -87,6 +87,9 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
         )
     if isinstance(exc, (FileNotFoundError, KeyError)):
         return create_error_envelope(code="NOT_FOUND", message=str(exc), retryable=False, details=details), 4
+    if isinstance(exc, ValidationError):
+        logger.exception("内部数据契约校验失败")
+        return create_error_envelope(code="INTERNAL_ERROR", message="内部数据契约校验失败", details=details), 1
     if isinstance(exc, ValueError):
         return create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False, details=details), 2
     if isinstance(exc, APIError):

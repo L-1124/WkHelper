@@ -29,7 +29,7 @@ async def notice_list_cmd(
             n for n in notices if status == "all" or (status == "completed" and n.completed) or (status == "pending" and not n.completed)
         ]
         page_items, meta = _paginate(items, limit, cursor)
-        return CommandResult(data=NoticeListData(notices=page_items), meta=meta.to_dict())
+        return CommandResult(data=NoticeListData(notices=page_items), meta=meta.model_dump())
 
 
 @notice_app.command(name="inspect")

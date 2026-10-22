@@ -1,6 +1,7 @@
 """主程序命令行端到端调用测试。"""
 
 import json
+from contextlib import asynccontextmanager
 from io import StringIO
 
 import pytest
@@ -144,3 +145,34 @@ async def test_cli_question_submit_auth_guard(monkeypatch):
     data = json.loads(buf.getvalue().strip())
     assert data["ok"] is False
     assert data["error"]["code"] == "AUTH_EXPIRED"
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ({"q": ["A", None, True, 7, 2.5]}, {"q": ["A", "7", "2.5"]}),
+        ({"answers": [{"question_id": "q", "answer": "A", "extra": 1}, {"question_id": "q", "answer": ["C"]}]}, {"q": ["C"]}),
+        ({"answers": "A"}, {"answers": ["A"]}),
+    ],
+)
+def test_answer_input_preserves_compatible_normalization(payload, expected) -> None:
+    from wkhelper.cli.deps import _parse_answers_payload
+
+    assert _parse_answers_payload(payload) == expected
+
+
+@pytest.mark.asyncio
+async def test_internal_model_failure_is_not_a_user_argument_error(monkeypatch, capsys) -> None:
+    from wkhelper.cli.commands import course as command
+    from wkhelper.domain.courses import CourseListData
+
+    @asynccontextmanager
+    async def invalid_platform(*args, **kwargs):
+        CourseListData.model_validate({"courses": "invalid"})
+        yield
+
+    monkeypatch.setattr(command, "_open_platform", invalid_platform)
+    code = await async_main(["--format", "json", "--credential-mode", "session", "course", "list"])
+    envelope = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert envelope["error"]["code"] == "INTERNAL_ERROR"

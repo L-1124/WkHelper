@@ -1,9 +1,10 @@
 """视频数据。"""
 
-from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, Field
+
+from wkhelper.domain.model import Model
 
 type VideoStatus = Literal["completed", "threshold_reached", "timed_out", "stalled", "failed", "stopped"]
 
@@ -11,19 +12,17 @@ type VideoStatus = Literal["completed", "threshold_reached", "timed_out", "stall
 type ExecutionMode = Literal["stop", "continue"]
 
 
-@dataclass
-class Video:
+class Video(Model):
     """视频模型。"""
 
     id: int | str
     name: str
     completed: bool = False
     rate: float = 0.0
-    metadata: dict[str, Any] = field(default_factory=dict)  # 平台动态载荷
+    metadata: dict[str, Any] = Field(default_factory=dict)  # 平台动态载荷
 
 
-@dataclass
-class VideoContext:
+class VideoContext(Model):
     """视频观看所需的平台上下文。"""
 
     video_id: str
@@ -39,30 +38,27 @@ class VideoContext:
     duration: float = 0.0  # 视频真实时长，心跳 d 字段
 
 
-@dataclass
-class VideoItem:
+class VideoItem(Model):
     id: str
     name: str
     completed: bool
 
 
-@dataclass
-class VideoProgress:
+class VideoProgress(Model):
     course_id: str
     video_id: str
     current_rate: float
     completed: bool
 
 
-@dataclass
-class VideoListData:
+class VideoListData(Model):
     videos: list[VideoItem]
 
 
-class VideoWatchResult(BaseModel):
+class VideoWatchResult(Model):
     """单视频学习结果。"""
 
-    model_config = ConfigDict(strict=True, allow_inf_nan=False, validate_default=True, validate_assignment=True, extra="ignore")
+    model_config = ConfigDict(extra="ignore")
 
     video_id: str
     video_name: str = ""
@@ -85,16 +81,14 @@ class VideoTargetResult(VideoWatchResult):
     course_id: str = ""
 
 
-@dataclass
-class VideoPlanSummary:
+class VideoPlanSummary(Model):
     total: int
     completed: int
     failed: int
     results: list[VideoTargetResult]
 
 
-@dataclass
-class VideoSnapshotFrame:
+class VideoSnapshotFrame(Model):
     """单张视频抽帧元数据与落盘结果。"""
 
     timestamp: float
@@ -106,8 +100,7 @@ class VideoSnapshotFrame:
     error: str | None = None
 
 
-@dataclass
-class VideoSnapshotData:
+class VideoSnapshotData(Model):
     """视频批量截帧结果汇总。"""
 
     course_id: str

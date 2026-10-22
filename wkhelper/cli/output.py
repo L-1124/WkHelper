@@ -2,8 +2,9 @@
 
 import sys
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
+from pydantic import JsonValue, TypeAdapter
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
@@ -12,7 +13,6 @@ from wkhelper.cli.context import get_effective_format
 from wkhelper.cli.envelope import CommandResult, create_success_envelope, print_json
 from wkhelper.cli.markdown import format_error_markdown, format_result_markdown
 from wkhelper.domain.actions import NextAction
-from wkhelper.domain.json_types import JsonDict, JsonValue
 
 TERMINAL_THEME = Theme(
     {
@@ -28,6 +28,7 @@ TERMINAL_THEME = Theme(
 )
 
 CONSOLE = Console(theme=TERMINAL_THEME)
+_ACTION_ADAPTER = TypeAdapter(list[NextAction])
 
 
 def _print_markdown(content: str, console: Console) -> None:
@@ -39,7 +40,7 @@ def _print_markdown(content: str, console: Console) -> None:
         sys.stdout.flush()
 
 
-def emit_error(envelope: JsonDict, console: Console = CONSOLE) -> None:
+def emit_error(envelope: dict[str, JsonValue], console: Console = CONSOLE) -> None:
     """按生效格式输出错误信封（JSON）或错误 Markdown。"""
     if get_effective_format(console.is_terminal) == "json":
         print_json(envelope)
@@ -51,7 +52,7 @@ def emit_error(envelope: JsonDict, console: Console = CONSOLE) -> None:
     raw_actions = envelope.get("next_actions")
     raw_data = envelope.get("data")
     # 信封已由强类型模型生成，此处是 JSON 反查边界，按契约收窄一次即可。
-    actions = cast("list[NextAction]", raw_actions) if isinstance(raw_actions, list) else []
+    actions = _ACTION_ADAPTER.validate_python(raw_actions) if isinstance(raw_actions, list) else []
     _print_markdown(
         format_error_markdown(
             str(error.get("code", "ERROR")),

@@ -1,23 +1,23 @@
 """CLI 共享依赖项与通用辅助函数。"""
 
-import json
 import logging
 import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from wkhelper.auth.cookies import parse_cookie_string
 from wkhelper.cli.context import ctx
+from wkhelper.cli.inputs import AnswersInput
 from wkhelper.domain.courses import Course, course_reference, dedupe_courses
 from wkhelper.domain.errors import AuthError
-from wkhelper.domain.json_types import JsonValue, json_str_list, parse_json_text
 from wkhelper.domain.pagination import PaginationMeta
 from wkhelper.domain.validation import validate_input, validation_message
 from wkhelper.infra.credentials import CredentialStore
 from wkhelper.infra.http import AsyncSession, build_session
+from wkhelper.infra.serialization import decode_json
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
@@ -46,9 +46,9 @@ def _read_json_file_or_stdin(file_path: str) -> JsonValue:
             raise FileNotFoundError(f"找不到输入文件: {file_path}")
         content = path.read_text(encoding="utf-8")
     try:
-        return parse_json_text(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"输入文件不是合法的 JSON: {exc}") from exc
+        return decode_json(content)
+    except ValidationError as exc:
+        raise ValueError(validation_message(exc)) from None
 
 
 def _parse_cookie_payload(raw: JsonValue) -> dict[str, str]:
@@ -62,37 +62,8 @@ def _parse_cookie_payload(raw: JsonValue) -> dict[str, str]:
 
 
 def _parse_answers_payload(raw: JsonValue) -> dict[str, list[str]]:
-    """解析答案载荷，兼容扁平映射与显式 answers 列表两种格式。"""
-    if not isinstance(raw, dict):
-        raise ValueError("答案内容必须为 JSON 对象")
-
-    nested = raw.get("answers")
-    if isinstance(nested, list):
-        answers: dict[str, list[str]] = {}
-        for index, item in enumerate(nested, 1):
-            if not isinstance(item, dict):
-                raise ValueError(f"第 {index} 条答案必须为 JSON 对象")
-            question_id = item.get("question_id")
-            if not isinstance(question_id, str) or not question_id:
-                raise ValueError(f"第 {index} 条答案缺少字符串字段 question_id")
-            answer_value = item.get("answer")
-            if isinstance(answer_value, str):
-                answers[question_id] = [answer_value]
-            elif isinstance(answer_value, list):
-                answers[question_id] = json_str_list(answer_value)
-            else:
-                raise ValueError(f"第 {index} 条答案的 answer 必须为字符串或字符串数组")
-        return answers
-
-    flat: dict[str, list[str]] = {}
-    for key, value in raw.items():
-        if isinstance(value, str):
-            flat[str(key)] = [value]
-        elif isinstance(value, list):
-            flat[str(key)] = json_str_list(value)
-        else:
-            raise ValueError(f"题目 '{key}' 的答案必须为字符串或字符串数组")
-    return flat
+    """保留两种答案语法，由模型校验归一后的结构。"""
+    return validate_input(AnswersInput, raw).root
 
 
 def _paginate[T](items: Sequence[T], limit: int, cursor: str | None) -> tuple[list[T], PaginationMeta]:

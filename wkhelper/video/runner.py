@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from wkhelper.domain.courses import Course
-from wkhelper.domain.json_types import parse_json_text
 from wkhelper.domain.video import VideoPlanSummary, VideoStatus, VideoTargetResult, VideoWatchResult
-from wkhelper.infra.serialization import to_json_value
+from wkhelper.infra.serialization import decode_json, to_json_value
 from wkhelper.platform.base import BasePlatform
 from wkhelper.video.engine import VideoWatchOptions
 from wkhelper.video.plan import VideoParameters, VideoTarget
@@ -68,7 +67,7 @@ class VideoPlanRunner:
             return []
 
         try:
-            checkpoint = parse_json_text(resume_path.read_text(encoding="utf-8"))
+            checkpoint = decode_json(resume_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             logger.debug(f"读取恢复检查点失败: {exc}")
             return []

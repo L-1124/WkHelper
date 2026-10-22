@@ -8,17 +8,16 @@
 import inspect
 import types
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
 from functools import cache
 from typing import Any, Literal, Union, get_args, get_origin
 
 from cyclopts import App
+from pydantic import Field, JsonValue
 
-from wkhelper.domain.json_types import JsonDict, JsonValue
+from wkhelper.domain.model import Model
 
 
-@dataclass
-class ArgumentSpec:
+class ArgumentSpec(Model):
     name: str
     flags: list[str]
     type: str = ""
@@ -28,15 +27,14 @@ class ArgumentSpec:
     choices: list[str] | None = None
 
 
-@dataclass
-class CommandSpec:
+class CommandSpec(Model):
     path: str
     summary: str
     description: str
-    arguments: list[ArgumentSpec] = field(default_factory=list)
+    arguments: list[ArgumentSpec] = Field(default_factory=list)
     side_effects: str = "none"
     requires_confirm: bool = False
-    examples: list[str] = field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
 
 
 COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
@@ -427,77 +425,52 @@ def get_command_spec(path: str, full: bool = False) -> CommandSpec:
         )
         for arg in spec.arguments
     ]
-    return replace(spec, arguments=compact_args)
+    return CommandSpec(
+        path=spec.path,
+        summary=spec.summary,
+        description=spec.description,
+        arguments=compact_args,
+        side_effects=spec.side_effects,
+        requires_confirm=spec.requires_confirm,
+        examples=spec.examples,
+    )
 
 
-@dataclass
-class NextActionFieldSchema:
+class NextActionFieldSchema(Model):
     type: str
     description: str
-    items: str | None = None
-
-    def to_dict(self) -> JsonDict:
-        d: JsonDict = {"type": self.type, "description": self.description}
-        if self.items:
-            d["items"] = self.items
-        return d
+    items: str | None = Field(default=None, exclude_if=lambda v: not v)
 
 
-@dataclass
-class NextActionSchema:
+class NextActionSchema(Model):
     """NextAction 专属的契约 Schema。"""
 
     type: str = "object"
     description: str = "供 AI Agent 下一步自引导决策的结构化命令动作"
-    properties: dict[str, NextActionFieldSchema] = field(
+    properties: dict[str, NextActionFieldSchema] = Field(
         default_factory=lambda: {
             "reason": NextActionFieldSchema(type="string", description="执行该动作的意图与业务理由"),
             "argv": NextActionFieldSchema(type="array", items="string", description="完整的命令行执行参数列表"),
             "description": NextActionFieldSchema(type="string", description="可选的详细动作解释"),
         }
     )
-    required: list[str] = field(default_factory=lambda: ["reason", "argv"])
-
-    def to_dict(self) -> JsonDict:
-        return {
-            "type": self.type,
-            "description": self.description,
-            "properties": {k: v.to_dict() for k, v in self.properties.items()},
-            "required": self.required,
-        }
+    required: list[str] = Field(default_factory=lambda: ["reason", "argv"])
 
 
 NEXT_ACTION_SCHEMA = NextActionSchema()
 
 
-@dataclass
-class ParameterSchema:
+class ParameterSchema(Model):
     name: str
     flags: list[str]
     required: bool = False
     default: JsonValue = None
-    type: str | None = None
-    help: str | None = None
-    choices: list[str] | None = None
-
-    def to_dict(self) -> JsonDict:
-        d: JsonDict = {
-            "name": self.name,
-            "flags": self.flags,
-            "required": self.required,
-            "default": self.default,
-        }
-        if self.type is not None:
-            d["type"] = self.type
-        if self.help is not None:
-            d["help"] = self.help
-        if self.choices is not None:
-            d["choices"] = self.choices
-        return d
+    type: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    help: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    choices: list[str] | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
-@dataclass
-class CommandContractSchema:
+class CommandContractSchema(Model):
     command: str
     summary: str
     description: str
@@ -505,59 +478,27 @@ class CommandContractSchema:
     requires_confirm: bool
     examples: list[str]
     parameters: list[ParameterSchema]
-    next_action_schema: NextActionSchema = field(default_factory=NextActionSchema)
-
-    def to_dict(self) -> JsonDict:
-        return {
-            "command": self.command,
-            "summary": self.summary,
-            "description": self.description,
-            "side_effects": self.side_effects,
-            "requires_confirm": self.requires_confirm,
-            "examples": self.examples,
-            "parameters": [p.to_dict() for p in self.parameters],
-            "next_action_schema": self.next_action_schema.to_dict(),
-        }
+    next_action_schema: NextActionSchema = Field(default_factory=NextActionSchema)
 
 
-@dataclass
-class CommandSummary:
+class CommandSummary(Model):
     command: str
     summary: str
 
-    def to_dict(self) -> JsonDict:
-        return {"command": self.command, "summary": self.summary}
 
-
-@dataclass
-class GroupIndexSchema:
+class GroupIndexSchema(Model):
+    type: str = "group_index"
     group: str
     commands: list[CommandSummary]
-    type: str = "group_index"
-
-    def to_dict(self) -> JsonDict:
-        return {
-            "type": self.type,
-            "group": self.group,
-            "commands": [c.to_dict() for c in self.commands],
-        }
 
 
-@dataclass
-class RootIndexSchema:
-    groups: dict[str, list[CommandSummary]]
-    next_action_schema: NextActionSchema = field(default_factory=NextActionSchema)
+class RootIndexSchema(Model):
     type: str = "command_index"
-
-    def to_dict(self) -> JsonDict:
-        return {
-            "type": self.type,
-            "groups": {k: [c.to_dict() for c in v] for k, v in self.groups.items()},
-            "next_action_schema": self.next_action_schema.to_dict(),
-        }
+    groups: dict[str, list[CommandSummary]]
+    next_action_schema: NextActionSchema = Field(default_factory=NextActionSchema)
 
 
-def get_command_schema(path: str | None = None, full: bool = False) -> JsonDict:
+def get_command_schema(path: str | None = None, full: bool = False) -> dict[str, JsonValue]:
     """生成指定路径或全局命令的强类型 Schema。"""
     registry = command_registry()
     if not path:
@@ -565,7 +506,7 @@ def get_command_schema(path: str | None = None, full: bool = False) -> JsonDict:
         for cmd_path, spec in registry.items():
             grp = cmd_path.split()[0]
             root_groups.setdefault(grp, []).append(CommandSummary(command=cmd_path, summary=spec.summary))
-        return RootIndexSchema(groups=root_groups).to_dict()
+        return RootIndexSchema(groups=root_groups).model_dump()
 
     path = path.strip()
     if path in registry:
@@ -591,12 +532,12 @@ def get_command_schema(path: str | None = None, full: bool = False) -> JsonDict:
             examples=spec.examples,
             parameters=params,
         )
-        return contract.to_dict()
+        return contract.model_dump()
 
     # 路径匹配组
     matching = [spec for cmd_path, spec in registry.items() if cmd_path.startswith(path + " ")]
     if matching:
         group_cmds = [CommandSummary(command=s.path, summary=s.summary) for s in matching]
-        return GroupIndexSchema(group=path, commands=group_cmds).to_dict()
+        return GroupIndexSchema(group=path, commands=group_cmds).model_dump()
 
     raise KeyError(f"未知的命令路径: {path}")

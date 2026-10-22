@@ -48,7 +48,7 @@ async def video_list_cmd(
             items.append(VideoItem(id=str(video_id), name=label.replace(" [已完成]", ""), completed=is_completed))
 
         page_items, meta = _paginate(items, limit, cursor)
-        return CommandResult(data=VideoListData(videos=page_items), meta=meta.to_dict())
+        return CommandResult(data=VideoListData(videos=page_items), meta=meta.model_dump())
 
 
 @video_app.command(name="inspect")

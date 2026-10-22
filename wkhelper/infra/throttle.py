@@ -9,15 +9,19 @@
 import asyncio
 import random
 import re
-from dataclasses import dataclass
+
+from pydantic import ConfigDict
+
+from wkhelper.domain.model import Model
 
 # 平台限流提示：响应体形如 "Expected available in 12 second." / "请等待 12 秒"
 _RETRY_HINT = re.compile(r"(?:Expected available in|available in|请等待)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:second|秒)?", re.IGNORECASE)
 
 
-@dataclass(frozen=True)
-class RetryPolicy:
+class RetryPolicy(Model):
     """瞬时错误重试策略。"""
+
+    model_config = ConfigDict(frozen=True)
 
     max_attempts: int = 4
     base_backoff: float = 0.6

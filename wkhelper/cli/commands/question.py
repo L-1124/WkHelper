@@ -19,13 +19,13 @@ from wkhelper.domain.homework import (
     QuestionSubmitResult,
     QuestionSummary,
 )
-from wkhelper.domain.json_types import json_int
 from wkhelper.domain.questions import normalize_judgement_answer, question_type
 from wkhelper.exporting.markdown import html_to_md
 from wkhelper.exporting.questions import export_questions_to_markdown
 from wkhelper.exporting.resources import localize_question_detail
 from wkhelper.homework.service import submit_question
 from wkhelper.infra.serialization import encode_json
+from wkhelper.platform.parsing import PlatformCounters
 
 question_app = App(name="question", help="单题与按页题目检索")
 questions_app = App(name="questions", help="课程题目导出")
@@ -57,7 +57,7 @@ async def question_list_cmd(
             options = content.get("Options") or []
             user_info = question.get("user", {})
             user_answer = user_info.get("answer")
-            attempt_count = json_int(user_info.get("my_count"))
+            attempt_count = PlatformCounters.model_validate(user_info).my_count
             items.append(
                 QuestionSummary(
                     index=index,
@@ -72,7 +72,7 @@ async def question_list_cmd(
             )
 
         page_items, meta = _paginate(items, limit, cursor)
-        return CommandResult(data=QuestionListData(questions=page_items), meta=meta.to_dict())
+        return CommandResult(data=QuestionListData(questions=page_items), meta=meta.model_dump())
 
 
 @question_app.command(name="get")
@@ -99,7 +99,7 @@ async def question_get_cmd(
         body = html_to_md(content.get("Body") or content.get("body") or "")
         options = content.get("Options") or []
         user_info = target_question.get("user", {})
-        attempt_count = json_int(user_info.get("my_count"))
+        attempt_count = PlatformCounters.model_validate(user_info).my_count
         detail = QuestionDetail(
             id=str(question),
             type=_type_text(target_question),

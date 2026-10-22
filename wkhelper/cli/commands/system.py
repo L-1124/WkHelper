@@ -3,13 +3,13 @@
 from typing import Annotated
 
 from cyclopts import Parameter
+from pydantic import JsonValue
 
 from wkhelper.cli.context import ctx
 from wkhelper.cli.envelope import CommandResult
 from wkhelper.cli.spec import get_command_schema
 from wkhelper.domain.accounts import StatusData
 from wkhelper.domain.actions import NextAction
-from wkhelper.domain.json_types import JsonDict
 
 
 async def status_cmd() -> CommandResult[StatusData]:
@@ -32,7 +32,7 @@ async def status_cmd() -> CommandResult[StatusData]:
 async def schema_cmd(
     path: Annotated[str | None, Parameter(help="命令路径，例如 'video learn'")] = None,
     full: Annotated[bool, Parameter(name=["--full"], help="展开完整参数详情")] = False,
-) -> CommandResult[JsonDict]:
+) -> CommandResult[dict[str, JsonValue]]:
     """CLI 契约自省。"""
     return CommandResult(data=get_command_schema(path, full=full))
 

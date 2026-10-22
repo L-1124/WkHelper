@@ -5,13 +5,16 @@ import logging
 import math
 import random
 import time
-from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from wkhelper.domain.json_types import json_float, parse_json_text
+from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic_core import PydanticUseDefault
+
+from wkhelper.domain.model import Model
 from wkhelper.domain.video import VideoStatus, VideoWatchResult
 from wkhelper.infra.events import EventCallback, notifier
 from wkhelper.infra.http import AsyncSession
+from wkhelper.infra.serialization import decode_json
 from wkhelper.infra.throttle import parse_retry_hint
 from wkhelper.video.plan import VideoParameters
 
@@ -20,8 +23,7 @@ logger = logging.getLogger(__name__)
 type RequestOptions = dict[str, Any]
 
 
-@dataclass
-class VideoWatchOptions:
+class VideoWatchOptions(Model):
     """视频学习参数配置。
 
     心跳节奏对齐 Web 播放器：每 `sample_interval` 秒采一个打点，攒满 `batch_size`
@@ -47,20 +49,9 @@ class VideoWatchOptions:
         """返回叠加了显式参数的新配置；未指定字段保持原值。"""
         if parameters is None:
             return self
-        return replace(
-            self,
-            learning_rate=parameters.learning_rate if parameters.learning_rate is not None else self.learning_rate,
-            heartbeat_interval=(parameters.heartbeat_interval if parameters.heartbeat_interval is not None else self.heartbeat_interval),
-            jitter=parameters.jitter if parameters.jitter is not None else self.jitter,
-            progress_interval=(parameters.progress_interval if parameters.progress_interval is not None else self.progress_interval),
-            completion_threshold=(
-                parameters.completion_threshold if parameters.completion_threshold is not None else self.completion_threshold
-            ),
-            video_timeout=parameters.video_timeout if parameters.video_timeout is not None else self.video_timeout,
-            stall_timeout=parameters.stall_timeout if parameters.stall_timeout is not None else self.stall_timeout,
-            max_heartbeats=parameters.max_heartbeats if parameters.max_heartbeats is not None else self.max_heartbeats,
-            video_delay=parameters.video_delay if parameters.video_delay is not None else self.video_delay,
-        )
+        base = self.model_dump()
+        base.update(parameters.model_dump(exclude_none=True))
+        return VideoWatchOptions.model_validate(base)
 
 
 class PayloadGenerator(Protocol):
@@ -81,58 +72,53 @@ class PayloadGenerator(Protocol):
     ) -> RequestOptions: ...
 
 
-def parse_progress_completed(text: str, video_id: str | int) -> bool:
-    """从进度响应文本精确判断指定 video_id 是否已完播。
+class _ProgressEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
-    只针对目标视频节点的 JSON 字段判断 completed，忽略其他视频节点及文本中的空白或无关字段。
-    """
-    if not text or not text.strip():
-        return False
+    rate: float = 0.0
+    watch_length: float = 0.0
+    video_length: float = 0.0
+    completed: bool = False
+
+    @field_validator("rate", "watch_length", "video_length", mode="before")
+    @classmethod
+    def normalize_progress(cls, value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise PydanticUseDefault()
+        try:
+            return float(value)
+        except ValueError:
+            raise PydanticUseDefault() from None
+
+    @field_validator("completed", mode="before")
+    @classmethod
+    def platform_completion(cls, value: object) -> bool:
+        return value in (1, "1", True, "true", "True")
+
+
+def _progress_entry(text: str, video_id: str | int) -> _ProgressEntry:
     try:
-        parsed = parse_json_text(text)
+        parsed = decode_json(text)
     except (ValueError, TypeError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    data = parsed.get("data")
-    if not isinstance(data, dict):
-        return False
-    target_key = str(video_id)
-    entry = data.get(target_key)
-    if not isinstance(entry, dict):
-        return False
-    val = entry.get("completed")
-    return val in (1, "1", True, "true", "True")
+        return _ProgressEntry()
+    data = parsed.get("data") if isinstance(parsed, dict) else None
+    entry = data.get(str(video_id)) if isinstance(data, dict) else None
+    return _ProgressEntry.model_validate(entry) if isinstance(entry, dict) else _ProgressEntry()
+
+
+def parse_progress_completed(text: str, video_id: str | int) -> bool:
+    """只读取指定视频的服务端完成标识。"""
+    return _progress_entry(text, video_id).completed
 
 
 def parse_progress_detail(text: str, video_id: str | int) -> tuple[float, float, float]:
-    """从进度响应文本解析 (rate, watch_length, video_length)；结构不符时返回零值。"""
-    if not text or not text.strip():
-        return (0.0, 0.0, 0.0)
-    try:
-        parsed = parse_json_text(text)
-    except (ValueError, TypeError):
-        return (0.0, 0.0, 0.0)
-    if not isinstance(parsed, dict):
-        return (0.0, 0.0, 0.0)
-    data = parsed.get("data")
-    if not isinstance(data, dict):
-        return (0.0, 0.0, 0.0)
-    target_key = str(video_id)
-    entry = data.get(target_key)
-    if not isinstance(entry, dict):
-        return (0.0, 0.0, 0.0)
-    return (
-        json_float(entry.get("rate")),
-        json_float(entry.get("watch_length")),
-        json_float(entry.get("video_length")),
-    )
+    entry = _progress_entry(text, video_id)
+    return entry.rate, entry.watch_length, entry.video_length
 
 
 def parse_progress_text(text: str, video_id: str | int) -> tuple[float, float]:
-    """从进度响应文本解析 (rate, watch_length)。"""
-    rate, watch_length, _ = parse_progress_detail(text, video_id)
-    return (rate, watch_length)
+    entry = _progress_entry(text, video_id)
+    return entry.rate, entry.watch_length
 
 
 async def generic_watch_video(
@@ -312,7 +298,7 @@ async def generic_watch_video(
                 if parse_progress_completed(resp.text, video_id):
                     final_platform_completed = True
                 try:
-                    parsed = parse_json_text(resp.text)
+                    parsed = decode_json(resp.text)
                 except (ValueError, TypeError):
                     parsed = None
                 if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
