@@ -23,9 +23,9 @@ from curl_cffi.requests.exceptions import (
     RequestException,
     Timeout,
 )
+from pydantic import JsonValue
 
 from wkhelper.domain.errors import APIError, AuthError, RiskControlError
-from wkhelper.domain.json_types import JsonDict
 from wkhelper.infra.clock import ServerClock
 from wkhelper.infra.events import emit_event, is_debug_enabled
 from wkhelper.infra.throttle import RateGate, RetryPolicy, parse_retry_hint
@@ -129,7 +129,7 @@ def trace_http(method: str, url: str, start: float, status_code: int | None = No
     """仅在调试模式下发射 HTTP 追踪事件，避免污染标准输出。"""
     if not is_debug_enabled():
         return
-    payload: JsonDict = {
+    payload: dict[str, JsonValue] = {
         "method": method.upper(),
         "url": url,
         "status_code": status_code,

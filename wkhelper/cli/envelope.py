@@ -2,86 +2,58 @@
 
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import Field, JsonValue
 
 from wkhelper.domain.actions import NextAction
-from wkhelper.domain.json_types import JsonDict
+from wkhelper.domain.model import Model
 from wkhelper.infra.serialization import encode_json
 
 SCHEMA_VERSION = 1
 
 
-@dataclass
-class ErrorDetail:
+class ErrorDetail(Model):
     """结构化错误信息。"""
 
     code: str
     message: str
     retryable: bool = False
-    details: JsonDict = field(default_factory=dict)
+    details: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-@dataclass
-class CommandResult[T]:
+class CommandResult[T](Model):
     """命令函数返回的领域业务结果，与展现层完全解耦。"""
 
     data: T
-    meta: JsonDict | None = None
-    next_actions: list[NextAction] = field(default_factory=list)
+    meta: dict[str, JsonValue] | None = None
+    next_actions: list[NextAction] = Field(default_factory=list)
     exit_code: int = 0
 
 
-@dataclass
-class SuccessEnvelope[T]:
+class SuccessEnvelope[T](Model):
     """强类型成功响应信封。"""
 
-    data: T
     schema_version: int = SCHEMA_VERSION
-    ok: bool = True
-    meta: JsonDict | None = None
-    next_actions: list[NextAction] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "schema_version": self.schema_version,
-            "ok": True,
-            "data": self.data,
-        }
-        if self.meta is not None:
-            payload["meta"] = self.meta
-        payload["next_actions"] = [action.to_dict() for action in self.next_actions]
-        return payload
+    ok: Literal[True] = True
+    data: T
+    meta: dict[str, JsonValue] | None = Field(default=None, exclude_if=lambda v: v is None)
+    next_actions: list[NextAction] = Field(default_factory=list)
 
 
-@dataclass
-class ErrorEnvelope:
+class ErrorEnvelope(Model):
     """强类型错误响应信封。"""
 
-    error: ErrorDetail
     schema_version: int = SCHEMA_VERSION
-    ok: bool = False
+    ok: Literal[False] = False
+    error: ErrorDetail
     data: Any = None
-    next_actions: list[NextAction] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "ok": False,
-            "error": {
-                "code": self.error.code,
-                "message": self.error.message,
-                "retryable": self.error.retryable,
-                "details": self.error.details,
-            },
-            "data": self.data,
-            "next_actions": [action.to_dict() for action in self.next_actions],
-        }
+    next_actions: list[NextAction] = Field(default_factory=list)
 
 
 def create_success_envelope[T](
     data: T,
-    meta: JsonDict | None = None,
+    meta: dict[str, JsonValue] | None = None,
     next_actions: list[NextAction] | None = None,
 ) -> dict[str, Any]:
     """生成成功响应信封。"""
@@ -90,14 +62,14 @@ def create_success_envelope[T](
         meta=meta,
         next_actions=next_actions or [],
     )
-    return envelope.to_dict()
+    return envelope.model_dump()
 
 
 def create_error_envelope(
     code: str,
     message: str,
     retryable: bool = False,
-    details: JsonDict | None = None,
+    details: dict[str, JsonValue] | None = None,
     data: Any = None,
     next_actions: list[NextAction] | None = None,
 ) -> dict[str, Any]:
@@ -107,7 +79,7 @@ def create_error_envelope(
         data=data,
         next_actions=next_actions or [],
     )
-    return envelope.to_dict()
+    return envelope.model_dump()
 
 
 def print_json(envelope: Mapping[str, Any]) -> None:

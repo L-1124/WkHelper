@@ -24,7 +24,7 @@ async def test_article_rejection_does_not_claim_completion(fake_platform, monkey
     monkeypatch.setattr("wkhelper.article.service.get_articles", articles)
     monkeypatch.setattr(fake_platform, "mark_article_finish", mark)
     with pytest.raises(APIError, match="标记完成失败"):
-        await read_article(fake_platform, "leaf", Course("c", "course", "test"))
+        await read_article(fake_platform, "leaf", Course(id="c", name="course", platform_id="test"))
 
 
 @pytest.mark.asyncio
@@ -39,7 +39,7 @@ async def test_article_cli_propagates_platform_rejection(fake_platform, monkeypa
 
     @asynccontextmanager
     async def open_course(*args):
-        yield fake_platform, Course("c", "course", "test")
+        yield fake_platform, Course(id="c", name="course", platform_id="test")
 
     monkeypatch.setattr("wkhelper.article.service.get_articles", articles)
     monkeypatch.setattr(fake_platform, "mark_article_finish", mark)

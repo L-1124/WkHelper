@@ -6,20 +6,22 @@ import os
 import sqlite3
 import time
 from abc import ABC, abstractmethod
-from dataclasses import replace
 from pathlib import Path
 from threading import Lock
+from typing import Annotated
 
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
+from pydantic import BeforeValidator, TypeAdapter
 
 from wkhelper.domain.accounts import AccountSummary, StorageStatus, UserInfo
 from wkhelper.domain.errors import AuthError
-from wkhelper.domain.json_types import parse_json_text
+from wkhelper.infra.serialization import decode_json
 
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "wkhelper"
+_COOKIES_ADAPTER: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, Annotated[str, BeforeValidator(str)]])
 
 
 def get_default_data_dir() -> Path:
@@ -255,9 +257,9 @@ class CredentialStore:
             raw_secret = self.backend.get_secret(SERVICE_NAME, key_id)
         if not raw_secret:
             return None
-        parsed = parse_json_text(raw_secret)
+        parsed = decode_json(raw_secret)
         if isinstance(parsed, dict):
-            return {str(key): str(value) for key, value in parsed.items()}
+            return _COOKIES_ADAPTER.validate_python(parsed)
         return None
 
     def delete(self, platform: str, user_id: str | int) -> bool:
@@ -298,8 +300,7 @@ class CredentialStore:
 
     def get_storage_status(self) -> StorageStatus:
         """获取底层存储状态。"""
-        return replace(
-            self.backend.get_status(),
-            data_dir=str(self.data_dir),
-            metadata_db=str(self.db_path),
-        )
+        status = self.backend.get_status()
+        values = status.model_dump()
+        values.update(data_dir=str(self.data_dir), metadata_db=str(self.db_path))
+        return StorageStatus.model_validate(values)

@@ -30,7 +30,8 @@ wkhelper/
     spec.py                 # 命令规范注册表与 schema 自省
     commands/               # 按业务域拆分的子应用与命令函数
   domain/                   # 按账号、课程、视频、作业、内容、考试拆分的数据模型
-    validation.py           # 严格输入模型与 CLI 脱敏校验边界
+    model.py                # 领域、输出、配置与持久化数据的 Pydantic 公共配置
+    validation.py           # CLI 输入校验异常的脱敏边界
     questions.py            # 题型与答案归一规则
   infra/
     http.py                 # 唯一会话构造出口、HTTP 请求与重试
@@ -82,16 +83,17 @@ tests/
   - 统一现代类型标注（`list[str]`、`dict[str, Any]`），使用 PEP 695 语法（`type X = ...`、`class Foo[T]`）
   - **禁止** `from __future__ import annotations`
 - 类型策略：
-  - `JsonValue` 是递归联合（`str | int | float | bool | None | Sequence | Mapping`），**不要**退化成 `Any`；JSON 解析边界用一次 `cast` 收窄
-  - 输出/编排层（信封、事件、Schema、命令结果）只用精确模型与 `JsonValue` / `JsonDict`
-  - `Any` 仅用于平台原始载荷（HTTP JSON、章节树、字体结构）与 HTTP 附加参数等动态边界
+  - 动态 JSON 使用 `pydantic.JsonValue` / `dict[str, JsonValue]`；禁止自建递归别名、以 `cast` 假装完成运行时校验
+  - 领域、信封、Schema、配置和持久化会话使用 `domain.model.Model`；`Field` / validator / computed_field 声明默认值、兼容归一与派生字段
+  - `Any` 仅用于平台原始载荷、HTTP 附加参数与统一编码边界；持有进程句柄的 `BrowserProcess` 保留 dataclass
   - 导出与字体反混淆的资源下载走 `infra.http.Fetcher`（实现为 `BasePlatform.fetch_bytes`）
   - CLI 命令返回 `CommandResult[...]`，不直接打印；序列化只经 `unified_result_action`
   - JSON 编码统一用 `infra.serialization.encode_json`，展开用 `to_json_value`；不手写递归转换或字符串兜底
-  - 计划与恢复结果使用 Pydantic v2，其余无校验需求的输出保持 dataclass；检查点经 `to_json_value` 后 `json.dumps(indent=2)`
+  - 使用 `model_validate` / `model_validate_json` 和 `model_dump` / `model_dump_json`，不保留 `to_dict` / `from_dict` 兼容入口；更新模型需重新校验，禁止 `model_copy(update=...)` 绕过约束
 - 错误处理：
   - 库代码不要 `exit(1)`，抛出业务异常
   - 退出码：2 参数错误、3 认证缺失、4 目标不存在、5 前置条件不满足、6 平台失败、7 部分失败、1 内部错误
+  - Pydantic `ValidationError` 只在 CLI 用户输入边界转为脱敏 `ValueError`；内部数据契约失败不得误报参数错误
 - CLI 参数契约：
   - 全局会话参数只在 `cli/app.py` 的 `app.meta.default` 上声明，命令层不要重复定义或手工扫描 `sys.argv`
   - 枚举型选项用 `Literal[...]`（`PlatformCode` 等复用 `cli/context.py` 的类型别名），校验与 `[choices: ...]` 帮助由 Cyclopts 自动生成，不要另写 `if x not in (...)` 校验

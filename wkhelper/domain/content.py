@@ -1,26 +1,22 @@
 """课程内容数据。"""
 
-from dataclasses import dataclass
-
+from wkhelper.domain.model import Model
 from wkhelper.domain.time_types import EpochMillis
 
 
-@dataclass
-class ArticleItem:
+class ArticleItem(Model):
     id: str
     name: str
     completed: bool
 
 
-@dataclass
-class DiscussionItem:
+class DiscussionItem(Model):
     id: str
     name: str
     completed: bool
 
 
-@dataclass
-class NoticeItem:
+class NoticeItem(Model):
     """课程公告/通知节点。"""
 
     id: str
@@ -29,13 +25,11 @@ class NoticeItem:
     published_at: EpochMillis | None = None
 
 
-@dataclass
-class NoticeListData:
+class NoticeListData(Model):
     notices: list[NoticeItem]
 
 
-@dataclass
-class NoticeDetail:
+class NoticeDetail(Model):
     """公告正文与发布信息。"""
 
     course_id: str
@@ -47,13 +41,11 @@ class NoticeDetail:
     publisher: str = ""
 
 
-@dataclass
-class ArticleListData:
+class ArticleListData(Model):
     articles: list[ArticleItem]
 
 
-@dataclass
-class ArticleReadResult:
+class ArticleReadResult(Model):
     course_id: str
     leaf_id: str
     name: str
@@ -61,13 +53,11 @@ class ArticleReadResult:
     completed: bool
 
 
-@dataclass
-class DiscussionListData:
+class DiscussionListData(Model):
     discussions: list[DiscussionItem]
 
 
-@dataclass
-class DiscussionTopicDetail:
+class DiscussionTopicDetail(Model):
     course_id: str
     leaf_id: str
     topic_id: int
@@ -78,8 +68,7 @@ class DiscussionTopicDetail:
     completed: bool
 
 
-@dataclass
-class DiscussionCommentResult:
+class DiscussionCommentResult(Model):
     course_id: str
     leaf_id: str
     topic_id: int

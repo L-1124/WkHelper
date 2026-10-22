@@ -1,7 +1,10 @@
 """平台心跳协议数据。"""
 
 import random
-from dataclasses import dataclass
+
+from pydantic import ConfigDict
+
+from wkhelper.domain.model import Model
 
 
 def create_page_nonce() -> str:
@@ -20,13 +23,14 @@ def _base36(value: int) -> str:
     return "".join(reversed(out))
 
 
-@dataclass(frozen=True)
-class HeartbeatProfile:
+class HeartbeatProfile(Model):
     """心跳报文中随平台变化的固定字段，由平台适配层显式提供。
 
     `lob` 是业务线标识（雨课堂 `ykt`、学堂在线 `xt`）；`n` 是 CDN 代号，
     只有解析出播放源时才有意义，未知时留空；`sp` 为播放倍速。
     """
+
+    model_config = ConfigDict(frozen=True)
 
     lob: str
     n: str = ""

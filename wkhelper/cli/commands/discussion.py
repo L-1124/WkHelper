@@ -32,7 +32,7 @@ async def discussion_list_cmd(
             if status == "all" or (status == "completed" and d.completed) or (status == "pending" and not d.completed)
         ]
         page_items, meta = _paginate(items, limit, cursor)
-        return CommandResult(data=DiscussionListData(discussions=page_items), meta=meta.to_dict())
+        return CommandResult(data=DiscussionListData(discussions=page_items), meta=meta.model_dump())
 
 
 @discussion_app.command(name="inspect")

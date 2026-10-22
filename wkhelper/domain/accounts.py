@@ -1,10 +1,9 @@
 """账号数据。"""
 
-from dataclasses import dataclass
+from wkhelper.domain.model import Model
 
 
-@dataclass
-class UserInfo:
+class UserInfo(Model):
     """用户信息模型。"""
 
     id: int | str
@@ -12,8 +11,7 @@ class UserInfo:
     school: str | None = None
 
 
-@dataclass
-class AccountSummary:
+class AccountSummary(Model):
     """账号元数据摘要（不含秘密）。"""
 
     platform: str
@@ -23,41 +21,36 @@ class AccountSummary:
     saved_at: float
 
 
-@dataclass
-class StorageStatus:
+class StorageStatus(Model):
     """系统凭据存储后端状态。"""
 
     mode: str
     backend: str
     available: bool
-    priority: int = 0
+    priority: int | float = 0
     persisted: bool = True
     data_dir: str = ""
     metadata_db: str = ""
 
 
-@dataclass
-class StatusData:
+class StatusData(Model):
     credential_storage: StorageStatus
     accounts_count: int
     accounts: list[AccountSummary]
 
 
-@dataclass
-class AccountListData:
+class AccountListData(Model):
     accounts: list[AccountSummary]
 
 
-@dataclass
-class AuthStatusResult:
+class AuthStatusResult(Model):
     platform: str
     user_id: str
     name: str
     valid: bool
 
 
-@dataclass
-class LoginResult:
+class LoginResult(Model):
     platform: str
     user_id: str
     name: str
@@ -65,8 +58,7 @@ class LoginResult:
     persisted: bool
 
 
-@dataclass
-class RemoveResult:
+class RemoveResult(Model):
     platform: str
     account: str
     deleted: bool

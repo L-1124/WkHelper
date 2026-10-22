@@ -2,11 +2,10 @@
 
 from typing import Any, cast
 
-from pydantic import TypeAdapter
-
-from wkhelper.domain.json_types import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 _ADAPTER = TypeAdapter(Any)
+_JSON_ADAPTER = TypeAdapter(JsonValue)
 
 
 def encode_json(value: Any, *, indent: int | None = None) -> bytes:
@@ -15,3 +14,7 @@ def encode_json(value: Any, *, indent: int | None = None) -> bytes:
 
 def to_json_value(value: Any) -> JsonValue:
     return cast(JsonValue, _ADAPTER.dump_python(value, mode="json", warnings="error"))
+
+
+def decode_json(value: str | bytes) -> JsonValue:
+    return _JSON_ADAPTER.validate_json(value)

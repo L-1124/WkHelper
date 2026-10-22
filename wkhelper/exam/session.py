@@ -9,10 +9,12 @@ import json
 import logging
 import shutil
 import urllib.request
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from wkhelper.domain.errors import APIError
+from wkhelper.domain.model import Model
 from wkhelper.infra.browser.cdp import CdpClient
 from wkhelper.infra.browser.process import BrowserManager, find_chromium_browser, wait_debugger
 from wkhelper.infra.credentials import get_default_data_dir
@@ -23,8 +25,7 @@ logger = logging.getLogger(__name__)
 SESSION_FILENAME = "exam_browser_session.json"
 
 
-@dataclass
-class ExamBrowserSession:
+class ExamBrowserSession(Model):
     """考场浏览器会话描述。"""
 
     exam_id: str
@@ -55,7 +56,7 @@ def _port_alive(port: int) -> bool:
 def save_session(session: ExamBrowserSession, data_dir: str | Path | None = None) -> Path:
     """持久化会话并返回文件路径。"""
     path = session_file(data_dir)
-    path.write_text(json.dumps(asdict(session), ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(session.model_dump_json(indent=2), encoding="utf-8")
     return path
 
 
@@ -65,9 +66,8 @@ def load_session(data_dir: str | Path | None = None, verify: bool = True) -> Exa
     if not path.exists():
         return None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        session = ExamBrowserSession(**raw)
-    except (OSError, TypeError, ValueError):
+        session = ExamBrowserSession.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValidationError, ValueError):
         path.unlink(missing_ok=True)
         return None
     if verify and not _port_alive(session.port):

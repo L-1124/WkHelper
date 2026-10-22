@@ -1,23 +1,15 @@
 """后续动作。"""
 
-from dataclasses import dataclass
+from pydantic import ConfigDict, Field
 
-from wkhelper.domain.json_types import JsonDict
+from wkhelper.domain.model import Model
 
 
-@dataclass(frozen=True)
-class NextAction:
+class NextAction(Model):
     """自引导下一步动作的强类型契约。"""
+
+    model_config = ConfigDict(frozen=True)
 
     reason: str
     argv: list[str]
-    description: str = ""
-
-    def to_dict(self) -> JsonDict:
-        payload: JsonDict = {
-            "reason": self.reason,
-            "argv": list(self.argv),
-        }
-        if self.description:
-            payload["description"] = self.description
-        return payload
+    description: str = Field(default="", exclude_if=lambda v: not v)

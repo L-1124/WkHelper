@@ -30,7 +30,7 @@ async def article_list_cmd(
             a for a in articles if status == "all" or (status == "completed" and a.completed) or (status == "pending" and not a.completed)
         ]
         page_items, meta = _paginate(items, limit, cursor)
-        return CommandResult(data=ArticleListData(articles=page_items), meta=meta.to_dict())
+        return CommandResult(data=ArticleListData(articles=page_items), meta=meta.model_dump())
 
 
 @article_app.command(name="read")

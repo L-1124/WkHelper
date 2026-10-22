@@ -1,13 +1,15 @@
 """考试数据。"""
 
-from dataclasses import dataclass
+from typing import Any
+
+from pydantic import computed_field
 
 from wkhelper.domain.homework import OptionItem
+from wkhelper.domain.model import Model
 from wkhelper.domain.time_types import EpochMillis, now_millis
 
 
-@dataclass
-class ExamItem:
+class ExamItem(Model):
     """考试节点简要信息。"""
 
     id: str
@@ -18,19 +20,17 @@ class ExamItem:
     overdue: bool = False
     status: str = ""
 
-    def __post_init__(self) -> None:
+    def model_post_init(self, __context: Any) -> None:
         """未完成且已过截止时间即视为缺考。"""
         if not self.completed and not self.overdue and self.deadline:
             self.overdue = self.deadline < now_millis()
 
 
-@dataclass
-class ExamListData:
+class ExamListData(Model):
     exams: list[ExamItem]
 
 
-@dataclass
-class ExamCoverDetail:
+class ExamCoverDetail(Model):
     """考试封面元数据与考场须知详情。"""
 
     course_id: str
@@ -45,7 +45,6 @@ class ExamCoverDetail:
     description: str
     face_auth: bool
     capture_screen: bool
-    has_limit: bool = False
     app_capture_screen: bool = False
     front_random_snap: bool = False
     screen_cuts: bool = False
@@ -56,13 +55,14 @@ class ExamCoverDetail:
     is_offline: bool = False
     raw_status: int | None = None
 
-    def __post_init__(self) -> None:
+    @computed_field
+    @property
+    def has_limit(self) -> bool:
         """平台限时为 0 表示不限时（无倒计时），仅受截止时间约束。"""
-        self.has_limit = self.limit_minutes > 0
+        return self.limit_minutes > 0
 
 
-@dataclass
-class ExamStartPreview:
+class ExamStartPreview(Model):
     """进入考场预检回执。"""
 
     dry_run: bool
@@ -74,8 +74,7 @@ class ExamStartPreview:
     notice: str = ""
 
 
-@dataclass
-class ExamStartResult:
+class ExamStartResult(Model):
     """进入考场正式回执。"""
 
     course_id: str
@@ -89,8 +88,7 @@ class ExamStartResult:
     browser_port: int | None = None
 
 
-@dataclass
-class ExamProblemItem:
+class ExamProblemItem(Model):
     """考场试卷中的一道题目。"""
 
     index: int
@@ -104,8 +102,7 @@ class ExamProblemItem:
     has_remark: bool
 
 
-@dataclass
-class ExamPaperData:
+class ExamPaperData(Model):
     """考场试卷题目列表。"""
 
     course_id: str
@@ -114,8 +111,7 @@ class ExamPaperData:
     problems: list[ExamProblemItem]
 
 
-@dataclass
-class ExamExportResult:
+class ExamExportResult(Model):
     """考场试卷导出结果。"""
 
     file_path: str
@@ -124,8 +120,7 @@ class ExamExportResult:
     resources_count: int
 
 
-@dataclass
-class ExamAnswerResult:
+class ExamAnswerResult(Model):
     """考试单题作答回执。"""
 
     dry_run: bool
@@ -137,8 +132,7 @@ class ExamAnswerResult:
     notice: str = ""
 
 
-@dataclass
-class ExamBrowserCloseResult:
+class ExamBrowserCloseResult(Model):
     """考场浏览器会话关闭回执。"""
 
     exam_id: str
@@ -146,8 +140,7 @@ class ExamBrowserCloseResult:
     message: str
 
 
-@dataclass
-class ExamResultData:
+class ExamResultData(Model):
     """考场成绩与作答结果概览。"""
 
     exam_id: str
@@ -157,8 +150,7 @@ class ExamResultData:
     message: str = ""
 
 
-@dataclass
-class ExamStatusData:
+class ExamStatusData(Model):
     """考场服务端状态快照（只读诊断）。"""
 
     exam_id: str

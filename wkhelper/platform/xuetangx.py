@@ -11,12 +11,11 @@ from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError, AuthError
 from wkhelper.domain.exam import ExamCoverDetail, ExamStartResult
 from wkhelper.domain.homework import Homework
-from wkhelper.domain.json_types import json_int
 from wkhelper.domain.questions import is_fill_in_question, normalize_judgement_answer
 from wkhelper.domain.time_types import epoch_millis
 from wkhelper.domain.video import VideoContext
 from wkhelper.platform.base import BasePlatform
-from wkhelper.platform.parsing import parse_leaf_schedules
+from wkhelper.platform.parsing import PlatformCounters, parse_leaf_schedules
 from wkhelper.platform.protocol_types import HeartbeatProfile
 
 logger = logging.getLogger(__name__)
@@ -162,7 +161,7 @@ class XuetangXPlatform(BasePlatform):
                             },
                         ),
                     )
-                total_pages = json_int(data.get("pages"), 1)
+                total_pages = PlatformCounters.model_validate(data).pages
                 if page >= total_pages or not product_list:
                     break
                 page += 1
@@ -400,8 +399,8 @@ class XuetangXPlatform(BasePlatform):
         app_capture_screen = bool(cover_data.get("app_capture_screen"))
         front_random_snap = bool(cover_data.get("app_front_random_snap"))
         screen_cuts = bool(cover_data.get("open_screen_cuts"))
-        max_screen_cuts = json_int(cover_data.get("max_screen_cuts_num"), 0)
-        max_retry = json_int(cover_data.get("max_retry"), 1)
+        max_screen_cuts = PlatformCounters.model_validate(cover_data).max_screen_cuts_num
+        max_retry = PlatformCounters.model_validate(cover_data).max_retry
         is_offline = bool(cover_data.get("is_offline"))
 
         return ExamCoverDetail(

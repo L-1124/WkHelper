@@ -1,48 +1,46 @@
 """作业与题目数据。"""
 
-from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import Field
 
-@dataclass
-class Homework:
+from wkhelper.domain.model import Model
+
+
+class Homework(Model):
     """作业模型。"""
 
     id: int | str
     name: str
     deadline: str | int | None = None
     completed: bool = False
-    metadata: dict[str, Any] = field(default_factory=dict)  # 平台动态载荷
+    metadata: dict[str, Any] = Field(default_factory=dict)  # 平台动态载荷
 
 
-@dataclass
-class Question:
+class Question(Model):
     """题目模型。"""
 
     id: int | str
     content: str
-    options: list[str] = field(default_factory=list)
+    options: list[str] = Field(default_factory=list)
     answer: list[str] | str | None = None
     library_id: str | None = None
     version: str | None = None
 
 
-@dataclass
-class HomeworkItem:
+class HomeworkItem(Model):
     id: str
     name: str
     deadline: str | int | None = None
     completed: bool = False
 
 
-@dataclass
-class OptionItem:
+class OptionItem(Model):
     key: str
     text: str
 
 
-@dataclass
-class QuestionSummary:
+class QuestionSummary(Model):
     index: int
     id: str
     type: str | None
@@ -53,8 +51,7 @@ class QuestionSummary:
     is_correct: bool | None
 
 
-@dataclass
-class QuestionDetail:
+class QuestionDetail(Model):
     id: str
     type: str | None
     prompt: str
@@ -66,37 +63,32 @@ class QuestionDetail:
     attempt_count: int
     library_id: int | str | None
     version: str | None
-    resources: list[str] = field(default_factory=list)
+    resources: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class QuestionOutline:
+class QuestionOutline(Model):
     index: int
     id: str
     type: str | None
     library_id: int | str | None
 
 
-@dataclass
-class HomeworkOutline:
+class HomeworkOutline(Model):
     course_id: str
     homework_id: str
     total_questions: int
     questions_summary: list[QuestionOutline]
 
 
-@dataclass
-class HomeworkListData:
+class HomeworkListData(Model):
     homeworks: list[HomeworkItem]
 
 
-@dataclass
-class QuestionListData:
+class QuestionListData(Model):
     questions: list[QuestionSummary]
 
 
-@dataclass
-class SubmitItem:
+class SubmitItem(Model):
     index: int
     question_id: str
     submitted: bool
@@ -105,16 +97,14 @@ class SubmitItem:
     error: str | None = None
 
 
-@dataclass
-class HomeworkSubmitResult:
+class HomeworkSubmitResult(Model):
     total: int
     submitted_count: int
     correct_count: int
     items: list[SubmitItem]
 
 
-@dataclass
-class QuestionSubmitOutcome:
+class QuestionSubmitOutcome(Model):
     """平台单题提交回执。"""
 
     success: bool
@@ -124,8 +114,7 @@ class QuestionSubmitOutcome:
     error_code: int | None = None
 
 
-@dataclass
-class QuestionSubmitResult:
+class QuestionSubmitResult(Model):
     question_id: str
     submitted_answer: list[str]
     success: bool
@@ -134,8 +123,7 @@ class QuestionSubmitResult:
     error: str | None = None
 
 
-@dataclass
-class HomeworkSubmitPreview:
+class HomeworkSubmitPreview(Model):
     dry_run: bool
     course_id: str
     homework_id: str
@@ -143,8 +131,7 @@ class HomeworkSubmitPreview:
     validated: bool
 
 
-@dataclass
-class QuestionSubmitPreview:
+class QuestionSubmitPreview(Model):
     dry_run: bool
     course_id: str
     homework_id: str

@@ -6,7 +6,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 
-from wkhelper.domain.json_types import JsonValue
+from pydantic import JsonValue
 
 type EventCallback = Callable[[str, dict[str, JsonValue]], None]
 

@@ -11,12 +11,12 @@ from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError, AuthError
 from wkhelper.domain.exam import ExamCoverDetail, ExamStartResult
 from wkhelper.domain.homework import Homework
-from wkhelper.domain.json_types import json_int
 from wkhelper.domain.questions import is_fill_in_question, normalize_judgement_answer
 from wkhelper.domain.time_types import epoch_millis
 from wkhelper.domain.video import VideoContext
 from wkhelper.exporting.markdown import html_to_md
 from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.parsing import PlatformCounters
 from wkhelper.platform.protocol_types import HeartbeatProfile
 
 logger = logging.getLogger(__name__)
@@ -486,7 +486,7 @@ class YuketangPlatform(BasePlatform):
         if info.get("success") is False:
             raise APIError(f"获取公告 {leaf_id} 节点信息失败", retryable=False)
         info_data = info.get("data") if isinstance(info.get("data"), dict) else info
-        notice_id = json_int(info_data.get("activity_id"), 0)
+        notice_id = PlatformCounters.model_validate(info_data).activity_id
         if not notice_id:
             raise APIError(f"节点 {leaf_id} 不是公告（缺少 activity_id）", retryable=False)
         resp = await self._request_json(
@@ -568,8 +568,8 @@ class YuketangPlatform(BasePlatform):
         app_capture_screen = bool(cover_data.get("app_capture_screen"))
         front_random_snap = bool(cover_data.get("app_front_random_snap"))
         screen_cuts = bool(cover_data.get("open_screen_cuts"))
-        max_screen_cuts = json_int(cover_data.get("max_screen_cuts_num"), 0)
-        max_retry = json_int(cover_data.get("max_retry"), 1)
+        max_screen_cuts = PlatformCounters.model_validate(cover_data).max_screen_cuts_num
+        max_retry = PlatformCounters.model_validate(cover_data).max_retry
         is_offline = bool(cover_data.get("is_offline"))
 
         return ExamCoverDetail(

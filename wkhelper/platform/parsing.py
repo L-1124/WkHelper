@@ -4,6 +4,9 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic_core import PydanticUseDefault
+
 logger = logging.getLogger(__name__)
 
 type LeafContext = tuple[dict[str, Any], str, str | None]
@@ -86,3 +89,25 @@ def parse_exercise_response(q_resp: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return data
     return []
+
+
+class PlatformCounters(BaseModel):
+    """平台计数字段的宽松兼容解析；异常值沿用原字段默认值。"""
+
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    pages: int = 1
+    max_screen_cuts_num: int = 0
+    max_retry: int = 1
+    activity_id: int = 0
+    my_count: int = 0
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize_count(cls, value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise PydanticUseDefault()
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            raise PydanticUseDefault() from None

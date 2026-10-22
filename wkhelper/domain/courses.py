@@ -1,20 +1,20 @@
 """课程数据。"""
 
-from dataclasses import dataclass, field
 from typing import Any
 
-from wkhelper.domain.json_types import JsonDict
+from pydantic import Field, JsonValue
+
+from wkhelper.domain.model import Model
 
 
-@dataclass
-class Course:
+class Course(Model):
     """课程模型。"""
 
     id: int | str
     name: str
     platform_id: str  # 'ykt' 或 'xtzx'
     url: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)  # 平台特定数据 (classroom_id, sku_id 等)，动态载荷
+    metadata: dict[str, Any] = Field(default_factory=dict)  # 平台特定数据 (classroom_id, sku_id 等)，动态载荷
 
 
 def course_reference(course: Course) -> str:
@@ -41,22 +41,19 @@ def dedupe_courses(courses: list[Course]) -> list[Course]:
     return list(seen.values())
 
 
-@dataclass
-class CourseItem:
+class CourseItem(Model):
     id: str
     name: str
     platform: str
     classroom_id: int | str | None = None
 
 
-@dataclass
-class CourseDetail:
+class CourseDetail(Model):
     id: str
     name: str
     platform: str
-    metadata: JsonDict
+    metadata: dict[str, JsonValue]
 
 
-@dataclass
-class CourseListData:
+class CourseListData(Model):
     courses: list[CourseItem]

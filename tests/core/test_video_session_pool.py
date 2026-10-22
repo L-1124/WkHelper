@@ -55,7 +55,7 @@ def test_video_warm_session_model() -> None:
         platform="ykt",
     )
 
-    data = session.to_dict()
+    data = session.model_dump()
     assert data["course_id"] == "1001"
     assert data["video_id"] == "2001"
     assert data["pid"] == 1234
@@ -64,7 +64,7 @@ def test_video_warm_session_model() -> None:
     assert data["account_id"] == "user_123"
     assert data["platform"] == "ykt"
 
-    restored = VideoWarmSession.from_dict(data)
+    restored = VideoWarmSession.model_validate(data)
     assert restored.course_id == "1001"
     assert restored.video_id == "2001"
     assert restored.pid == 1234
@@ -321,8 +321,8 @@ def test_clean_session_resources_and_cleanup_all() -> None:
         s1 = VideoWarmSession(course_id="c1", video_id="v1", pid=0, port=9001, profile_dir=str(p1_dir))
         s2 = VideoWarmSession(course_id="c2", video_id="v2", pid=0, port=9002, profile_dir=str(p2_dir))
 
-        sess1_file.write_text(json.dumps(s1.to_dict()), encoding="utf-8")
-        sess2_file.write_text(json.dumps(s2.to_dict()), encoding="utf-8")
+        sess1_file.write_text(json.dumps(s1.model_dump()), encoding="utf-8")
+        sess2_file.write_text(json.dumps(s2.model_dump()), encoding="utf-8")
 
         close_warm_session(s1, session_dir=temp_dir)
         assert not sess1_file.exists()
@@ -421,7 +421,7 @@ async def test_get_or_create_warm_session_warm_hit(monkeypatch: pytest.MonkeyPat
             ttl_seconds=120.0,
             web_url="https://example.com/learn",
         )
-        session_file.write_text(json.dumps(initial_sess.to_dict()), encoding="utf-8")
+        session_file.write_text(json.dumps(initial_sess.model_dump()), encoding="utf-8")
 
         monkeypatch.setattr("wkhelper.video.session_pool.check_cdp_alive", lambda port, timeout=1.0: True)
 
@@ -730,7 +730,7 @@ def test_cleanup_all_warm_sessions_skips_timeout_preserves_metadata_cleans_corru
         corrupt_sess_file = temp_dir / "session_corrupt.json"
 
         active_sess = VideoWarmSession(course_id="c_act", video_id="v_act", pid=99999, port=9099, profile_dir="")
-        active_sess_file.write_text(json.dumps(active_sess.to_dict()), encoding="utf-8")
+        active_sess_file.write_text(json.dumps(active_sess.model_dump()), encoding="utf-8")
         corrupt_sess_file.write_text("{invalid json corrupt content...", encoding="utf-8")
 
         # 模拟 active_sess_file 获取锁时超时，而 corrupt_sess_file 正常获取锁
@@ -769,7 +769,7 @@ async def test_default_snapshot_identity_selects_own_cached_session(monkeypatch:
             course_id="c1", video_id="v1", pid=pid, port=9000 + pid, profile_dir="", account_id=account, platform="ykt"
         )
         path = get_session_file("c1", "v1", session_dir=tmp_path, account_id=account, platform="ykt")
-        path.write_text(json.dumps(session.to_dict()), encoding="utf-8")
+        path.write_text(json.dumps(session.model_dump()), encoding="utf-8")
 
     monkeypatch.setattr("wkhelper.video.session_pool.is_pid_alive", lambda pid: True)
     monkeypatch.setattr("wkhelper.video.session_pool.check_cdp_alive", lambda port: True)
@@ -813,10 +813,37 @@ async def test_default_snapshot_identity_selects_own_cached_session(monkeypatch:
 
     @contextlib.asynccontextmanager
     async def open_course(*args: object, **kwargs: object):
-        yield AuthenticatedPlatform(current_account), Course("c1", "course", "ykt")
+        yield AuthenticatedPlatform(current_account), Course(id="c1", name="course", platform_id="ykt")
 
     monkeypatch.setattr("wkhelper.cli.commands.video._open_course", open_course)
     await video_snapshot_cmd(course="c1", video="v1", timestamps="10")
     current_account = "20002"
     await video_snapshot_cmd(course="c1", video="v1", timestamps="10")
     assert selected_pids == [101, 202]
+
+
+def test_session_restore_normalizes_legacy_ids_but_rejects_invalid_pid() -> None:
+    from pydantic import ValidationError
+
+    session = VideoWarmSession.model_validate({"course_id": 10, "video_id": 20, "pid": "123", "port": "9222", "account_id": 42})
+    assert (session.course_id, session.video_id, session.pid, session.port, session.account_id) == ("10", "20", 123, 9222, "42")
+    with pytest.raises(ValidationError):
+        VideoWarmSession.model_validate({"pid": "broken-pid"})
+
+
+@pytest.mark.parametrize("metadata, ttl", [({}, 120.0), ({"last_active_at": 1000.0}, 10.0)])
+def test_watchdog_incomplete_metadata_preserves_cleanup_defaults(tmp_path, metadata, ttl) -> None:
+    path = tmp_path / "session.json"
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    with (
+        patch("wkhelper.video.session_pool.is_pid_alive", return_value=True),
+        patch("wkhelper.video.session_pool.time.time", return_value=1020.0),
+        patch("wkhelper.video.session_pool.terminate_process_tree") as terminate,
+        patch("wkhelper.video.session_pool._try_http_close"),
+    ):
+        run_watchdog(9999, 12345, str(profile), str(path), ttl_seconds=ttl, check_interval=0, max_ticks=1)
+    terminate.assert_called_once_with(12345)
+    assert not path.exists()
+    assert not profile.exists()

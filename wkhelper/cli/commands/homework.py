@@ -3,6 +3,7 @@
 from typing import Annotated, Any, Literal
 
 from cyclopts import App, Parameter
+from pydantic import ValidationError
 
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import (
@@ -22,10 +23,11 @@ from wkhelper.domain.homework import (
     HomeworkSubmitResult,
     QuestionOutline,
 )
-from wkhelper.domain.json_types import parse_json_text
 from wkhelper.domain.questions import normalize_judgement_answer
+from wkhelper.domain.validation import validation_message
 from wkhelper.homework.runner import run_homework_submit
 from wkhelper.homework.service import get_homeworks
+from wkhelper.infra.serialization import decode_json
 
 homework_app = App(name="homework", help="作业查询与提交")
 
@@ -59,7 +61,7 @@ async def homework_list_cmd(
             )
 
         page_items, meta = _paginate(items, limit, cursor)
-        return CommandResult(data=HomeworkListData(homeworks=page_items), meta=meta.to_dict())
+        return CommandResult(data=HomeworkListData(homeworks=page_items), meta=meta.model_dump())
 
 
 @homework_app.command(name="inspect")
@@ -132,7 +134,10 @@ async def homework_submit_cmd(
     if answers is not None and answers_file is not None:
         raise ValueError("`--answers` 与 `--answers-file` 只能提供其一")
     if answers is not None:
-        raw_answers = parse_json_text(answers)
+        try:
+            raw_answers = decode_json(answers)
+        except ValidationError as exc:
+            raise ValueError(validation_message(exc)) from None
     elif answers_file is not None:
         raw_answers = _read_json_file_or_stdin(answers_file)
     else:

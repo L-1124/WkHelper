@@ -8,6 +8,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, ClassVar
 
+from pydantic import JsonValue
+
 from wkhelper.auth.qr import QrCodeSession
 from wkhelper.auth.service import login_with_qrcode
 from wkhelper.domain.accounts import UserInfo
@@ -19,7 +21,6 @@ from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError, RiskControlError
 from wkhelper.domain.exam import ExamCoverDetail, ExamPaperData, ExamProblemItem, ExamStartResult
 from wkhelper.domain.homework import Homework, OptionItem, QuestionSubmitOutcome
-from wkhelper.domain.json_types import JsonDict
 from wkhelper.domain.video import VideoContext
 from wkhelper.exporting.markdown import html_to_md, html_to_md_with_images
 from wkhelper.infra.clock import ServerClock
@@ -572,7 +573,7 @@ class BasePlatform(ABC):
         cc: str,
         duration: float,
         page_nonce: str | None = None,
-    ) -> JsonDict:
+    ) -> dict[str, JsonValue]:
         """构建单个心跳打点，字段语义对齐 Web 播放器（见前端 media-log 定义）。
 
         `pg` 在同一次观看会话内固定（前端播放器实例生命周期内只生成一次）。

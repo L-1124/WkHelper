@@ -1,8 +1,8 @@
 """心跳报文的平台差异契约测试。"""
 
 import pytest
+from pydantic import JsonValue
 
-from wkhelper.domain.json_types import JsonDict
 from wkhelper.infra.http import AsyncSession
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.protocol_types import HeartbeatProfile
@@ -10,7 +10,7 @@ from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 
 
-def _build(platform: BasePlatform) -> JsonDict:
+def _build(platform: BasePlatform) -> dict[str, JsonValue]:
     return platform.build_heartbeat_payload(
         video_id="1001",
         classroom_id="2001",

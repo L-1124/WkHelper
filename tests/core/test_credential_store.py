@@ -366,3 +366,21 @@ def test_credential_store_session_mode_rollback_and_reuse(temp_db_dir: str) -> N
     accounts = store_session.list_accounts("ykt")
     assert len(accounts) == 1
     assert accounts[0].user_id == "user2"
+
+
+@pytest.mark.parametrize("priority", [5.1, 4.9, 4.8])
+def test_keyring_fractional_priority_survives_status_reconstruction(tmp_path, monkeypatch, priority) -> None:
+    from types import SimpleNamespace
+
+    from wkhelper.infra.credentials import KeyringSecretBackend
+
+    monkeypatch.setattr("wkhelper.infra.credentials.keyring.get_keyring", lambda: SimpleNamespace(priority=priority))
+    backend = KeyringSecretBackend()
+    original = backend.get_status()
+    store = CredentialStore(data_dir=str(tmp_path), credential_mode="system", backend=backend)
+    status = store.get_storage_status()
+    assert status.priority == priority
+    assert status.available is True
+    assert status.data_dir == str(tmp_path)
+    assert status.metadata_db == str(store.db_path)
+    assert original.data_dir == "" and original.metadata_db == ""

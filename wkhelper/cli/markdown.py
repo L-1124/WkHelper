@@ -11,6 +11,8 @@
 from collections.abc import Callable, Sequence
 from typing import cast
 
+from pydantic import JsonValue
+
 from wkhelper.domain.accounts import AccountListData, AuthStatusResult, LoginResult, RemoveResult, StatusData, StorageStatus
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.content import (
@@ -46,7 +48,7 @@ from wkhelper.domain.homework import (
     QuestionSubmitPreview,
     QuestionSubmitResult,
 )
-from wkhelper.domain.json_types import JsonDict, json_int
+from wkhelper.domain.pagination import PaginationMeta
 from wkhelper.domain.time_types import EpochMillis
 from wkhelper.domain.video import VideoListData, VideoPlanSummary, VideoProgress, VideoSnapshotData
 from wkhelper.infra.serialization import encode_json, to_json_value
@@ -104,13 +106,21 @@ def _format_next_actions(actions: list[NextAction] | None) -> list[str]:
     return lines
 
 
-def _pagination_hint(meta: JsonDict) -> str:
+def _pagination_hint(meta: dict[str, JsonValue]) -> str:
     """生成分页提示行；首页且无更多数据时返回空串。"""
-    offset = json_int(meta.get("offset"), 0)
-    limit = json_int(meta.get("limit"), 10)
-    total = json_int(meta.get("total"), 0)
-    has_more = bool(meta.get("has_more", False))
-    next_cursor = meta.get("next_cursor")
+    page = PaginationMeta.model_validate(
+        {
+            "offset": 0,
+            "limit": 10,
+            "total": 0,
+            "has_more": False,
+            "next_cursor": None,
+            **meta,
+        },
+        extra="ignore",
+    )
+    offset, limit, total = page.offset, page.limit, page.total
+    has_more, next_cursor = page.has_more, page.next_cursor
     if not has_more and offset <= 0:
         return ""
 
@@ -477,7 +487,7 @@ def _render_output_file_result(data: OutputFileResult) -> list[str]:
 def format_error_markdown(
     code: str,
     message: str,
-    details: JsonDict | None = None,
+    details: dict[str, JsonValue] | None = None,
     next_actions: list[NextAction] | None = None,
     data: object = None,
 ) -> str:
@@ -506,7 +516,7 @@ def format_error_markdown(
 
 def format_result_markdown(
     data: object,
-    meta: JsonDict | None = None,
+    meta: dict[str, JsonValue] | None = None,
     next_actions: list[NextAction] | None = None,
 ) -> str:
     """将强类型领域结果数据格式化为适合终端阅读的 GFM Markdown。"""
