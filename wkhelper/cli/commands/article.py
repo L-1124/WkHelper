@@ -8,6 +8,7 @@ from wkhelper.article.service import get_articles, read_article
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.cli.inputs import Limit, validate_positive_limit
 from wkhelper.domain.content import ArticleListData, ArticleReadResult
 from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 
@@ -20,10 +21,11 @@ async def article_list_cmd(
     status: Annotated[Literal["pending", "completed", "all"], Parameter(name=["--status"], help="状态过滤")] = "all",
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
-    limit: Annotated[int, Parameter(name=["--limit"], help="每页条数")] = 10,
+    limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[ArticleListData]:
     """查询课程资料/图文节点列表。"""
+    validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         articles = await get_articles(plat, matched)
         items = [

@@ -7,6 +7,7 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _open_platform, _paginate
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.cli.inputs import Limit, validate_positive_limit
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.courses import CourseDetail, CourseItem, CourseListData, course_reference, dedupe_courses
 from wkhelper.infra.serialization import to_json_value
@@ -18,10 +19,11 @@ course_app = App(name="course", help="课程查询")
 async def course_list_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
-    limit: Annotated[int, Parameter(name=["--limit"], help="每页条数")] = 10,
+    limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[CourseListData]:
     """查询当前账号的课程列表。"""
+    validate_positive_limit(int, limit)
     async with _open_platform(platform, account) as plat:
         courses = dedupe_courses(await plat.get_courses())
         items = [

@@ -8,6 +8,7 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.cli.inputs import Limit, validate_positive_limit
 from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 from wkhelper.domain.exporting import ExportResult, OutputFileResult
 from wkhelper.domain.homework import (
@@ -41,12 +42,13 @@ def _type_text(question: dict[str, object]) -> str | None:
 async def question_list_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     homework: Annotated[str, Parameter(name=["--homework", "-w"], help="作业 ID")],
-    limit: Annotated[int, Parameter(name=["--limit"], help="每页条数")] = 10,
+    limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[QuestionListData]:
     """分页获取作业题目列表与作答状态。"""
+    validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         questions = await plat.get_leaf_questions(homework, matched)
 

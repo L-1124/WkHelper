@@ -7,6 +7,7 @@ from cyclopts import App, Parameter
 from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.cli.inputs import Limit, validate_positive_limit
 from wkhelper.discussion.service import get_discussion_detail, get_discussions, submit_discussion
 from wkhelper.domain.content import DiscussionCommentResult, DiscussionListData, DiscussionTopicDetail
 from wkhelper.domain.errors import APIError, ConfirmationRequiredError
@@ -20,10 +21,11 @@ async def discussion_list_cmd(
     status: Annotated[Literal["pending", "completed", "all"], Parameter(name=["--status"], help="状态过滤")] = "all",
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
-    limit: Annotated[int, Parameter(name=["--limit"], help="每页条数")] = 10,
+    limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[DiscussionListData]:
     """查询课程讨论题列表。"""
+    validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         discussions = await get_discussions(plat, matched)
         items = [

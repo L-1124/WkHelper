@@ -13,6 +13,7 @@ from wkhelper.cli.deps import (
     _read_json_file_or_stdin,
 )
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.cli.inputs import Limit, answers_group, validate_positive_limit
 from wkhelper.domain.errors import ConfirmationRequiredError, PartialFailureError
 from wkhelper.domain.homework import (
     Homework,
@@ -38,10 +39,11 @@ async def homework_list_cmd(
     status: Annotated[Literal["pending", "completed", "all"], Parameter(name=["--status"], help="状态过滤")] = "all",
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
-    limit: Annotated[int, Parameter(name=["--limit"], help="每页条数")] = 10,
+    limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[HomeworkListData]:
     """查询课程作业列表。"""
+    validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         homeworks = await get_homeworks(plat, matched)
 
@@ -101,8 +103,14 @@ async def homework_inspect_cmd(
 async def homework_submit_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     homework: Annotated[str, Parameter(name=["--homework", "-w"], help="作业 ID")],
-    answers_file: Annotated[str | None, Parameter(name=["--answers-file"], help="答案 JSON 文件")] = None,
-    answers: Annotated[str | None, Parameter(name=["--answers"], help="直接传入 JSON 格式答案字典")] = None,
+    answers_file: Annotated[
+        str | None,
+        Parameter(name=["--answers-file"], group=answers_group, help="答案 JSON 文件"),
+    ] = None,
+    answers: Annotated[
+        str | None,
+        Parameter(name=["--answers"], group=answers_group, help="直接传入 JSON 格式答案字典"),
+    ] = None,
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验，不提交")] = False,
     confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认提交答案")] = False,
     concurrency: Annotated[int, Parameter(name=["--concurrency"], help="并发提交数（默认 1，强制单线程顺序作答）")] = 1,
