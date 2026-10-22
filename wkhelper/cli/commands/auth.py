@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
 
-from wkhelper.cli.context import PlatformCode, ctx
+from wkhelper.cli.context import PlatformCode, get_context
 from wkhelper.cli.deps import (
     _create_http_session,
     _open_platform,
@@ -26,7 +26,7 @@ async def auth_list_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
 ) -> CommandResult[AccountListData]:
     """列出已存储的账号摘要。"""
-    return CommandResult(data=AccountListData(accounts=ctx.get_store().list_accounts(platform)))
+    return CommandResult(data=AccountListData(accounts=get_context().get_store().list_accounts(platform)))
 
 
 @auth_app.command(name="status")
@@ -62,8 +62,8 @@ async def auth_login_cmd(
     if timeout <= 0:
         raise ValueError("`--timeout` 必须为正数")
 
-    store = ctx.get_store()
-    actual_cookie_file = cookie_file or ctx.cookie_file
+    store = get_context().get_store()
+    actual_cookie_file = cookie_file or get_context().options.cookie_file
     platform_cls = YuketangPlatform if platform == "ykt" else XuetangXPlatform
     async with _create_http_session(timeout=15, impersonate=platform_cls.impersonate) as client:
         plat = platform_cls(client)
@@ -83,7 +83,7 @@ async def auth_login_cmd(
             user_id=str(user.id),
             name=user.name,
             school=user.school,
-            persisted=ctx.credential_mode == "system",
+            persisted=get_context().options.credential_mode == "system",
         )
         next_actions = [
             NextAction(
@@ -111,7 +111,7 @@ async def auth_remove_cmd(
                 )
             ],
         )
-    store = ctx.get_store()
+    store = get_context().get_store()
     deleted = store.delete(platform, account)
     return CommandResult(data=RemoveResult(platform=platform, account=account, deleted=deleted))
 
@@ -122,7 +122,7 @@ auth_storage_app = auth_app.command(App(name="storage", help="系统存储后端
 @auth_storage_app.command(name="status")
 async def auth_storage_status_cmd() -> CommandResult[StorageStatus]:
     """查看系统凭据存储后端状态。"""
-    return CommandResult(data=ctx.get_store().get_storage_status())
+    return CommandResult(data=get_context().get_store().get_storage_status())
 
 
 auth_list = auth_list_cmd

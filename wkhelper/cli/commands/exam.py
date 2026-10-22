@@ -9,9 +9,10 @@ from typing import Annotated, Any
 from cyclopts import App, Parameter
 from pydantic import JsonValue
 
-from wkhelper.cli.context import PlatformCode, ctx
+from wkhelper.cli.context import PlatformCode, get_context
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
+from wkhelper.cli.inputs import Limit, validate_positive_limit
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 from wkhelper.domain.exam import (
@@ -73,7 +74,7 @@ def _warn_proctoring(cover: ExamCoverDetail) -> None:
 
 async def _bind_browser_session(plat: Any, exam: str) -> None:
     """有活跃考场浏览器会话时复用它：注入浏览器 Cookie 并绑定会话。"""
-    session = load_session(ctx.data_dir)
+    session = load_session(get_context().options.data_dir)
     if session is None or session.exam_id != str(exam):
         return
     cookies = await browser_cookies(session)
@@ -120,10 +121,11 @@ async def exam_list_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
-    limit: Annotated[int, Parameter(name=["--limit"], help="每页条数")] = 10,
+    limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[ExamListData]:
     """有界分页列出指定课程的期中/期末考试、开考时间与截止时间。"""
+    validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         exams = await get_exams(plat, matched)
         page_items, meta = _paginate(exams, limit, cursor)
@@ -242,7 +244,7 @@ async def exam_start_cmd(
             eid=eid,
             web_url=result.web_url,
             cookies={k: v for k, v in plat.client.cookies.items()},
-            data_dir=ctx.data_dir,
+            data_dir=get_context().options.data_dir,
         )
         result.browser_port = session.port
         emit_event(
@@ -362,7 +364,7 @@ async def exam_answer_cmd(
         _ensure_not_submitted(cover)
 
         # 考场安全门禁：所有作答必须依托已打开的真实浏览器会话
-        session = load_session(ctx.data_dir)
+        session = load_session(get_context().options.data_dir)
         if session is None or session.exam_id != str(exam):
             raise APIError(
                 f"考场作答必须依托已打开的前台考场浏览器会话。\n"
@@ -472,12 +474,12 @@ async def exam_answer_cmd(
 @exam_app.command(name="close")
 async def exam_close_cmd() -> CommandResult[ExamBrowserCloseResult]:
     """关闭 `exam start` 拉起的考场浏览器会话。"""
-    session = load_session(ctx.data_dir)
+    session = load_session(get_context().options.data_dir)
     if session is None:
         return CommandResult[ExamBrowserCloseResult](
             data=ExamBrowserCloseResult(exam_id="", closed=False, message="没有活跃的考场浏览器会话")
         )
-    closed = await close_exam_browser(session, data_dir=ctx.data_dir)
+    closed = await close_exam_browser(session, data_dir=get_context().options.data_dir)
     emit_event("exam.browser_closed", {"exam_id": session.exam_id, "reason": "manual"})
     return CommandResult[ExamBrowserCloseResult](
         data=ExamBrowserCloseResult(
