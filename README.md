@@ -283,8 +283,14 @@ wkhelper --debug course inspect -c 97330:29593706
 ## 开发与贡献
 
 ```bash
-# 同步依赖并激活虚拟环境
+# 同步依赖
 uv sync
+
+# 安装 Git hooks（迁移已有安装时覆盖旧垫片）
+uv run prek install -f
+
+# 运行全部仓库检查，沿用 .pre-commit-config.yaml
+uv run prek run --all-files
 
 # 代码格式化与质量检查
 uv run ruff check . --fix
