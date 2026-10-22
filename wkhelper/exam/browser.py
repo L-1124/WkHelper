@@ -141,7 +141,7 @@ async def begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0)
     client = await connect_exam_page(session)
     deadline = asyncio.get_running_loop().time() + timeout
     baseline = len(client.events)
-    clicked = False
+    last_probe_time = 0.0
     request_id: str | None = None
     accepted = False
     try:
@@ -157,9 +157,10 @@ async def begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0)
         )
         while asyncio.get_running_loop().time() < deadline:
             remaining = deadline - asyncio.get_running_loop().time()
-            if not clicked:
-                result = await client.call("Runtime.evaluate", {"expression": probe, "returnByValue": True}, timeout=remaining)
-                clicked = result.get("result", {}).get("value") is True
+            now = asyncio.get_running_loop().time()
+            if request_id is None and now - last_probe_time >= 0.2:
+                await client.call("Runtime.evaluate", {"expression": probe, "returnByValue": True}, timeout=remaining)
+                last_probe_time = now
             events = client.events[baseline:]
             for event in events:
                 params = event.get("params") or {}
