@@ -48,11 +48,43 @@ class CourseItem(Model):
     classroom_id: int | str | None = None
 
 
+class ModuleEvaluation(Model):
+    """课程单个考核模块统计（视频、作业、讨论、考试等）。"""
+
+    name: str
+    weight: float | None = None
+    total_count: int = 0
+    completed_count: int = 0
+    rate: float = 0.0
+    score: float | None = None
+
+
+class ExamScoreItem(Model):
+    """考场考试得分与作答明细。"""
+
+    exam_id: str
+    title: str
+    status: str
+    user_score: float | None = None
+    total_score: float | None = None
+    problem_count: int = 0
+    done_count: int = 0
+
+
+class CourseScoreSummary(Model):
+    """整门课程考核大纲与成绩看板。"""
+
+    modules: list[ModuleEvaluation] = Field(default_factory=list)
+    exams: list[ExamScoreItem] = Field(default_factory=list)
+    total_predicted_score: float | None = None
+
+
 class CourseDetail(Model):
     id: str
     name: str
     platform: str
     metadata: dict[str, JsonValue]
+    scores: CourseScoreSummary | None = None
 
 
 class CourseListData(Model):
