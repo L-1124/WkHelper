@@ -35,16 +35,14 @@
 ```mermaid
 flowchart LR
     A[AI Agent / 终端用户] -->|CLI 参数| B[WkHelper CLI]
-    B --> C{Core 调度引擎}
-    C -->|凭据管理| D[CredentialStore / Keyring]
-    C -->|参数化视频引擎| E[Video Engine]
-    C -->|拟人化提交| F[Homework Engine]
-    C -->|反混淆导出| G[Deobfuscator & Exporter]
-    E --> H[平台适配层: Yuketang / XuetangX]
-    F --> H
-    G --> H
-    H -->|stdout| I[标准 JSON 信封]
-    H -->|stderr| J[结构化 NDJSON 事件流]
+    B --> C[按业务组织的 service / runner]
+    C --> D[domain: 数据模型与规则]
+    C --> E[platform: 雨课堂 / 学堂在线协议]
+    C --> F[infra: 凭据 / HTTP / 时钟 / CDP / 文件]
+    E --> D
+    E --> F
+    B --> G[统一 JSON 信封 / Markdown]
+    F --> H[结构化 NDJSON 事件流]
 ```
 
 ---
@@ -124,6 +122,8 @@ wkhelper video learn -c 1966245:31318907 -v 75369628 --jitter 0.2 --confirm
 wkhelper video learn --plan-file plan.json --checkpoint-file cp.json --confirm
 ```
 
+计划输入由 Pydantic v2 严格校验：拒绝未知字段、布尔值冒充整数及 NaN/Infinity；错误仅披露字段路径与规则，返回 `INVALID_ARGUMENT`（退出码 2）。课程和视频 ID 会去除首尾空白，名称保持原文；`execution` / `video_defaults` 的 `null` 使用默认配置。参数优先级为内建默认 < 计划默认 < 目标参数 < CLI 显式覆盖。检查点逐条恢复，忽略坏记录、未知目标与重复目标，不将损坏检查点当成计划参数错误。
+
 > [!TIP]
 > 批量执行支持断点续学。追加 `--resume-from cp.json` 会跳过满足本次完成阈值的记录；提高阈值后，旧的部分完成记录会继续执行。`--total-timeout` 限制整次执行，包括已启动任务及视频切换等待。
 > 视频截帧缓存按实际认证平台与用户隔离；并发请求等待同一会话时不会阻塞事件循环，清理命令遇到被占用的会话会跳过。
@@ -147,9 +147,8 @@ wkhelper homework submit -c 1966245:31318907 -w 84704898 \
 ```
 
 > [!NOTE]
-> `homework` / `questions` 仅覆盖章节作业（`leaf_type=6`）；期中、期末等考场由 `exam` 命令族处理，两者不再混列。
+> `homework` / `questions` 覆盖章节作业（`leaf_type=6`）；期中、期末等考场由 `exam` 命令族处理。
 > 导出按作业 ID 区分同名节点。任一作业抓取失败时整次导出报错，不发布不完整文件；作业与考试导出均拒绝覆盖既有目标，包括导出期间由其他进程创建的文件。
-
 ### 5. 资料阅读与图文题 (`article`)
 
 ```bash
@@ -198,8 +197,13 @@ wkhelper exam inspect -c 1966245:31318907 -e 84705331
 # 预览进入考场（不申请令牌）
 wkhelper exam start -c 1966245:31318907 -e 84705331 --dry-run
 
-# 进入考场：默认拉起前台可见浏览器保持考场页面
+# 进入考场：打开前台浏览器，停留在考场入口
 wkhelper exam start -c 1966245:31318907 -e 84705331 --confirm
+
+# 开始作答：在前台浏览器中点击“开始答题”按钮，由网页发出 start_paper 并进入答题页后生效
+wkhelper exam start -c 1966245:31318907 -e 84705331 --begin --confirm
+
+# 正式进入考场始终打开前台浏览器；--dry-run 只预览，不打开浏览器
 
 # 读取整卷题目（只读）或导出为 Markdown
 wkhelper exam paper -c 1966245:31318907 -e 84705331
@@ -216,13 +220,14 @@ wkhelper exam close
 ```
 
 > [!IMPORTANT]
-> - 作答只通过前台真实浏览器页面的模拟点击与输入完成，不存在绕过浏览器的作答接口；交卷必须由本人在浏览器中核对后点击。
-> - `exam answer` 优先核验页面自身的 `answer_problem` 请求内容与有效业务成功码（通过 CDP 抓取，不额外发请求）；HTTP 200、HTML、空响应或缺失成功码均不能证明保存成功。未捕获到请求或响应证据未知时，只回读一次 `/exam_room/cache_results` 兜底；仍无法确认则返回 `saved: false`。
-> - 平台明确拒绝或页面实际提交内容与预期不一致（例如选项未绑定），会直接判 `saved: false`，不会被旧暂存回读洗白。
-> - 判断题选项键是 `true`/`false`，`--answer 正确` 会自动映射，也接受直接传 `true`。
-> - 在线监考、人脸/实名核验、网页截屏与线下机房等**实际启用**的监考项会锁定全部自动化入场与作答，只保留只读查询。
+> - `exam start` 正式执行时打开前台浏览器；`--dry-run` 预览考场信息。`--begin` 在浏览器点击“开始答题”，核验网页响应业务成功且题目加载完成后返回。
+> - 考场作答依托前台真实浏览器页面的模拟点击与输入完成；交卷须由本人在浏览器中核对后自行点击。
+> - `exam answer` 优先通过 CDP 抓取页面自身的 `answer_problem` 请求内容与有效业务成功码进行核验；未捕获到请求或响应证据未知时，回读一次 `/exam_room/cache_results` 兜底；仍无法确认则返回 `saved: false`。
+> - 平台明确拒绝或页面实际提交内容与预期不一致（例如选项未绑定）时直接判定 `saved: false`，不受服务端历史暂存干扰。
+> - 判断题选项键支持 `true`/`false`，传入 `--answer 正确` 会自动映射。
+> - 在线监考、人脸/实名核验、网页截屏与线下机房等实际启用的监考项会锁定全部自动化入场与作答操作。
 > - `app_capture_screen`、`app_front_random_snap` 属于 App 端从属配置，未开启在线监考时不视为已启用监考。
-> - 强监考锁定只阻止自动化写操作，`exam inspect` 等只读查询始终可用。
+> - 强监考锁定仅限制自动化写操作，`exam inspect` 等只读查询保持可用。
 
 ### 9. 契约自省 (`schema`)
 
