@@ -59,6 +59,7 @@ async def export_exam_paper_to_markdown(
                     total_resources += len(body_res)
 
                 f.write(f"## 第 {problem.index} 题（{problem.type or '题目'}，{problem.score:g} 分）\n\n")
+                f.write(f"**题目 ID：** `{problem.id}`\n\n")
                 f.write(f"**题目：**\n{body}\n\n")
 
                 if problem.options:
