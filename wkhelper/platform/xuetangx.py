@@ -353,6 +353,16 @@ class XuetangXPlatform(BasePlatform):
         return await self._request_json("POST", url, params=params, json=payload)
 
     @override
+    async def delete_discussion_comment(
+        self,
+        comment_id: str | int,
+        course: Course,
+    ) -> dict[str, Any]:
+        url = f"{self.api_base}/api/v1/lms/forum/comment"
+        params = {"id": str(comment_id), "cid": self._classroom_id(course)}
+        return await self._request_json("DELETE", url, params=params)
+
+    @override
     async def get_notice_detail(self, leaf_id: str | int, course: Course) -> NoticeDetail:
         """学堂在线前端暂无独立的公告正文接口，明确失败而不是返回空正文。"""
         raise APIError(f"学堂在线公告 {leaf_id} 暂不支持程序化读取，请在浏览器中查看", retryable=False)

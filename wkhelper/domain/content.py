@@ -75,3 +75,10 @@ class DiscussionCommentResult(Model):
     comment_id: int | None
     success: bool
     message: str
+
+
+class DiscussionDeleteResult(Model):
+    course_id: str
+    comment_id: str
+    success: bool
+    message: str

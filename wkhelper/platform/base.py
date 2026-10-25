@@ -433,6 +433,14 @@ class BasePlatform(ABC):
         """发送讨论发言，返回平台原始响应。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现讨论发言接口")
 
+    async def delete_discussion_comment(
+        self,
+        comment_id: str | int,
+        course: Course,
+    ) -> dict[str, Any]:
+        """删除讨论题发言，返回平台原始响应。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现删除讨论发言接口")
+
     async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
         """获取指定叶子节点的习题列表。"""
         url = self._build_leaf_info_url(leaf_id, course)

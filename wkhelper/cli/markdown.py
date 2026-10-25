@@ -19,6 +19,7 @@ from wkhelper.domain.content import (
     ArticleListData,
     ArticleReadResult,
     DiscussionCommentResult,
+    DiscussionDeleteResult,
     DiscussionListData,
     DiscussionTopicDetail,
     NoticeDetail,
@@ -434,6 +435,17 @@ def _render_discussion_comment_result(data: DiscussionCommentResult) -> list[str
         lines.append(f"- **回复记录 ID**：`{data.comment_id}`")
     lines.append(f"- **回执信息**：{_cell(data.message)}")
     return lines
+
+
+@renderer(DiscussionDeleteResult)
+def _render_discussion_delete_result(data: DiscussionDeleteResult) -> list[str]:
+    return [
+        f"## 讨论回复删除：{'成功' if data.success else '失败'}",
+        "",
+        f"- **课程 ID**：`{data.course_id}`",
+        f"- **评论 ID**：`{data.comment_id}`",
+        f"- **回执信息**：{_cell(data.message)}",
+    ]
 
 
 @renderer(StatusData)

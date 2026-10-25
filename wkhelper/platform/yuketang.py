@@ -473,6 +473,17 @@ class YuketangPlatform(BasePlatform):
         return await self._request_json("POST", url, json=payload, **kwargs)
 
     @override
+    async def delete_discussion_comment(
+        self,
+        comment_id: str | int,
+        course: Course,
+    ) -> dict[str, Any]:
+        url = f"{self.api_base}/v/discussion/v2/comment/"
+        params = {"id": str(comment_id)}
+        kwargs = self.get_request_kwargs(course) or {}
+        return await self._request_json("DELETE", url, params=params, **kwargs)
+
+    @override
     async def get_notice_detail(self, leaf_id: str | int, course: Course) -> NoticeDetail:
         """读取公告正文：leaf_level_info 取 activity_id，再查 link/notice。"""
         cid = course.metadata["classroom_id"]

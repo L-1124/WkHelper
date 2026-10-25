@@ -8,8 +8,9 @@ from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _paginate
 from wkhelper.cli.envelope import CommandResult
 from wkhelper.cli.inputs import Limit, validate_positive_limit
-from wkhelper.discussion.service import get_discussion_detail, get_discussions, submit_discussion
-from wkhelper.domain.content import DiscussionCommentResult, DiscussionListData, DiscussionTopicDetail
+from wkhelper.discussion.service import delete_discussion, get_discussion_detail, get_discussions, submit_discussion
+from wkhelper.domain.actions import NextAction
+from wkhelper.domain.content import DiscussionCommentResult, DiscussionDeleteResult, DiscussionListData, DiscussionTopicDetail
 from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 
 discussion_app = App(name="discussion", help="讨论题查询与互动回复")
@@ -75,7 +76,26 @@ async def discussion_reply_cmd(
             )
         )
     if not confirm:
-        raise ConfirmationRequiredError("发表讨论回复必须显式附加 `--confirm` 参数")
+        confirm_argv = [
+            "wkhelper",
+            "discussion",
+            "reply",
+            "--course",
+            str(course),
+            "--discussion",
+            str(discussion),
+            "--content",
+            content.strip(),
+            "--confirm",
+        ]
+        if platform:
+            confirm_argv.extend(["--platform", platform])
+        if account:
+            confirm_argv.extend(["--account", account])
+        raise ConfirmationRequiredError(
+            "发表讨论回复必须显式附加 `--confirm` 参数",
+            next_actions=[NextAction(reason="确认提交讨论回复", argv=confirm_argv)],
+        )
     async with _open_course(course, platform, account) as (plat, matched):
         result = await submit_discussion(plat, discussion, matched, content.strip())
         if not result.success:
@@ -83,12 +103,53 @@ async def discussion_reply_cmd(
         return CommandResult(data=result)
 
 
+@discussion_app.command(name="delete")
+async def discussion_delete_cmd(
+    course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
+    comment: Annotated[str, Parameter(name=["--comment", "-m"], help="评论 ID")],
+    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验，不提交")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认删除发言")] = False,
+    platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
+    account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
+) -> CommandResult[DiscussionDeleteResult]:
+    """删除已发布的讨论发言。注意：删除发言可能导致对应讨论题节点的打卡状态回退。"""
+    if not comment.strip():
+        raise ValueError("评论 ID 不能为空")
+    if dry_run:
+        return CommandResult(
+            data=DiscussionDeleteResult(
+                course_id=str(course),
+                comment_id=str(comment),
+                success=True,
+                message="[dry-run] 校验成功，未执行删除",
+            )
+        )
+    if not confirm:
+        confirm_argv = ["wkhelper", "discussion", "delete", "--course", str(course), "--comment", str(comment), "--confirm"]
+        if platform:
+            confirm_argv.extend(["--platform", platform])
+        if account:
+            confirm_argv.extend(["--account", account])
+        raise ConfirmationRequiredError(
+            "删除讨论发言属于破坏性操作，必须显式附加 `--confirm` 参数",
+            next_actions=[NextAction(reason="确认删除讨论发言", argv=confirm_argv)],
+        )
+    async with _open_course(course, platform, account) as (plat, matched):
+        result = await delete_discussion(plat, comment.strip(), matched)
+        if not result.success:
+            raise APIError(f"删除讨论发言失败: {result.message}")
+        return CommandResult(data=result)
+
+
 discussion_list = discussion_list_cmd
 discussion_inspect = discussion_inspect_cmd
 discussion_reply = discussion_reply_cmd
+discussion_delete = discussion_delete_cmd
 
 __all__ = [
     "discussion_app",
+    "discussion_delete",
+    "discussion_delete_cmd",
     "discussion_inspect",
     "discussion_inspect_cmd",
     "discussion_list",

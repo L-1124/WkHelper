@@ -196,6 +196,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper discussion reply --course 1001 --discussion 3001 --content '心得体会...' --confirm",
         ],
     },
+    "discussion delete": {
+        "description": "删除已发布的讨论发言。注意：删除可能导致对应讨论题节点的打卡状态回退。",
+        "side_effects": "remote_delete",
+        "requires_confirm": True,
+        "examples": [
+            "wkhelper discussion delete --course 1001 --comment 8888 --dry-run",
+            "wkhelper discussion delete --course 1001 --comment 8888 --confirm",
+        ],
+    },
     "notice list": {
         "description": "有界分页列出指定课程的公告/通知节点及已读状态（`leaf_type=10`）。",
         "examples": ["wkhelper notice list --course 1001 --status pending"],

@@ -80,6 +80,38 @@ async def test_cli_requires_confirmation_exit_code(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cli_discussion_delete_requires_confirm(monkeypatch):
+    """测试删除讨论发言缺少 --confirm 时返回退出码 5。"""
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--credential-mode", "session", "discussion", "delete", "-c", "1001", "-m", "8888"])
+    assert code == 5
+
+    output = buf.getvalue().strip()
+    data = json.loads(output)
+    assert data["ok"] is False
+    assert data["error"]["code"] == "CONFIRMATION_REQUIRED"
+    assert any("--confirm" in act["argv"] for act in data.get("next_actions", []))
+
+
+@pytest.mark.asyncio
+async def test_cli_discussion_delete_dry_run(monkeypatch):
+    """测试删除讨论发言 --dry-run 预览无需认证。"""
+    buf = StringIO()
+    monkeypatch.setattr("sys.stdout", buf)
+
+    code = await async_main(["--credential-mode", "session", "discussion", "delete", "-c", "1001", "-m", "8888", "--dry-run"])
+    assert code == 0
+
+    output = buf.getvalue().strip()
+    data = json.loads(output)
+    assert data["ok"] is True
+    assert data["data"]["comment_id"] == "8888"
+    assert "[dry-run]" in data["data"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_cli_invalid_argument_envelope(monkeypatch):
     """测试非法参数时输出 JSON 格式的错误信封并退出码 2。"""
     buf = StringIO()

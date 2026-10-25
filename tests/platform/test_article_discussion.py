@@ -3,7 +3,7 @@
 import pytest
 
 from wkhelper.article.service import get_articles, read_article
-from wkhelper.discussion.service import get_discussion_detail, get_discussions, submit_discussion
+from wkhelper.discussion.service import delete_discussion, get_discussion_detail, get_discussions, submit_discussion
 from wkhelper.domain.courses import Course
 from wkhelper.infra.http import AsyncSession
 from wkhelper.platform.base import BasePlatform
@@ -88,6 +88,9 @@ class MockPlatform(BasePlatform):
     async def post_discussion_comment(self, topic_info, content, course, leaf_id):
         return {"success": True, "data": {"data": {"id": 8888}}, "msg": "操作成功"}
 
+    async def delete_discussion_comment(self, comment_id, course):
+        return {"success": True, "msg": "删除成功"}
+
 
 @pytest.mark.asyncio
 async def test_get_articles_and_read_article():
@@ -127,3 +130,8 @@ async def test_get_discussions_and_submit():
         res = await submit_discussion(plat, "102", course, "今天心情很好")
         assert res.success is True
         assert res.comment_id == 8888
+
+        del_res = await delete_discussion(plat, "8888", course)
+        assert del_res.success is True
+        assert del_res.comment_id == "8888"
+        assert del_res.message == "删除成功"

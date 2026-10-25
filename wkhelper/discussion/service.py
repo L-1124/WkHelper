@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from wkhelper.domain.content import DiscussionCommentResult, DiscussionItem, DiscussionTopicDetail
+from wkhelper.domain.content import DiscussionCommentResult, DiscussionDeleteResult, DiscussionItem, DiscussionTopicDetail
 from wkhelper.domain.courses import Course
 from wkhelper.exporting.markdown import html_to_md
 from wkhelper.platform.base import BasePlatform
@@ -91,5 +91,18 @@ async def submit_discussion(platform: BasePlatform, leaf_id: str | int, course: 
         topic_id=topic_id,
         comment_id=int(comment_id) if comment_id else None,
         success=bool(parsed.get("success", False)),
+        message=str(msg),
+    )
+
+
+async def delete_discussion(platform: BasePlatform, comment_id: str | int, course: Course) -> DiscussionDeleteResult:
+    """删除讨论题发言。"""
+    resp = await platform.delete_discussion_comment(comment_id, course)
+    msg = resp.get("msg") or resp.get("message") or "删除成功"
+    success = bool(resp.get("success", True) if "success" in resp else (resp.get("code") == 0 or resp.get("status") == 0))
+    return DiscussionDeleteResult(
+        course_id=str(course.id),
+        comment_id=str(comment_id),
+        success=success,
         message=str(msg),
     )
