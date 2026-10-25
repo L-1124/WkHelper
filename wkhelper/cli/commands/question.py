@@ -28,8 +28,8 @@ from wkhelper.homework.service import submit_question
 from wkhelper.infra.serialization import encode_json
 from wkhelper.platform.parsing import PlatformCounters
 
-question_app = App(name="question", help="单题与按页题目检索")
-questions_app = App(name="questions", help="课程题目导出")
+question_app = App(name="question", help="题目查询与单题提交")
+questions_app = App(name="questions", help="课程作业题目批量导出")
 
 
 def _type_text(question: dict[str, object]) -> str | None:
@@ -47,7 +47,7 @@ async def question_list_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[QuestionListData]:
-    """分页获取作业题目列表与作答状态。"""
+    """列出作业题目列表与作答状态。"""
     validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         questions = await plat.get_leaf_questions(homework, matched)
@@ -84,13 +84,13 @@ async def question_get_cmd(
     question: Annotated[str, Parameter(name=["--question", "-q"], help="题目 ID")],
     output: Annotated[str | None, Parameter(name=["--output", "-o"], help="输出文件路径")] = None,
     download_resources: Annotated[
-        bool, Parameter(name=["--download-resources", "--download-images"], help="是否下载配图与附件文件到本地")
+        bool, Parameter(name=["--download-resources", "--download-images"], help="是否下载题干配图与附件")
     ] = False,
     assets_dir: Annotated[str | None, Parameter(name=["--assets-dir"], help="资源保存目录路径")] = None,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[QuestionDetail] | CommandResult[OutputFileResult]:
-    """获取单题完整详情与作答结果。"""
+    """查看单道题目的完整内容与作答结果。"""
     async with _open_course(course, platform, account) as (plat, matched):
         questions = await plat.get_leaf_questions(homework, matched)
         target_question = next((item for item in questions if str(item.get("problem_id") or item.get("id")) == str(question)), None)
@@ -135,14 +135,14 @@ async def question_submit_cmd(
         float,
         Parameter(
             name=["--delay"],
-            help="单题提交前思考等待秒数（默认 0.0s；建议依据题目难度设置：简单题 5~10s，多选题 15~30s，模拟真人思考）",
+            help="提交前等待秒数",
         ),
     ] = 0.0,
     delay_jitter: Annotated[
         float,
         Parameter(
             name=["--delay-jitter"],
-            help="思考等待随机浮动秒数（默认 0.0s；实际延迟为 delay ± jitter）",
+            help="等待时间随机抖动秒数 (实际等待 delay ± jitter)",
         ),
     ] = 0.0,
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验参数，不提交")] = False,
@@ -150,7 +150,7 @@ async def question_submit_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account"], help="账号 ID")] = None,
 ) -> CommandResult[QuestionSubmitPreview] | CommandResult[QuestionSubmitResult]:
-    """提交单道题目答案并返回判题结果。建议依据题目难易程度动态指定 `--delay` 与 `--delay-jitter` 模拟真人思考。"""
+    """提交单道题目答案。"""
     answer_list = [item.strip() for item in answer.split(",") if item.strip()]
     if not answer_list:
         raise ValueError(f"题目答案参数无效: {answer}")
@@ -207,18 +207,16 @@ async def questions_export_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     output: Annotated[str, Parameter(name=["--output", "-o"], help="输出文件路径")],
     format: Annotated[
-        Literal["md", "markdown", "json"] | None, Parameter(name=["--format"], help="导出格式（缺省按 output 后缀自动推断，默认 md）")
+        Literal["md", "markdown", "json"] | None, Parameter(name=["--format"], help="导出格式 (缺省根据 output 后缀推断，默认 md)")
     ] = None,
     download_resources: Annotated[
-        bool, Parameter(name=["--download-resources", "--download-images"], help="是否下载题目配图及附件文件到本地并改写为相对路径")
+        bool, Parameter(name=["--download-resources", "--download-images"], help="是否下载题干配图与附件并转为相对路径")
     ] = False,
-    only_correct_answers: Annotated[
-        bool, Parameter(name=["--only-correct-answers"], help="仅导出官方标准正确答案，隐藏/排除个人提交的作答与判定")
-    ] = False,
+    only_correct_answers: Annotated[bool, Parameter(name=["--only-correct-answers"], help="仅导出标准答案 (排除用户作答记录)")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExportResult]:
-    """导出课程全量作业题目为 Markdown 或 JSON 文件。"""
+    """将课程所有作业题目导出为 Markdown 或 JSON 文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
         return CommandResult(
             data=await export_questions(

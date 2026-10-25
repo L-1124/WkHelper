@@ -18,14 +18,14 @@ from wkhelper.domain.accounts import AccountListData, AuthStatusResult, LoginRes
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.errors import ConfirmationRequiredError
 
-auth_app = App(name="auth", help="凭据与账号认证管理")
+auth_app = App(name="auth", help="账号认证与凭据管理")
 
 
 @auth_app.command(name="list")
 async def auth_list_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
 ) -> CommandResult[AccountListData]:
-    """列出已存储的账号摘要。"""
+    """列出已保存的账号列表。"""
     return CommandResult(data=AccountListData(accounts=get_context().get_store().list_accounts(platform)))
 
 
@@ -34,7 +34,7 @@ async def auth_status_cmd(
     platform: Annotated[PlatformCode, Parameter(name=["--platform", "-p"], help="平台代码")],
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[AuthStatusResult]:
-    """联网验证指定账号登录态。"""
+    """检查指定账号的登录状态。"""
     async with _open_platform(platform, account) as plat:
         user = plat.user
         return CommandResult(
@@ -50,15 +50,17 @@ async def auth_status_cmd(
 @auth_app.command(name="login")
 async def auth_login_cmd(
     platform: Annotated[PlatformCode, Parameter(name=["--platform", "-p"], help="平台代码")],
-    method: Annotated[Literal["browser", "cookie", "qrcode"], Parameter(name=["--method", "-m"], help="登录方式")] = "browser",
-    cookie_file: Annotated[str | None, Parameter(name=["--cookie-file"], help="Cookie 文件路径")] = None,
-    timeout: Annotated[int, Parameter(name=["--timeout"], help="登录超时秒数")] = 120,
+    method: Annotated[
+        Literal["browser", "cookie", "qrcode"], Parameter(name=["--method", "-m"], help="登录方式 (browser, cookie)")
+    ] = "browser",
+    cookie_file: Annotated[str | None, Parameter(name=["--cookie-file"], help="Cookie 文件路径 (搭配 --method cookie)")] = None,
+    timeout: Annotated[int, Parameter(name=["--timeout"], help="登录超时时间 (秒)")] = 120,
     display: Annotated[
         Literal["image", "browser"] | None, Parameter(name=["--display"], help="[已废弃] 二维码呈现方式", show=False)
     ] = None,
     open_browser: Annotated[bool | None, Parameter(name=["--open-browser"], help="[已废弃] 自动打开浏览器", show=False)] = None,
 ) -> CommandResult[LoginResult]:
-    """账号登录并安全持久化凭据。"""
+    """登录账号并保存凭据。"""
     if timeout <= 0:
         raise ValueError("`--timeout` 必须为正数")
     _ = (display, open_browser)  # 保留兼容历史输入
@@ -101,9 +103,9 @@ async def auth_login_cmd(
 async def auth_remove_cmd(
     platform: Annotated[PlatformCode, Parameter(name=["--platform", "-p"], help="平台代码")],
     account: Annotated[str, Parameter(name=["--account", "-a"], help="账号 ID")],
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认删除")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认执行删除")] = False,
 ) -> CommandResult[RemoveResult]:
-    """删除指定账号凭据。"""
+    """删除指定账号的本地凭据。"""
     if not confirm:
         raise ConfirmationRequiredError(
             message="删除账号是本地破坏性操作，必须显式附加 `--confirm` 参数",
@@ -119,12 +121,12 @@ async def auth_remove_cmd(
     return CommandResult(data=RemoveResult(platform=platform, account=account, deleted=deleted))
 
 
-auth_storage_app = auth_app.command(App(name="storage", help="系统存储后端状态"))
+auth_storage_app = auth_app.command(App(name="storage", help="凭据存储状态"))
 
 
 @auth_storage_app.command(name="status")
 async def auth_storage_status_cmd() -> CommandResult[StorageStatus]:
-    """查看系统凭据存储后端状态。"""
+    """查看凭据存储后端的运行状态。"""
     return CommandResult(data=get_context().get_store().get_storage_status())
 
 

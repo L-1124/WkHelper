@@ -42,7 +42,7 @@ async def homework_list_cmd(
     limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[HomeworkListData]:
-    """查询课程作业列表。"""
+    """列出课程作业列表与完成状态。"""
     validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         homeworks = await get_homeworks(plat, matched)
@@ -73,7 +73,7 @@ async def homework_inspect_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[HomeworkOutline]:
-    """查看作业元数据及题目大纲。"""
+    """查看作业详情与题目结构。"""
     async with _open_course(course, platform, account) as (plat, matched):
         questions = await plat.get_leaf_questions(homework, matched)
 
@@ -105,40 +105,40 @@ async def homework_submit_cmd(
     homework: Annotated[str, Parameter(name=["--homework", "-w"], help="作业 ID")],
     answers_file: Annotated[
         str | None,
-        Parameter(name=["--answers-file"], group=answers_group, help="答案 JSON 文件"),
+        Parameter(name=["--answers-file"], group=answers_group, help="答案 JSON 文件路径"),
     ] = None,
     answers: Annotated[
         str | None,
-        Parameter(name=["--answers"], group=answers_group, help="直接传入 JSON 格式答案字典"),
+        Parameter(name=["--answers"], group=answers_group, help='答案 JSON 字符串 (如 \'{"题目ID": ["A"]}\')'),
     ] = None,
-    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验，不提交")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认提交答案")] = False,
-    concurrency: Annotated[int, Parameter(name=["--concurrency"], help="并发提交数（默认 1，强制单线程顺序作答）")] = 1,
+    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验参数与答案，不实际提交")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认执行提交")] = False,
+    concurrency: Annotated[int, Parameter(name=["--concurrency"], help="并发提交数 (默认 1，单任务顺序提交)")] = 1,
     delay: Annotated[
         float,
         Parameter(
             name=["--delay"],
-            help="单题基础间隔秒数（默认 8.0s；建议依据难易度动态调整：简单题 5~10s，多选 15~35s，主观题 45~90s，模拟真人思考）",
+            help="单题提交基础间隔 (秒)",
         ),
     ] = 8.0,
     delay_jitter: Annotated[
         float,
         Parameter(
             name=["--delay-jitter"],
-            help="提交间隔随机浮动秒数（默认 3.0s；实际间隔为 delay ± jitter，消除固定机器周期）",
+            help="提交间隔随机抖动秒数 (实际间隔为 delay ± jitter)",
         ),
     ] = 3.0,
     random_order: Annotated[
         bool,
         Parameter(
             name=["--random-order"],
-            help="是否打乱题目提交次序（默认 False；建议批量作业开启，打破从第 1 题顺序作答的机械规律）",
+            help="随机顺序提交题目",
         ),
     ] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[HomeworkSubmitPreview] | CommandResult[HomeworkSubmitResult]:
-    """提交作业答案集合。建议依据题目难易程度动态设置 `--delay`、`--delay-jitter` 与 `--random-order` 模拟真人思考作答。"""
+    """提交作业答案。"""
     if answers is not None and answers_file is not None:
         raise ValueError("`--answers` 与 `--answers-file` 只能提供其一")
     if answers is not None:

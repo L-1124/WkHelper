@@ -43,11 +43,11 @@ class CommandSpec(Model):
 
 COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
     "status": {
-        "description": "读取本地配置、默认数据目录及已存储账号摘要（不进行网络认证请求）。",
+        "description": "查看本地环境配置、数据目录及已保存的账号列表。",
         "examples": ["wkhelper status"],
     },
     "schema": {
-        "description": "按层级查看命令规范、参数定义、副作用与示例。",
+        "description": "查看 CLI 命令规范、参数定义、副作用与调用示例。",
         "examples": [
             "wkhelper schema",
             "wkhelper schema 'video learn'",
@@ -55,18 +55,18 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "auth list": {
-        "description": "查询本地已保存的账号列表，绝不输出敏感 Cookie 或密码。",
+        "description": "列出本地已保存的账号列表。",
         "examples": ["wkhelper auth list", "wkhelper auth list --platform ykt"],
     },
     "auth status": {
-        "description": "使用指定账号向平台发起轻量只读请求，检查凭据是否依然有效。",
+        "description": "向平台发送轻量请求，验证指定账号的凭据是否有效。",
         "examples": [
             "wkhelper auth status --platform ykt",
             "wkhelper auth status --platform ykt --account 123456",
         ],
     },
     "auth login": {
-        "description": "通过官方网页浏览器或导入 Cookie 登录并保存至系统安全凭据管理器。",
+        "description": "通过浏览器或导入 Cookie 登录账号，并加密保存凭据。",
         "side_effects": "local_write",
         "examples": [
             "wkhelper auth login --platform ykt",
@@ -77,33 +77,33 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "auth remove": {
-        "description": "从系统凭据管理器和本地元数据中删除账号凭据。",
+        "description": "删除本地已保存的账号凭据与元数据。",
         "side_effects": "local_delete",
         "requires_confirm": True,
         "examples": ["wkhelper auth remove --platform ykt --account 123456 --confirm"],
     },
     "auth storage status": {
-        "description": "检查当前操作系统 keyring 后端类型与可用性。",
+        "description": "查看操作系统 Keyring 凭据存储后端的状态。",
         "examples": ["wkhelper auth storage status"],
     },
     "course list": {
-        "description": "有界分页列出当前账号下的所有在学课程。",
+        "description": "查询当前账号下的在学课程列表。",
         "examples": ["wkhelper course list --platform ykt", "wkhelper course list --limit 5"],
     },
     "course inspect": {
-        "description": "查询指定课程的元数据与大纲概要。",
+        "description": "查看指定课程的详细信息与大纲。",
         "examples": ["wkhelper course inspect --course 1001 --platform ykt"],
     },
     "video list": {
-        "description": "有界分页列出指定课程中的视频叶子节点、完成状态与时长。",
+        "description": "查询课程的视频任务列表、完成状态与时长。",
         "examples": ["wkhelper video list --course 1001 --status pending"],
     },
     "video inspect": {
-        "description": "查询服务端当前记录的视频播放进度、观看长度与可用参数边界。",
+        "description": "查看单个视频在服务端的观看进度与参数边界。",
         "examples": ["wkhelper video inspect --course 1001 --video 2001"],
     },
     "video learn": {
-        "description": "向平台发送心跳推进学习进度，支持单/多视频或计划文件，全面开放控制参数。",
+        "description": "向平台发送心跳推进视频学习进度，支持单/多视频或计划文件。",
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
@@ -113,10 +113,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "video snapshot": {
-        "description": (
-            "基于原生浏览器对指定视频进行纯净抽帧，支持特定时间戳、步长范围或均匀采样"
-            "（默认开启 Warm Session 进程池复用，支持 --no-cache 禁用；--clean-cache 清理后台热会话）。"
-        ),
+        "description": ("使用浏览器对指定视频进行抽帧截图，支持指定时间戳、步长范围或均匀采样。"),
         "side_effects": "none",
         "examples": [
             "wkhelper video snapshot --course 1001 --video 2001 --timestamps 30,60,90",
@@ -127,19 +124,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "homework list": {
-        "description": "有界分页列出指定课程的作业、截止时间与完成状态。",
+        "description": "查询指定课程的作业列表与完成状态。",
         "examples": ["wkhelper homework list --course 1001 --status pending"],
     },
     "homework inspect": {
-        "description": "查询作业详情、题目总数及题目类型分布，不内嵌完整题干全文。",
+        "description": "查看作业详情、题目总数及题型分布。",
         "examples": ["wkhelper homework inspect --course 1001 --homework 3001"],
     },
     "homework submit": {
-        "description": (
-            "批量提交作业答案；支持 --delay、--delay-jitter 与 --random-order。默认单题 8s 基础间隔与 3s 随机浮动。"
-            "建议依据题干长短与难度（客观题 5~10s、多选 15~35s、主观题 45~90s）动态调整延迟，"
-            "并开启 --random-order 打乱题目顺序，模拟真人思考作答以规避风控。"
-        ),
+        "description": ("批量提交作业答案；支持 --delay、--delay-jitter 与 --random-order 参数控制提交间隔与次序。"),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
@@ -148,18 +141,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "question list": {
-        "description": "按页读取题目摘要、选项与修订版本号。",
+        "description": "分页查看作业题目摘要、选项与状态。",
         "examples": ["wkhelper question list --course 1001 --homework 3001 --limit 5"],
     },
     "question get": {
-        "description": "获取单道题目的完整反混淆题干、公式、选项与附件引用。",
+        "description": "查看单道题目的完整题干、公式、选项与附件。",
         "examples": ["wkhelper question get --course 1001 --homework 3001 --question 4001"],
     },
     "question submit": {
-        "description": (
-            "直接向作业提交单道题目答案并返回判题结果；支持 --delay 与 --delay-jitter。"
-            "建议依据题目难易程度（客观题 5~15s，计算题 20~40s）动态设置等待思考时长，模拟真实读题思考。"
-        ),
+        "description": ("提交作业中的单道题目答案并返回判题结果；支持 --delay 与 --delay-jitter 控制提交等待。"),
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
@@ -169,11 +159,11 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "article list": {
-        "description": "有界分页列出指定课程的资料阅读与图文节点及完成状态。",
+        "description": "查询指定课程的资料与图文任务列表及完成状态。",
         "examples": ["wkhelper article list --course 1001 --status pending"],
     },
     "article read": {
-        "description": "向平台发送完成信号，将指定的资料/图文节点标记为已读。",
+        "description": "将指定的资料/图文节点标记为已读。",
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
@@ -182,15 +172,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "discussion list": {
-        "description": "有界分页列出指定课程的讨论互动节点及是否发言状态。",
+        "description": "查询指定课程的讨论题列表及回复状态。",
         "examples": ["wkhelper discussion list --course 1001 --status pending"],
     },
     "discussion inspect": {
-        "description": "查询讨论题节点题目大纲、教师题干要求与当前参与人数统计。",
+        "description": "查看讨论题详情与教师要求。",
         "examples": ["wkhelper discussion inspect --course 1001 --discussion 3001"],
     },
     "discussion reply": {
-        "description": "向指定讨论题提交发言内容，获取平时分考核进度。",
+        "description": "发表讨论回复完成考核任务。",
         "side_effects": "remote_write",
         "requires_confirm": True,
         "examples": [
@@ -199,7 +189,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "discussion delete": {
-        "description": "删除已发布的讨论发言。注意：删除可能导致对应讨论题节点的打卡状态回退。",
+        "description": "删除已发表的讨论回复。",
         "side_effects": "remote_delete",
         "requires_confirm": True,
         "examples": [
@@ -208,41 +198,39 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "notice list": {
-        "description": "有界分页列出指定课程的公告/通知节点及已读状态（`leaf_type=10`）。",
+        "description": "查询指定课程的公告与通知列表及已读状态。",
         "examples": ["wkhelper notice list --course 1001 --status pending"],
     },
     "notice inspect": {
-        "description": "读取公告正文（Markdown）、发布者与发布时间。",
+        "description": "查看公告正文、发布者与发布时间。",
         "examples": ["wkhelper notice inspect --course 1001 --notice 4001"],
     },
     "exam list": {
-        "description": "有界分页列出指定课程的期中/期末考试、开考时间与截止时间。",
+        "description": "查询指定课程的期中/期末考试列表与截止时间。",
         "examples": ["wkhelper exam list --course 1001"],
     },
     "exam inspect": {
-        "description": "查看考试封面、考试须知、满分、限时时长与考场状态。",
+        "description": "查看考试封面、考试须知、分值与考场状态。",
         "examples": ["wkhelper exam inspect --course 1001 --exam 2001"],
     },
     "exam status": {
-        "description": "汇总考场 cover/refresh_time/cache_results/problem_results 状态（只读诊断）。",
+        "description": "检查考场接口与暂存状态 (只读诊断)。",
         "examples": ["wkhelper exam status --course 1001 --exam 2001"],
     },
     "exam result": {
-        "description": "读取考场成绩与作答结果概览（只读）。",
+        "description": "查看考场成绩与作答结果 (只读)。",
         "examples": ["wkhelper exam result --course 1001 --exam 2001"],
     },
     "exam close": {
-        "description": "关闭 exam start 拉起的考场浏览器会话并清理会话文件。",
+        "description": "关闭 exam start 打开的考场浏览器会话并清理临时状态。",
         "side_effects": "local_write",
         "examples": ["wkhelper exam close"],
     },
     "exam answer": {
         "description": (
-            "在已打开的前台考场浏览器页面中模拟点击选项或输入文本完成单题作答，由考场前端页面自动暂存。"
-            "必须先用 `exam start --confirm` 打开前台考场浏览器。"
-            "`saved` 要求页面请求内容一致且返回有效业务成功码；未捕获请求或响应证据未知时回读一次暂存作答，明确拒绝不回读。"
-            "强监考考试（在线监考/人脸核验/网页截屏/线下考场）一律拒绝执行，已交卷或已缺考的考试同样拒绝。"
-            "客观题用逗号分隔多个选项键（判断题自动映射正确/错误），填空题按空逗号分隔，主观题整段填入。"
+            "在已打开的考场浏览器中作答单道题目，由考场前端自动暂存。"
+            "需先执行 `exam start --confirm` 打开考场浏览器；强监考考试拒绝执行。"
+            "客观题传选项键 (多选用逗号分隔)，填空题按空用逗号分隔，主观题整段填入。"
         ),
         "side_effects": "remote_write",
         "requires_confirm": True,
@@ -253,7 +241,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "exam export": {
-        "description": "把考场试卷导出为 Markdown 或 JSON，可下载题干与选项配图，拒绝覆盖已有文件。",
+        "description": "将考场试卷导出为 Markdown 或 JSON 文件，支持下载配图。",
         "side_effects": "local_file_write",
         "examples": [
             "wkhelper exam export --course 1001 --exam 2001 --output ./exam.md",
@@ -262,14 +250,13 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "exam paper": {
-        "description": "读取考场子系统下发的整卷题目（只读，不提交答案）。",
+        "description": "查看考场试卷题目 (只读)。",
         "examples": ["wkhelper exam paper --course 1001 --exam 2001"],
     },
     "exam start": {
         "description": (
-            "显式确认后向平台申请考场会话令牌并打开前台考场浏览器，保持考场页面以维持监考与心跳采集。"
-            "传入 `--begin` 会在前台浏览器中点击开始答题按钮，经网页发出开始答题请求并验证进入答题页后生效；"
-            "`--dry-run` 仅预览；强监考考试拒绝进入。"
+            "打开考场浏览器窗口；传入 `--begin` 在浏览器中自动点击开始答题并启动计时。"
+            "`--dry-run` 仅预览考场信息，不实际进入；强监考考试拒绝进入。"
         ),
         "side_effects": "remote_write",
         "requires_confirm": True,
@@ -280,7 +267,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "questions export": {
-        "description": "将课程全量作业题目汇总导出为 Markdown 或 JSON，支持 --only-correct-answers 仅保留标准答案。",
+        "description": "将课程全部作业题目导出为 Markdown 或 JSON 文件，支持 --only-correct-answers 仅保留标准答案。",
         "side_effects": "local_file_write",
         "examples": [
             "wkhelper questions export --course 1001 --output ./questions.md",

@@ -23,13 +23,13 @@ class SessionOptions(Model):
 
     model_config = ConfigDict(frozen=True)
 
-    format: Annotated[OutputFormat | None, Parameter(help="输出格式：json 或 md（缺省按 TTY 推断）")] = None
-    data_dir: Annotated[str | None, Parameter(help="凭据与检查点数据目录")] = None
-    credential_mode: Annotated[CredentialMode, Parameter(help="凭据存储模式")] = "system"
-    cookie_file: Annotated[str | None, Parameter(help="会话 Cookie 文件（需配合 `--credential-mode session`）")] = None
-    debug: Annotated[bool, Parameter(help="输出调试堆栈与 NDJSON 事件")] = False
-    user_agent: Annotated[str | None, Parameter(help="覆盖请求 User-Agent")] = None
-    proxy: Annotated[str | None, Parameter(help="HTTP 代理地址")] = None
+    format: Annotated[OutputFormat | None, Parameter(help="输出格式 (json, md；默认根据 TTY 自动推断)")] = None
+    data_dir: Annotated[str | None, Parameter(help="凭据与检查点数据存储目录")] = None
+    credential_mode: Annotated[CredentialMode, Parameter(help="凭据存储模式 (system: 系统安全保管库, session: 仅内存)")] = "system"
+    cookie_file: Annotated[str | None, Parameter(help="会话 Cookie 文件路径 (搭配 --credential-mode session)")] = None
+    debug: Annotated[bool, Parameter(help="启用调试模式 (输出错误堆栈与 HTTP 请求追踪事件)")] = False
+    user_agent: Annotated[str | None, Parameter(help="自定义请求 User-Agent (将关闭默认指纹伪装)")] = None
+    proxy: Annotated[str | None, Parameter(help="HTTP/SOCKS5 代理地址")] = None
 
     @model_validator(mode="after")
     def validate_cookie_mode(self) -> Self:

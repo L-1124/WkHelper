@@ -4,76 +4,85 @@
 [![Package Manager](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square)](https://github.com/astral-sh/uv)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff)
 
-面向 AI Agent 与自动化工作流的 Headless 网课自动化 CLI，支持**雨课堂**（`yuketang.cn` / 高校定制平台）、**学堂在线**（`xuetangx.com`）与**中国大学 MOOC**（`icourse163.org`）。
+面向 AI Agent 与自动化工作流的网课自动化 CLI 工具，支持**雨课堂**、**学堂在线**与**中国大学 MOOC**。提供全流程非交互操作、结构化输出通道与反作弊风控防护。
 
-> **平台支持范围说明**：中国大学 MOOC（`icourse163`）支持账号登录、课程分页、多层章节大纲与节点进度查询，以及视频、章级评测、考试、资料和讨论的只读列表。随堂测验与章级评测分别分类，课件/PDF 与图文均计入资料列表。视频学习执行与作业提交等写操作仍由雨课堂（`ykt`）与学堂在线（`xtzx`）支持。
+---
+
+## 支持平台
+
+| 平台代码 | 平台名称 | 官网 | 支持能力 |
+|---|---|---|---|
+| `ykt` | 雨课堂 | `yuketang.cn` / 高校定制平台 | 账号登录、课程大纲、视频学习/抽帧、作业与题目检索/提交/导出、资料、讨论、考试 |
+| `xtzx` | 学堂在线 | `xuetangx.com` | 账号登录、课程大纲、视频学习/抽帧、作业与题目检索/提交/导出、资料、讨论、考试 |
+| `icourse163` | 中国大学 MOOC | `icourse163.org` | 账号登录、课程列表、多层章节大纲与进度查询，视频/作业/资料/讨论/考试只读列表 |
+
+> [!NOTE]
+> 中国大学 MOOC（`icourse163`）目前支持账号登录、课程大纲与进度查询，以及各模块只读列表；视频学习推进与作业提交等写操作暂未接入。
+
 ---
 
 ## 核心特性
 
-- **Agent 原生交互契约**
-  - **stdout**：单行严格 JSON 响应信封（含 `schema_version`、`ok`、`data` 与自引导 `next_actions`）。
-  - **stderr**：结构化 NDJSON 实时事件通道（`video.progress`、`homework.progress`、`http.trace` 等），杜绝控制字符污染。
-- **全平台多层章节树支持**
-  - 递归遍历解析单层、多层嵌套大纲（章 / 节 / 小节 / 单元），精确识别全量叶子任务（视频、音频、课堂实录、作业、测验与期末考试）。
-- **字体反混淆引擎**
-  - 内置基于字形矢量特征的动态字体反混淆解析，自动还原雨课堂作业与测验题目中的加密字形与公式。
-- **拟人化防风控体系**
-  - **心跳抖动**：视频心跳间隔支持随机抖动（`--jitter`），消除周期性机器指纹。
-  - **切换冷却**：跨视频支持设置间隔等待（`--video-delay`）。
-  - **作业节流**：支持自定义并发（`--concurrency`，默认单线程）、逐题提交延迟（`--delay` / `--delay-jitter`）与乱序提交（`--random-order`）。
-  - **浏览器指纹**：默认伪装 Chrome 的 TLS/JA3 与 HTTP/2 指纹（`WKHELPER_IMPERSONATE` 可切换目标或 `none`），UA 与指纹保持一致。
-  - **网络出口**：全局支持指定代理通道（`--proxy`）与自定义浏览器标头（`--user-agent`，指定后会关闭指纹伪装）。
-- **安全凭据存储**
-  - 系统安全保管库（Windows Vault / macOS Keychain / SecretService）仅保存主密钥；Cookie 使用 Fernet 认证加密后存入 SQLite，避免系统凭据的单条容量限制。`--credential-mode session` 全程仅使用内存。
-- **完备的机器契约自省**
-  - 提供 `wkhelper schema`，供 LLM Agent 按需自省命令规范、参数定义、副作用等级与调用示例。
+- **Agent 优先交互契约**
+  - **stdout**：单行严格 JSON 响应信封（含 `schema_version`、`ok`、`data` 与自引导 `next_actions`），方便脚本与 LLM 流水线解析。
+  - **stderr**：结构化 NDJSON 实时事件流（`video.progress`、`homework.progress`、`http.trace` 等），杜绝控制字符污染。
+  - **机器自省**：内置 `wkhelper schema`，供 Agent 自行查询命令规范、参数约束与调用示例。
+- **浏览器驱动登录与安全存储**
+  - 基于 Chrome DevTools Protocol (CDP) 打开官方登录页，用户手动完成登录后自动捕获核心凭据并核验。
+  - 凭据使用 Fernet 认证加密存储于本地 SQLite，主密钥由操作系统安全保管库（Windows Vault / macOS Keychain / SecretService）托管；支持纯内存会话模式（`--credential-mode session`）。
+- **多层大纲解析与反混淆**
+  - 递归遍历解析单层与多层嵌套大纲（章 / 节 / 小节 / 课时），统一识别视频、课件、随堂测验、作业与考试节点。
+  - 内置基于字形矢量特征的动态字体反混淆引擎，自动还原雨课堂作业与测验题目中的加密字形与公式。
+- **拟人化风控与流量防护**
+  - **节奏控制**：视频心跳支持随机浮动（`--jitter`），跨视频支持冷却等待（`--video-delay`）。
+  - **作业节流**：支持并发控制（`--concurrency`）、逐题提交等待（`--delay` / `--delay-jitter`）与乱序提交（`--random-order`）。
+  - **指纹伪装**：默认模拟 Chrome 的 TLS/JA3 与 HTTP/2 指纹，支持 HTTP/SOCKS5 代理出口（`--proxy`）。
+- **无头视频抽帧**
+  - 依托浏览器 CDP 对网页播放器直接提取视频帧，支持指定时间戳、采样步长或均匀采样，无需本地安装 ffmpeg 或音视频解码库。
 
 ---
 
-## 架构概览
+## 环境要求与安装
 
-```mermaid
-flowchart LR
-    A[AI Agent / 终端用户] -->|CLI 参数| B[WkHelper CLI]
-    B --> C[按业务组织的 service / runner]
-    C --> D[domain: 数据模型与规则]
-    C --> E[platform: 雨课堂 / 学堂在线 / 中国大学 MOOC 协议]
-    C --> F[infra: 凭据 / HTTP / 时钟 / CDP / 文件]
-    E --> D
-    E --> F
-    B --> G[统一 JSON 信封 / Markdown]
-    F --> H[结构化 NDJSON 事件流]
-```
+### 前置要求
 
-数据契约统一使用 Pydantic v2：领域数据、输出信封、命令 Schema、执行配置和持久化会话采用模型声明校验、默认值与序列化省略规则。动态 JSON 使用 Pydantic 原生 `JsonValue`，不维护另一套递归类型或 `to_dict` / `from_dict` 转换；浏览器进程句柄等资源对象不属于数据契约。
+- **Python** `>= 3.12`
+- **本地浏览器**：Google Chrome 或 Microsoft Edge（用于浏览器登录及视频抽帧）
+- **包管理器**：推荐 [`uv`](https://github.com/astral-sh/uv)，亦支持 `pipx` 或 `pip`
 
-全局会话参数由 Cyclopts 直接构造不可变的 `SessionOptions`。`async_main(argv)` 为每次调用建立独立的 `ContextVar` 上下文，正常返回、异常及取消后恢复外层配置与调试开关；业务入口通过 `get_context()` 访问本次配置，不保留进程级可变 `ctx`。直接调用依赖上下文的命令时须显式进入 `execution_context(...)`。上下文隔离不等于输出流隔离，同进程并发调用仍共享 stdout/stderr。
-
----
-
-## 安装与快速上手
-
-### 环境要求
-
-- Python `>= 3.12`
-- 本地浏览器：Google Chrome 或 Microsoft Edge（浏览器登录及视频纯净抽帧依赖 CDP 驱动）
-- 包管理器任选其一：[`uv`](https://github.com/astral-sh/uv)（推荐）、[`pipx`](https://pipx.pypa.io/)、`pip`
-### 安装
-
-项目尚未发布到 PyPI，请从 GitHub 仓库安装。
+### 安装方法
 
 ```bash
+# 推荐：使用 uv 安装为全局 CLI 工具
 uv tool install --force git+https://github.com/L-1124/WkHelper.git
-uvx --from git+https://github.com/L-1124/WkHelper.git wkhelper status
+
+# 或者使用 pipx
+pipx install git+https://github.com/L-1124/WkHelper.git
+
+# 或者使用 pip
 pip install git+https://github.com/L-1124/WkHelper.git
 ```
 
-安装后自检：
+安装后验证环境：
 
 ```bash
-wkhelper --version     # 0.1.0
-wkhelper status        # 本地凭据后端与已存账号
+wkhelper --version
+wkhelper status
+```
+
+---
+
+## 快速上手
+
+```bash
+# 1. 登录账号（自动启动浏览器窗口，登录成功后自动捕获并加密保存）
+wkhelper auth login -p ykt
+
+# 2. 列出在学课程
+wkhelper course list -p ykt
+
+# 3. 查看指定课程详情与大纲结构
+wkhelper course inspect -c 1966245:31318907
 ```
 
 ---
@@ -82,240 +91,202 @@ wkhelper status        # 本地凭据后端与已存账号
 
 ### 1. 账号认证 (`auth`)
 
-登录默认采用官方页面浏览器驱动（基于 CDP）：自动启动受管浏览器窗口打开官方登录页，用户在浏览器中手动完成登录（扫码、手机验证码或账号密码均可）。WkHelper 自动捕获认证 Cookie（默认 120 秒超时），经服务端校验通过后关闭浏览器并清理临时配置目录，默认将 Cookie 加密保存至本地 SQLite，主密钥保存在系统安全保管库。
-
-历史参数 `--method qrcode`、`--display` 与 `--open-browser` 仍可解析，统一使用官方页面浏览器登录；二维码协议与本地二维码服务已移除。
-
 ```bash
-# 启动官方页面浏览器登录（支持 ykt / xtzx / icourse163，默认方式）
+# 启动浏览器完成官方登录（支持 ykt / xtzx / icourse163，默认方式）
 wkhelper auth login -p ykt
 
-# 显式指定浏览器登录方式与超时时间
+# 指定登录方式与超时时间
 wkhelper auth login -p xtzx -m browser --timeout 180
 
-# 导入 Cookie 文件登录（无图形环境或自动化 CI）
+# 导入 Cookie 文件登录（适用于无图形环境或自动化 CI）
 wkhelper auth login -p icourse163 -m cookie --cookie-file cookies.json
 
-# 验证当前凭据有效性
+# 检查已保存凭据的在线有效性
 wkhelper auth status -p ykt
 
-# 查看本地存储的全部账号摘要（绝不输出敏感 Cookie）
+# 查看本地存储的账号列表（绝不输出明文 Cookie）
 wkhelper auth list
+
+# 删除指定账号凭据
+wkhelper auth remove -p ykt -a 123456 --confirm
 ```
 
-账号元数据与 Cookie 密文在同一个 SQLite 事务中保存或删除；事务失败时保留原数据。旧版 Keyring Cookie 在读取时自动加密迁移，数据库提交成功后才清理旧秘密；清理失败会保留待处理记录供后续重试。
-
-每个数据库使用独立主密钥。密钥缺失、密文损坏或账号身份不匹配时会明确报错，不自动重置或覆盖。备份、迁移环境时必须同时保留 SQLite 数据库及对应的系统 Keyring 主密钥；仅复制数据库无法恢复登录态，当前 CLI 不提供密钥导出命令。`session` 模式不创建磁盘数据库，也不访问系统 Keyring。
+> [!NOTE]
+> 凭据数据库与操作系统 Keyring 主密钥一一对应。备份或迁移环境时需同时保留 SQLite 数据库与系统保管库中的主密钥。`--credential-mode session` 全程仅驻留内存，退出即销毁。
 
 ### 2. 课程查询 (`course`)
 
 ```bash
-# 列出在学课程（返回包含 classroom_id 的唯一引用）
+# 查询当前账号在学课程（支持有界分页）
 wkhelper course list -p ykt --limit 10
 
-# 查看指定课程详细信息与元数据大纲
+# 查看指定课程详情、考核权重与成绩看板
 wkhelper course inspect -c 1966245:31318907
 ```
 
-### 3. 视频学习与计划编排 (`video`)
+### 3. 视频学习与抽帧 (`video`)
 
 ```bash
 # 查看待完成视频列表
 wkhelper video list -c 1966245:31318907 --status pending
 
-# 检查单视频进度与参数约束
+# 检查单视频观看进度与限制
 wkhelper video inspect -c 1966245:31318907 -v 75369628
 
-# 开启防风控参数执行视频学习（预览）
+# 学习单个视频（预览参数，不发送心跳）
 wkhelper video learn -c 1966245:31318907 -v 75369628 --jitter 0.2 --dry-run
 
-# 正式执行视频推进（写操作强制要求 --confirm）
+# 执行单个视频学习（写操作需显式附加 --confirm）
 wkhelper video learn -c 1966245:31318907 -v 75369628 --jitter 0.2 --confirm
 
-# 基于 JSON 计划文件批量执行，并记录断点检查点
+# 基于计划文件批量执行学习任务并记录检查点
 wkhelper video learn --plan-file plan.json --checkpoint-file cp.json --confirm
+
+# 对视频进行抽帧截图（指定时间戳或均匀采样）
+wkhelper video snapshot -c 1966245:31318907 -v 75369628 --timestamps 30,60,90
+wkhelper video snapshot -c 1966245:31318907 -v 75369628 --count 5 -o ./frames
 ```
 
-计划输入由 Pydantic v2 严格校验：拒绝未知字段、布尔值冒充整数及 NaN/Infinity；错误仅披露字段路径与规则，返回 `INVALID_ARGUMENT`（退出码 2）。课程和视频 ID 会去除首尾空白，名称保持原文；`execution` / `video_defaults` 的 `null` 使用默认配置。参数优先级为内建默认 < 计划默认 < 目标参数 < CLI 显式覆盖。检查点逐条恢复，忽略坏记录、未知目标与重复目标，不将损坏检查点当成计划参数错误。
-
 > [!TIP]
-> 批量执行支持断点续学。追加 `--resume-from cp.json` 会跳过满足本次完成阈值的记录；提高阈值后，旧的部分完成记录会继续执行。`--total-timeout` 限制整次执行，包括已启动任务及视频切换等待。
-> 视频截帧缓存按实际认证平台与用户隔离；并发请求等待同一会话时不会阻塞事件循环，清理命令遇到被占用的会话会跳过。
+> 批量执行支持断点续学。传入 `--resume-from cp.json` 可跳过已达到阈值的视频；遇到停滞任务时将依 `--on-error` 策略决定终止或跳过。
 
 ### 4. 作业与题目检索 (`homework` / `question`)
 
 ```bash
-# 查询未完成作业列表
+# 查看未完成作业列表
 wkhelper homework list -c 1966245:31318907 --status pending
 
-# 导出整门课的作业及测试题目为 Markdown（供 LLM 分析解题）
-wkhelper questions export -c 1966245:31318907 -o ./questions.md
+# 查看作业元数据与题目题型大纲
+wkhelper homework inspect -c 1966245:31318907 -w 84704898
 
 # 查看单道题目的完整反混淆题干、选项与作答结果
 wkhelper question get -c 1966245:31318907 -w 84704898 -q 73577720
 
-# 模拟真实人类作答节奏提交作业（单线程 + 依据题目难易度动态浮动间隔）
+# 提交整份作业（支持自定义间隔与随机顺序）
 wkhelper homework submit -c 1966245:31318907 -w 84704898 \
   --answers '{"73577720": ["C"], "73577724": ["B"]}' \
   --concurrency 1 --delay 8.0 --delay-jitter 3.0 --random-order --confirm
+
+# 导出全课程作业题目为 Markdown（可用于离线归档或模型分析）
+wkhelper questions export -c 1966245:31318907 -o ./questions.md
 ```
 
-> [!NOTE]
-> `homework` / `questions` 覆盖章节作业（`leaf_type=6`）；期中、期末等考场由 `exam` 命令族处理。
-> 导出按作业 ID 区分同名节点。任一作业抓取失败时整次导出报错，不发布不完整文件；作业与考试导出均拒绝覆盖既有目标，包括导出期间由其他进程创建的文件。
-### 5. 资料阅读与图文题 (`article`)
+### 5. 课件与资料 (`article`)
 
 ```bash
-# 查看课程资料与图文任务列表
+# 查询待阅读资料列表
 wkhelper article list -c 1966245:31318907 --status pending
 
-# 标记指定资料节点为已读已完成（写操作要求 --confirm）
+# 标记资料为已读完成
 wkhelper article read -c 1966245:31318907 -a 84705076 --confirm
 ```
 
-资料标记必须获得平台成功确认；平台拒绝或响应未确认成功时输出错误信封，退出码为 6，不宣称已完成。
-
-### 6. 讨论题互动打卡 (`discussion`)
+### 6. 讨论区互动 (`discussion`)
 
 ```bash
-# 查询全课讨论题及参与发言状态
+# 查询未完成的讨论题目
 wkhelper discussion list -c 1966245:31318907 --status pending
 
-# 查看特定讨论题要求与教师引导题干
+# 查看讨论题详情与教师要求
 wkhelper discussion inspect -c 1966245:31318907 -d 84704891
 
-# 提交讨论发言完成平时分打卡考核
+# 发表讨论回复完成平时分要求
 wkhelper discussion reply -c 1966245:31318907 -d 84704891 \
-  --content "今天的三件好事：第一，掌握了积极心理学的新视角..." --confirm
+  --content "今天的心得体会与学习总结..." --confirm
+
+# 删除已发表的回复发言
+wkhelper discussion delete -c 1966245:31318907 -m 8888 --confirm
 ```
 
-### 7. 公告与通知 (`notice`)
+### 7. 课程公告 (`notice`)
 
 ```bash
-# 查询课程公告/通知节点及已读状态
+# 查询课程公告列表
 wkhelper notice list -c 1966245:31318907 --status pending
 
-# 读取公告正文（Markdown）、发布者与发布时间
+# 查看公告详情与正文
 wkhelper notice inspect -c 1966245:31318907 -n 84705560
 ```
 
-### 8. 考场与考试 (`exam`)
+### 8. 考试与考场管理 (`exam`)
 
 ```bash
-# 查询课程内的期中/期末考试及截止时间
+# 查询课程考试列表与截止时间
 wkhelper exam list -c 1966245:31318907
 
-# 查看考试封面、考场须知与监考开关
+# 查看考试封面、须知、分值与监考状态
 wkhelper exam inspect -c 1966245:31318907 -e 84705331
 
-# 预览进入考场（不申请令牌）
-wkhelper exam start -c 1966245:31318907 -e 84705331 --dry-run
-
-# 进入考场：打开前台浏览器，停留在考场入口
+# 打开考场浏览器窗口（停留在考场入口）
 wkhelper exam start -c 1966245:31318907 -e 84705331 --confirm
 
-# 开始作答：在前台浏览器中点击“开始答题”按钮，由网页发出 start_paper 并进入答题页后生效
+# 在浏览器中自动点击“开始答题”并启动计时
 wkhelper exam start -c 1966245:31318907 -e 84705331 --begin --confirm
 
-# 正式进入考场始终打开前台浏览器；--dry-run 只预览，不打开浏览器
-
-# 读取整卷题目（只读）或导出为 Markdown
+# 查看考场试卷题目（只读）
 wkhelper exam paper -c 1966245:31318907 -e 84705331
+
+# 导出考场试卷为 Markdown 或 JSON
 wkhelper exam export -c 1966245:31318907 -e 84705331 -o ./exam.md
 
-# 在考场页面中模拟点击/输入完成单题作答（需保持浏览器会话）
+# 在已打开的考场浏览器中作答单道题目
 wkhelper exam answer -c 1966245:31318907 -e 84705331 -q 9001 --answer A --confirm
 
-# 只读诊断：封面/refresh_time/暂存作答/成绩接口状态
+# 检查考场接口与暂存状态诊断
 wkhelper exam status -c 1966245:31318907 -e 84705331
 
-# 结束考场浏览器会话
+# 关闭考场浏览器并清理会话
 wkhelper exam close
 ```
 
 > [!IMPORTANT]
-> - `exam start` 正式执行时打开前台浏览器；`--dry-run` 预览考场信息。`--begin` 在浏览器点击“开始答题”，核验网页响应业务成功且题目加载完成后返回。
-> - 考场作答依托前台真实浏览器页面的模拟点击与输入完成；交卷须由本人在浏览器中核对后自行点击。
-> - `exam answer` 优先通过 CDP 抓取页面自身的 `answer_problem` 请求内容与有效业务成功码进行核验；未捕获到请求或响应证据未知时，回读一次 `/exam_room/cache_results` 兜底；仍无法确认则返回 `saved: false`。
-> - 平台明确拒绝或页面实际提交内容与预期不一致（例如选项未绑定）时直接判定 `saved: false`，不受服务端历史暂存干扰。
-> - 判断题选项键支持 `true`/`false`，传入 `--answer 正确` 会自动映射。
-> - 在线监考、人脸/实名核验、网页截屏与线下机房等实际启用的监考项会锁定全部自动化入场与作答操作。
-> - `app_capture_screen`、`app_front_random_snap` 属于 App 端从属配置，未开启在线监考时不视为已启用监考。
-> - 强监考锁定仅限制自动化写操作，`exam inspect` 等只读查询保持可用。
+> 考场作答依托真实前台浏览器完成，最终交卷属于不可逆高危操作，必须由考生本人在考场页面核对后自行点击。启用在线人脸监考、截屏检测或线下考场的考试会触发安全锁定，拒绝执行自动化写操作。
 
-### 9. 契约自省 (`schema`)
+### 9. 命令规范与 Schema 自省 (`schema`)
 
 ```bash
-# 查询所有命令列表与摘要索引
+# 查看所有命令列表与摘要索引
 wkhelper schema
 
-# 展开特定命令的完整参数契约、类型与示例
+# 展开特定命令的完整参数契约与 Schema
 wkhelper schema --path "homework submit" --full
 ```
 
 ---
 
-## 防风控参数配置
+## 防风控参数与会话配置
 
-| 模块 | 参数 | 默认值 | 作用说明 |
+| 作用域 | 参数 | 默认值 | 说明 |
 |---|---|---|---|
-| **全局** | `--proxy <url>` | 无 | 路由全局网络流量通过 HTTP / SOCKS5 代理出口 |
-| **全局** | `--user-agent <ua>` | 伪装目标自带 | 指定真实浏览器 UA；与指纹伪装互斥，指定后回退为 libcurl 默认指纹 |
-| **全局** | `--format <json\|md>` | 按 TTY 推断 | 强制输出格式，非 TTY 下默认 `json` |
-| **全局** | `--credential-mode <system\|session>` | `system` | SQLite 加密保存 Cookie、系统 Keyring 保存主密钥，或全程仅使用内存 |
-| **全局** | `--data-dir <dir>` | 平台默认目录 | 加密凭据数据库与检查点数据目录 |
-| **全局** | `--cookie-file <path>` | 无 | 会话 Cookie 文件，需配合 `--credential-mode session` |
-| **作业提交** | `--concurrency <N>` | `1` | 严格限制并发提交数，默认单线程顺序提交 |
-| **作业提交** | `--delay <sec>` | `8.0` | 每个提交任务获得并发槽位后等待；默认并发 1 时逐题保持间隔，并发大于 1 时不承诺全局请求间隔 |
-| **作业提交** | `--delay-jitter <sec>`| `3.0` | 提交间隔浮动范围，实际间隔为 `delay ± jitter`，消除固定周期机械特征 |
-| **作业提交** | `--random-order` | `false` | 随机打乱题目提交次序，打破从第 1 题顺序作答的机械规律 |
-| **单题/考试** | `--delay <sec>` | `0.0` | 提交或作答前思考等待秒数，建议依据难度动态传入（简单题 5~15s，多选/计算 15~35s，主观题 45~90s） |
-| **单题/考试** | `--delay-jitter <sec>`| `0.0` | 思考等待随机浮动范围，消除固定机器节奏 |
+| **全局** | `--proxy <url>` | 无 | 全局网络流量代理（支持 HTTP / SOCKS5） |
+| **全局** | `--user-agent <ua>` | 自动模拟 | 自定义浏览器 User-Agent（指定后回退为通用指纹） |
+| **全局** | `--format <json\|md>` | 自动推断 | 统一输出格式，终端环境下默认 `md`，脚本管线默认 `json` |
+| **全局** | `--credential-mode <system\|session>` | `system` | 凭据存储模式（`system` 为加密存储，`session` 为纯内存） |
+| **全局** | `--data-dir <dir>` | 默认数据目录 | 凭据数据库与检查点存储目录 |
+| **全局** | `--cookie-file <path>` | 无 | 静态会话 Cookie 文件（需配合 `--credential-mode session`） |
+| **作业提交** | `--concurrency <N>` | `1` | 并发提交任务数，默认单任务顺序提交 |
+| **作业提交** | `--delay <sec>` | `8.0` | 单题提交基础间隔秒数 |
+| **作业提交** | `--delay-jitter <sec>`| `3.0` | 提交间隔随机抖动秒数，实际间隔为 `delay ± jitter` |
+| **作业提交** | `--random-order` | `false` | 随机打乱题目提交顺序 |
+| **单题/考试** | `--delay <sec>` | `0.0` | 提交前等待思考秒数 |
+| **单题/考试** | `--delay-jitter <sec>`| `0.0` | 提交等待随机浮动秒数 |
 | **视频学习** | `--jitter <ratio>` | `0.2` | 心跳间隔随机浮动比例（如 `1.5s ± 20%`） |
-| **视频学习** | `--video-delay <sec>` | `3.0` | 批量学习时视频切换之间的冷却等待秒数 |
-
-> 全局参数可置于子命令之前或之后，例如 `wkhelper --format md course list` 与
-> `wkhelper course list --format md` 等价；同名命令级选项（如 `auth login --cookie-file`）优先归属该命令。
+| **视频学习** | `--video-delay <sec>` | `3.0` | 连续视频切换之间的冷却等待秒数 |
 
 ---
 
-## 调试模式 (`--debug`)
+## 调试模式与事件流 (`--debug`)
 
-追加全局 `--debug` 参数可激活面向 Agent 的结构化调试体系：
-
-```bash
-wkhelper --debug course inspect -c 97330:29593706
-```
-
-- **错误堆栈诊断**：错误信封中的 `error.details` 自动填充 `exception_type` 与结构化 `traceback` 数组；非调试模式下严格隐藏内部堆栈。
-- **实时网络追踪**：stderr 通道以 NDJSON 输出 `http.trace` 追踪流（含请求方法、URL、响应状态码与微秒耗时），保持标准格式不被文本打乱。
-
----
-
-## 开发与贡献
+追加全局 `--debug` 选项可输出面向 Agent 的排错数据：
 
 ```bash
-# 同步依赖
-uv sync
-
-# 安装 Git hooks（迁移已有安装时覆盖旧垫片）
-uv run prek install -f
-
-# 运行全部仓库检查，沿用 .pre-commit-config.yaml
-uv run prek run --all-files
-
-# 代码格式化与质量检查
-uv run ruff check . --fix
-uv run ruff format .
-uv run pyrefly check
-
-# 运行单元测试
-uv run pytest -q
+wkhelper --debug course inspect -c 1966245:31318907
 ```
 
-Windows 下测试通过 `pytest-asyncio>=1.4` 的循环工厂钩子复用 CLI 的 Selector 循环，避免 `curl_cffi` 启用额外选择器线程；不屏蔽警告。可用 `uv run pytest -q -W error::curl_cffi.utils.CurlCffiWarning` 验证。
+- **异常诊断**：错误信封（stdout）自动携带结构化堆栈信息（`error.details.traceback`）。
+- **实时网络事件**：stderr 通道输出 `http.trace` 等实时 NDJSON 事件，包含请求方法、URL、HTTP 状态码与耗时。
 
 ---
 
 > [!WARNING]
-> 本项目仅供技术研究、接口逆向学习与自动化流程测试使用。请使用者严格遵守各在线教育平台的用户协议与学校相关规定，切勿用于作弊或任何违规用途。
+> 本项目仅供接口逆向研究、自动化测试与辅助学习使用。请严格遵守各在线教育平台的用户协议及学校相关规章制度，切勿用于作弊或任何违规用途。

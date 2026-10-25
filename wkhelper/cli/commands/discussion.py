@@ -25,7 +25,7 @@ async def discussion_list_cmd(
     limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[DiscussionListData]:
-    """查询课程讨论题列表。"""
+    """列出课程讨论题列表。"""
     validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         discussions = await get_discussions(plat, matched)
@@ -45,7 +45,7 @@ async def discussion_inspect_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[DiscussionTopicDetail]:
-    """查看讨论题详情与教师要求。"""
+    """查看讨论题详情与要求。"""
     async with _open_course(course, platform, account) as (plat, matched):
         detail = await get_discussion_detail(plat, discussion, matched)
         return CommandResult(data=detail)
@@ -55,13 +55,13 @@ async def discussion_inspect_cmd(
 async def discussion_reply_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     discussion: Annotated[str, Parameter(name=["--discussion", "-d"], help="讨论题节点 ID")],
-    content: Annotated[str, Parameter(name=["--content"], help="回复/发言内容")],
+    content: Annotated[str, Parameter(name=["--content"], help="回复内容")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验，不提交")] = False,
     confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认提交回复")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[DiscussionCommentResult]:
-    """发表讨论题回复完成平时分打卡。"""
+    """发表讨论回复。"""
     if not content.strip():
         raise ValueError("回复内容不能为空")
     if dry_run:
@@ -108,11 +108,11 @@ async def discussion_delete_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     comment: Annotated[str, Parameter(name=["--comment", "-m"], help="评论 ID")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验，不提交")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认删除发言")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认删除回复")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[DiscussionDeleteResult]:
-    """删除已发布的讨论发言。注意：删除发言可能导致对应讨论题节点的打卡状态回退。"""
+    """删除已发表的讨论回复。"""
     if not comment.strip():
         raise ValueError("评论 ID 不能为空")
     if dry_run:

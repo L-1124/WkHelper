@@ -29,7 +29,7 @@ from wkhelper.infra.events import set_debug_enabled
 
 app = App(
     name="wkhelper",
-    help="WkHelper: 面向 AI Agent 的网课自动化 CLI",
+    help="网课自动化 CLI",
     help_formatter="plain",
     console=CONSOLE,
     result_action=unified_result_action,

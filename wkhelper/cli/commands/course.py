@@ -13,7 +13,7 @@ from wkhelper.domain.actions import NextAction
 from wkhelper.domain.courses import CourseDetail, CourseItem, CourseListData, course_reference, dedupe_courses
 from wkhelper.infra.serialization import to_json_value
 
-course_app = App(name="course", help="课程查询")
+course_app = App(name="course", help="课程信息查询")
 
 
 @course_app.command(name="list")
@@ -23,7 +23,7 @@ async def course_list_cmd(
     limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[CourseListData]:
-    """查询当前账号的课程列表。"""
+    """列出当前账号的在学课程。"""
     validate_positive_limit(int, limit)
     async with _open_platform(platform, account) as plat:
         courses = dedupe_courses(await plat.get_courses())
@@ -49,7 +49,7 @@ async def course_inspect_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[CourseDetail]:
-    """查看指定课程的详细信息。"""
+    """查看指定课程的详细信息与大纲。"""
     async with _open_course(course, platform, account) as (plat, matched):
         clean_meta = {
             str(k): to_json_value(v) for k, v in matched.metadata.items() if not str(k).startswith("_") and not isinstance(v, set)

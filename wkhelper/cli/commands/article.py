@@ -12,7 +12,7 @@ from wkhelper.cli.inputs import Limit, validate_positive_limit
 from wkhelper.domain.content import ArticleListData, ArticleReadResult
 from wkhelper.domain.errors import APIError, ConfirmationRequiredError
 
-article_app = App(name="article", help="资料与图文任务管理")
+article_app = App(name="article", help="课件与资料管理")
 
 
 @article_app.command(name="list")
@@ -24,7 +24,7 @@ async def article_list_cmd(
     limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[ArticleListData]:
-    """查询课程资料/图文节点列表。"""
+    """列出课程资料与图文任务列表。"""
     validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         articles = await get_articles(plat, matched)
@@ -40,11 +40,11 @@ async def article_read_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     article: Annotated[str, Parameter(name=["--article", "-a"], help="资料/图文节点 ID")],
     dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅校验，不提交")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认执行标记已读")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认标记为已读")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account"], help="账号 ID")] = None,
 ) -> CommandResult[ArticleReadResult]:
-    """标记指定资料/图文节点为已读已完成。"""
+    """将指定资料标记为已读。"""
     if dry_run:
         return CommandResult(
             data=ArticleReadResult(

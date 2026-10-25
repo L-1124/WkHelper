@@ -124,7 +124,7 @@ async def exam_list_cmd(
     limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[ExamListData]:
-    """有界分页列出指定课程的期中/期末考试、开考时间与截止时间。"""
+    """列出指定课程的考试列表。"""
     validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         exams = await get_exams(plat, matched)
@@ -139,7 +139,7 @@ async def exam_inspect_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamCoverDetail]:
-    """查看考试封面、考试须知、满分、限时时长与考场状态。"""
+    """查看考试详情与考场规则。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
@@ -186,13 +186,13 @@ async def exam_inspect_cmd(
 async def exam_start_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
-    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="校验并预览考场信息，不触发开始考试")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认打开前台考场浏览器（不开始答题，答题需配合 --begin）")] = False,
-    begin: Annotated[bool, Parameter(name=["--begin"], help="在浏览器中点击开始答题，核验网页响应并验证进入答题页")] = False,
+    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅预览考场信息，不实际进入")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认打开考场浏览器窗口")] = False,
+    begin: Annotated[bool, Parameter(name=["--begin"], help="在浏览器中自动点击开始答题")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamStartResult] | CommandResult[ExamStartPreview]:
-    """打开前台考场浏览器；传入 `--begin` 在浏览器中点击开始答题并验证进入答题页。"""
+    """打开考场浏览器；传入 `--begin` 自动点击开始答题。"""
     if not confirm and not dry_run:
         raise ConfirmationRequiredError(
             f"进入考场需传入 `--confirm`；传入 `--begin` 会在浏览器中点击开始答题。\n目标考试 ID: {exam}",
@@ -264,7 +264,7 @@ async def exam_paper_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamPaperData]:
-    """读取考场子系统下发的整卷题目（只读，不提交答案）。"""
+    """查看考场试卷题目 (只读)。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
@@ -280,13 +280,13 @@ async def exam_export_cmd(
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     output: Annotated[str, Parameter(name=["--output", "-o"], help="导出文件路径")],
     format: Annotated[
-        Literal["md", "markdown", "json"] | None, Parameter(name=["--format"], help="导出格式（缺省按 output 后缀自动推断，默认 md）")
+        Literal["md", "markdown", "json"] | None, Parameter(name=["--format"], help="导出格式 (缺省根据 output 后缀推断，默认 md)")
     ] = None,
-    download_images: Annotated[bool, Parameter(name=["--download-images"], help="下载题干与选项配图到 assets 目录")] = True,
+    download_images: Annotated[bool, Parameter(name=["--download-images"], help="是否下载题干与选项配图到 assets 目录")] = True,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamExportResult]:
-    """把考场试卷导出为 Markdown 或 JSON，可选下载配图，拒绝覆盖已有文件。"""
+    """导出考场试卷为 Markdown 或 JSON 文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
@@ -308,27 +308,30 @@ async def exam_answer_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
     question: Annotated[str, Parameter(name=["--question", "-q"], help="题目 ID")],
-    answer: Annotated[str, Parameter(name=["--answer"], help="答案键，多选用逗号分隔")],
+    answer: Annotated[
+        str,
+        Parameter(name=["--answer"], help="作答内容 (单选传 'A'，多选逗号分隔如 'A,B'，判断传 'true'/'false'，填空逗号分隔，主观题传文本)"),
+    ],
     delay: Annotated[
         float,
         Parameter(
             name=["--delay"],
-            help="单题作答前思考等待秒数（默认 0.0s；建议依据难度动态指定：客观题 5~15s，多选/计算 15~35s，主观题 45~90s，模拟真人）",
+            help="作答前等待秒数",
         ),
     ] = 0.0,
     delay_jitter: Annotated[
         float,
         Parameter(
             name=["--delay-jitter"],
-            help="思考等待随机浮动秒数（默认 0.0s；实际延迟为 delay ± jitter）",
+            help="等待时间随机抖动秒数 (实际等待 delay ± jitter)",
         ),
     ] = 0.0,
-    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="只预览将要提交的作答")] = False,
-    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认写入服务端作答")] = False,
+    dry_run: Annotated[bool, Parameter(name=["--dry-run"], help="仅预览作答内容，不写入考场")] = False,
+    confirm: Annotated[bool, Parameter(name=["--confirm"], help="确认写入考场页面作答")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamAnswerResult]:
-    """在考场浏览器页面中模拟点击作答（由前端页面自动暂存）。"""
+    """在考场中作答单道题目。"""
     raw_answer = answer.strip()
     if not raw_answer:
         raise ConfirmationRequiredError("答案不能为空，请使用 `--answer A` 或 `--answer A,B`")
@@ -477,7 +480,7 @@ async def exam_answer_cmd(
 
 @exam_app.command(name="close")
 async def exam_close_cmd() -> CommandResult[ExamBrowserCloseResult]:
-    """关闭 `exam start` 拉起的考场浏览器会话。"""
+    """关闭考场浏览器并清理会话。"""
     session = load_session(get_context().options.data_dir)
     if session is None:
         return CommandResult[ExamBrowserCloseResult](
@@ -501,7 +504,7 @@ async def exam_result_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamResultData]:
-    """读取考场成绩与作答结果概览（只读）。"""
+    """查看考试成绩与作答结果 (只读)。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
@@ -536,7 +539,7 @@ async def exam_status_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamStatusData]:
-    """汇总考场 cover/refresh_time/cache_results/problem_results 状态（只读诊断）。"""
+    """检查考场接口与暂存状态 (只读诊断)。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)

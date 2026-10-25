@@ -20,7 +20,7 @@ from wkhelper.video.service import get_video_progress, get_videos
 from wkhelper.video.session_pool import cleanup_all_warm_sessions
 from wkhelper.video.snapshot import capture_video_frames
 
-video_app = App(name="video", help="视频学习与查询")
+video_app = App(name="video", help="视频查询、播放与抽帧")
 
 
 @video_app.command(name="list")
@@ -32,7 +32,7 @@ async def video_list_cmd(
     limit: Limit = 10,
     cursor: Annotated[str | None, Parameter(name=["--cursor"], help="分页游标")] = None,
 ) -> CommandResult[VideoListData]:
-    """查询课程视频列表。"""
+    """查询课程的视频任务列表。"""
     validate_positive_limit(int, limit)
     async with _open_course(course, platform, account) as (plat, matched):
         videos = await get_videos(plat, matched)
@@ -59,7 +59,7 @@ async def video_inspect_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[VideoProgress]:
-    """查询单视频进度与执行约束。"""
+    """查看单个视频的观看进度与参数。"""
     async with _open_course(course, platform, account) as (plat, matched):
         return CommandResult(data=await get_video_progress(plat, video, matched))
 
@@ -67,19 +67,21 @@ async def video_inspect_cmd(
 @video_app.command(name="learn")
 async def video_learn_cmd(
     course: Annotated[str | None, Parameter(name=["--course", "-c"], help="课程 ID")] = None,
-    video: Annotated[list[str] | None, Parameter(name=["--video", "-v"], help="视频 ID（可多次指定）")] = None,
-    plan_file: Annotated[str | None, Parameter(name=["--plan-file"], help="批量计划 JSON 文件")] = None,
+    video: Annotated[list[str] | None, Parameter(name=["--video", "-v"], help="视频 ID (可多次指定)")] = None,
+    plan_file: Annotated[str | None, Parameter(name=["--plan-file"], help="批量执行计划 JSON 文件")] = None,
     concurrency: Annotated[int | None, Parameter(name=["--concurrency"], help="并发任务数")] = None,
-    learning_rate: Annotated[float | None, Parameter(name=["--learning-rate"], help="推进速率乘数")] = None,
-    heartbeat_interval: Annotated[float | None, Parameter(name=["--heartbeat-interval"], help="心跳间隔（秒）")] = None,
-    progress_interval: Annotated[float | None, Parameter(name=["--progress-interval"], help="进度复查间隔（秒）")] = None,
-    completion_threshold: Annotated[float | None, Parameter(name=["--completion-threshold"], help="完成进度阈值 (0, 1]")] = None,
-    video_timeout: Annotated[float | None, Parameter(name=["--video-timeout"], help="单视频总超时（秒）")] = None,
-    total_timeout: Annotated[float | None, Parameter(name=["--total-timeout"], help="批任务总超时（秒）")] = None,
+    learning_rate: Annotated[float | None, Parameter(name=["--learning-rate"], help="播放速率倍数")] = None,
+    heartbeat_interval: Annotated[float | None, Parameter(name=["--heartbeat-interval"], help="心跳间隔 (秒)")] = None,
+    progress_interval: Annotated[float | None, Parameter(name=["--progress-interval"], help="进度复查间隔 (秒)")] = None,
+    completion_threshold: Annotated[
+        float | None, Parameter(name=["--completion-threshold"], help="完成进度阈值 (0 到 1 之间的小数)")
+    ] = None,
+    video_timeout: Annotated[float | None, Parameter(name=["--video-timeout"], help="单视频总超时 (秒)")] = None,
+    total_timeout: Annotated[float | None, Parameter(name=["--total-timeout"], help="批任务总超时 (秒)")] = None,
     stall_timeout: Annotated[float | None, Parameter(name=["--stall-timeout"], help="无进展停滞超时（秒）")] = None,
     max_heartbeats: Annotated[int | None, Parameter(name=["--max-heartbeats"], help="单视频最大心跳数")] = None,
     jitter: Annotated[float | None, Parameter(name=["--jitter"], help="心跳间隔随机抖动比例 (0-1)")] = None,
-    video_delay: Annotated[float | None, Parameter(name=["--video-delay"], help="多视频切换冷却间隔秒数")] = None,
+    video_delay: Annotated[float | None, Parameter(name=["--video-delay"], help="多视频切换冷却间隔 (秒)")] = None,
     on_error: Annotated[Literal["stop", "continue"] | None, Parameter(name=["--on-error"], help="出错策略")] = None,
     checkpoint_file: Annotated[str | None, Parameter(name=["--checkpoint-file"], help="检查点状态文件")] = None,
     resume_from: Annotated[str | None, Parameter(name=["--resume-from"], help="从检查点文件恢复执行")] = None,
@@ -88,7 +90,7 @@ async def video_learn_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[VideoLearnPreview] | CommandResult[VideoPlanSummary]:
-    """执行视频学习流程。"""
+    """执行视频学习任务。"""
     plan: VideoPlan | None = None
     effective_platform: str | None = platform
     confirm_argv: list[str] = ["wkhelper", "video", "learn"]
@@ -187,22 +189,20 @@ async def video_learn_cmd(
 async def video_snapshot_cmd(
     course: Annotated[str | None, Parameter(name=["--course", "-c"], help="课程 ID")] = None,
     video: Annotated[str | None, Parameter(name=["--video", "-v"], help="视频 ID")] = None,
-    timestamps: Annotated[str | None, Parameter(name=["--timestamps"], help="指定抽帧时间戳（秒，逗号分隔，如 '30,60,90'）")] = None,
-    start: Annotated[float | None, Parameter(name=["--start"], help="采样起始时间（秒）")] = None,
-    end: Annotated[float | None, Parameter(name=["--end"], help="采样结束时间（秒）")] = None,
-    step: Annotated[float | None, Parameter(name=["--step"], help="采样步长（秒）")] = None,
-    count: Annotated[int | None, Parameter(name=["--count"], help="均匀抽帧数量（上限 30 张）")] = None,
-    width: Annotated[int, Parameter(name=["--width"], help="图像宽度（像素，默认 1280）")] = 1280,
+    timestamps: Annotated[str | None, Parameter(name=["--timestamps"], help="指定抽帧时间戳 (秒，支持逗号分隔如 '30,60,90')")] = None,
+    start: Annotated[float | None, Parameter(name=["--start"], help="采样起始时间 (秒)")] = None,
+    end: Annotated[float | None, Parameter(name=["--end"], help="采样结束时间 (秒)")] = None,
+    step: Annotated[float | None, Parameter(name=["--step"], help="采样步长 (秒)")] = None,
+    count: Annotated[int | None, Parameter(name=["--count"], help="均匀抽帧数量 (上限 30 张)")] = None,
+    width: Annotated[int, Parameter(name=["--width"], help="图像宽度 (像素，默认 1280)")] = 1280,
     quality: Annotated[int, Parameter(name=["--quality"], help="JPEG 压缩质量 (30~95，默认 85)")] = 85,
-    output_dir: Annotated[str | None, Parameter(name=["--output-dir", "-o"], help="截图保存目录（缺省自动保存在临时目录）")] = None,
-    no_cache: Annotated[
-        bool, Parameter(name=["--no-cache"], negative="", help="禁用 Warm Session 缓存复用（每次冷启动并在用完后立即销毁）")
-    ] = False,
+    output_dir: Annotated[str | None, Parameter(name=["--output-dir", "-o"], help="截图保存目录 (缺省保存在临时目录)")] = None,
+    no_cache: Annotated[bool, Parameter(name=["--no-cache"], negative="", help="禁用会话缓存复用 (每次冷启动并在用完后立即销毁)")] = False,
     clean_cache: Annotated[bool, Parameter(name=["--clean-cache"], help="清理所有后台保留的视频热会话进程并退出")] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[VideoSnapshotData]:
-    """对视频进行纯净无杂质抽帧。"""
+    """从视频中截取画面帧。"""
     if clean_cache:
         cleaned_count = cleanup_all_warm_sessions()
         return CommandResult(

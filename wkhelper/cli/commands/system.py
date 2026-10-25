@@ -13,7 +13,7 @@ from wkhelper.domain.actions import NextAction
 
 
 async def status_cmd() -> CommandResult[StatusData]:
-    """查看本地环境与账号概况。"""
+    """查看本地环境配置与已保存账号。"""
     store = get_context().get_store()
     accounts = store.list_accounts()
     data = StatusData(
@@ -30,10 +30,10 @@ async def status_cmd() -> CommandResult[StatusData]:
 
 
 async def schema_cmd(
-    path: Annotated[str | None, Parameter(help="命令路径，例如 'video learn'")] = None,
-    full: Annotated[bool, Parameter(name=["--full"], help="展开完整参数详情")] = False,
+    path: Annotated[str | None, Parameter(help="命令路径 (例如 'video learn')")] = None,
+    full: Annotated[bool, Parameter(name=["--full"], help="展开完整参数 Schema")] = False,
 ) -> CommandResult[dict[str, JsonValue]]:
-    """CLI 契约自省。"""
+    """查看 CLI 命令规范与 Schema。"""
     return CommandResult(data=get_command_schema(path, full=full))
 
 
