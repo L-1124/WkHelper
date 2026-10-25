@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import random
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from cyclopts import App, Parameter
 from pydantic import JsonValue
@@ -34,7 +34,7 @@ from wkhelper.exam.browser import (
     simulate_browser_answer,
     wait_for_answer_submission,
 )
-from wkhelper.exam.export import export_exam_paper_to_markdown
+from wkhelper.exam.export import export_exam_paper
 from wkhelper.exam.proctoring import assess_proctoring_risk, ensure_exam_operation_allowed
 from wkhelper.exam.service import get_exams
 from wkhelper.exam.session import browser_cookies, close_exam_browser, load_session, open_exam_browser
@@ -278,23 +278,27 @@ async def exam_paper_cmd(
 async def exam_export_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
     exam: Annotated[str, Parameter(name=["--exam", "-e"], help="考试节点 ID")],
-    output: Annotated[str, Parameter(name=["--output", "-o"], help="导出 Markdown 文件路径")],
+    output: Annotated[str, Parameter(name=["--output", "-o"], help="导出文件路径")],
+    format: Annotated[
+        Literal["md", "markdown", "json"] | None, Parameter(name=["--format"], help="导出格式（缺省按 output 后缀自动推断，默认 md）")
+    ] = None,
     download_images: Annotated[bool, Parameter(name=["--download-images"], help="下载题干与选项配图到 assets 目录")] = True,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExamExportResult]:
-    """把考场试卷导出为 Markdown，可选下载配图，拒绝覆盖已有文件。"""
+    """把考场试卷导出为 Markdown 或 JSON，可选下载配图，拒绝覆盖已有文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
         await _bind_browser_session(plat, exam)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         ensure_exam_operation_allowed(cover)
-        result = await export_exam_paper_to_markdown(
+        result = await export_exam_paper(
             plat,
             matched,
             exam,
             output,
             download_resources=download_images,
+            format=format,
         )
         return CommandResult[ExamExportResult](data=result)
 

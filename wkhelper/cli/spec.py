@@ -251,9 +251,13 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "exam export": {
-        "description": "把考场试卷导出为 Markdown，可下载题干与选项配图，拒绝覆盖已有文件。",
+        "description": "把考场试卷导出为 Markdown 或 JSON，可下载题干与选项配图，拒绝覆盖已有文件。",
         "side_effects": "local_file_write",
-        "examples": ["wkhelper exam export --course 1001 --exam 2001 --output ./exam.md"],
+        "examples": [
+            "wkhelper exam export --course 1001 --exam 2001 --output ./exam.md",
+            "wkhelper exam export --course 1001 --exam 2001 --output ./exam.json",
+            "wkhelper exam export --course 1001 --exam 2001 --output ./exam_dump --format json",
+        ],
     },
     "exam paper": {
         "description": "读取考场子系统下发的整卷题目（只读，不提交答案）。",
@@ -271,6 +275,16 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper exam start --course 1001 --exam 2001 --dry-run",
             "wkhelper exam start --course 1001 --exam 2001 --confirm",
             "wkhelper exam start --course 1001 --exam 2001 --begin --confirm",
+        ],
+    },
+    "questions export": {
+        "description": "将课程全量作业题目汇总导出为 Markdown 或 JSON 文件，可选下载配图与附件。",
+        "side_effects": "local_file_write",
+        "examples": [
+            "wkhelper questions export --course 1001 --output ./questions.md",
+            "wkhelper questions export --course 1001 --output ./questions.json",
+            "wkhelper questions export --course 1001 --output ./questions.json --download-resources",
+            "wkhelper questions export --course 1001 --output ./dump --format json",
         ],
     },
 }

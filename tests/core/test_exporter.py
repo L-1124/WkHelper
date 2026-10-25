@@ -11,10 +11,11 @@ import pytest
 from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError, OutputExistsError
 from wkhelper.domain.exam import ExamPaperData, ExamProblemItem
+from wkhelper.domain.exporting import CourseQuestionsExport
 from wkhelper.domain.homework import Homework, OptionItem, QuestionDetail
-from wkhelper.exam.export import export_exam_paper_to_markdown
+from wkhelper.exam.export import export_exam_paper, export_exam_paper_to_markdown
 from wkhelper.exporting.markdown import html_to_md
-from wkhelper.exporting.questions import export_questions_to_markdown
+from wkhelper.exporting.questions import export_questions, export_questions_to_markdown
 from wkhelper.exporting.resources import localize_question_detail
 from wkhelper.infra.files import publish_file_no_clobber
 
@@ -380,6 +381,81 @@ async def test_export_exam_paper_publish_race_and_no_clobber(fake_platform, tmp_
 
     assert target.read_text(encoding="utf-8") == "预存试卷内容，严禁覆盖"
     assert list(tmp_path.glob("wk_exam_*.md")) == []
+
+
+@pytest.mark.asyncio
+async def test_export_questions_to_json(fake_platform, tmp_path: Path, monkeypatch) -> None:
+    """验证课程作业题目导出为 JSON 格式并支持反序列化。"""
+    course = Course(id="c1", name="数学分析", platform_id="test")
+    target_json = tmp_path / "questions.json"
+
+    async def fake_get_homeworks(plat, cur):
+        return [Homework(id="hw1", name="第一周作业", deadline=1700000000, completed=True)]
+
+    async def fake_get_leaf_questions(hw_id, cur):
+        return [
+            {
+                "problem_id": 101,
+                "type": 1,
+                "content": {
+                    "Body": "<p>1 + 1 = ?</p>",
+                    "Options": [{"key": "A", "value": "<p>2</p>"}, {"key": "B", "value": "<p>3</p>"}],
+                },
+                "user": {"answer": ["A"], "score": 5.0},
+            }
+        ]
+
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_get_homeworks)
+    fake_platform.get_leaf_questions = fake_get_leaf_questions
+    result = await export_questions(fake_platform, course, output_path=target_json)
+    assert result.file_path == str(target_json)
+    assert result.homeworks_count == 1
+    assert result.questions_count == 1
+
+    # 验证导出的 JSON 可直接被 Pydantic 模型解析
+    exported = CourseQuestionsExport.model_validate_json(target_json.read_bytes())
+    assert exported.course_id == "c1"
+    assert exported.total_questions == 1
+    assert exported.homeworks[0].questions[0].prompt == "1 + 1 = ?"
+    assert exported.homeworks[0].questions[0].options[0].text == "2"
+    assert exported.homeworks[0].questions[0].correct_answer == ["A"]
+
+
+@pytest.mark.asyncio
+async def test_export_exam_paper_to_json(fake_platform, tmp_path: Path) -> None:
+    """验证考试试卷导出为 JSON 格式并支持反序列化。"""
+    course = Course(id="c1", name="期末考", platform_id="test")
+    target_json = tmp_path / "exam.json"
+
+    async def fake_get_exam_paper(exam_id: str | int, current: Course) -> ExamPaperData:
+        return ExamPaperData(
+            course_id="c1",
+            exam_id=str(exam_id),
+            title="期末试卷",
+            problems=[
+                ExamProblemItem(
+                    id="p1",
+                    index=1,
+                    type="单选题",
+                    score=5.0,
+                    prompt="光速是多少？",
+                    images=[],
+                    options=[OptionItem(key="A", text="30万公里/秒")],
+                    answer=["A"],
+                    has_remark=False,
+                )
+            ],
+        )
+
+    fake_platform.get_exam_paper = fake_get_exam_paper
+    res = await export_exam_paper(fake_platform, course, "e1", target_json, download_resources=False)
+    assert res.file_path == str(target_json)
+    assert res.problems_count == 1
+
+    parsed = ExamPaperData.model_validate_json(target_json.read_bytes())
+    assert parsed.title == "期末试卷"
+    assert parsed.problems[0].prompt == "光速是多少？"
+    assert parsed.problems[0].answer == ["A"]
 
 
 def test_publish_non_file_exists_os_error_raised_directly(tmp_path: Path) -> None:

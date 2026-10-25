@@ -1,7 +1,7 @@
 """单题检索与课程题目导出命令。"""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
 
@@ -22,7 +22,7 @@ from wkhelper.domain.homework import (
 )
 from wkhelper.domain.questions import normalize_judgement_answer, question_type
 from wkhelper.exporting.markdown import html_to_md
-from wkhelper.exporting.questions import export_questions_to_markdown
+from wkhelper.exporting.questions import export_questions
 from wkhelper.exporting.resources import localize_question_detail
 from wkhelper.homework.service import submit_question
 from wkhelper.infra.serialization import encode_json
@@ -205,17 +205,26 @@ async def question_submit_cmd(
 @questions_app.command(name="export")
 async def questions_export_cmd(
     course: Annotated[str, Parameter(name=["--course", "-c"], help="课程 ID")],
-    output: Annotated[str, Parameter(name=["--output", "-o"], help="输出 Markdown 文件路径")],
+    output: Annotated[str, Parameter(name=["--output", "-o"], help="输出文件路径")],
+    format: Annotated[
+        Literal["md", "markdown", "json"] | None, Parameter(name=["--format"], help="导出格式（缺省按 output 后缀自动推断，默认 md）")
+    ] = None,
     download_resources: Annotated[
         bool, Parameter(name=["--download-resources", "--download-images"], help="是否下载题目配图及附件文件到本地并改写为相对路径")
     ] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExportResult]:
-    """导出课程题目为 Markdown 文件。"""
+    """导出课程全量作业题目为 Markdown 或 JSON 文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
         return CommandResult(
-            data=await export_questions_to_markdown(plat, matched, output_path=output, download_resources=download_resources)
+            data=await export_questions(
+                plat,
+                matched,
+                output_path=output,
+                download_resources=download_resources,
+                format=format,
+            )
         )
 
 
