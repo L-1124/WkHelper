@@ -112,6 +112,7 @@ async def export_questions_to_markdown(
                         downloaded_resources_total += len(body_res)
 
                     f.write(f"### 第 {idx} 题\n\n")
+                    f.write(f"**题目 ID：** `{qid_str}`\n\n")
                     f.write(f"**题目：**\n{body}\n\n")
 
                     options = content.get("Options") or []
