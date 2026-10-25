@@ -166,7 +166,8 @@ async def _open_platform(
         plat = _create_platform_instance(platform_code, client)
         plat.platform_code = platform_code
         plat.account_id = _account_id
-        await plat.login(cookies=cookies)
+        await plat.login_with_cookies(cookies)
+        plat.current_cookies = cookies
         yield plat
 
 
@@ -204,6 +205,7 @@ async def _load_course(plat: BasePlatform, course_id: str) -> Course:
 
 
 __all__ = [
+    "_PLATFORM_TYPES",
     "_create_http_session",
     "_load_course",
     "_load_plan",

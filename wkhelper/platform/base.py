@@ -10,8 +10,6 @@ from typing import Any, ClassVar
 
 from pydantic import JsonValue
 
-from wkhelper.auth.qr import QrCodeSession
-from wkhelper.auth.service import login_with_qrcode
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.content import (
@@ -58,6 +56,9 @@ class BasePlatform(ABC):
     impersonate: ClassVar[str | None] = "chrome"
     # 会话 Cookie 的写入域；空串表示由 CookieJar 绑定当前 host
     cookie_domain: ClassVar[str] = ""
+    # 浏览器登录页面 URL 与核心登录态 Cookie 契约
+    login_url: ClassVar[str] = ""
+    essential_cookies: ClassVar[tuple[str, ...]] = ()
 
     def __init__(
         self,
@@ -88,49 +89,8 @@ class BasePlatform(ABC):
         return await request_json_once(self.client, self.clock, method, url, **kwargs)
 
     # 平台抽象方法
-
-    async def login(
-        self,
-        cookies: dict[str, str] | None = None,
-        display: str = "image",
-        open_browser: bool = False,
-        timeout: int = 120,
-    ) -> UserInfo:
-        """执行登录并返回用户信息。"""
-        if cookies is not None:
-            return await self.login_with_cookies(cookies)
-        return await login_with_qrcode(self, display=display, open_browser=open_browser, timeout=timeout)
-
     @abstractmethod
     async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo: ...
-
-    # 扫码登录协议差异点：平台只需实现下列钩子，轮询与收尾由基类统一完成。
-
-    qr_platform_name: ClassVar[str] = "雨课堂"
-
-    def qr_ws_url(self) -> str:
-        return "wss://www.yuketang.cn/wsapp/"
-
-    def qr_request_payload(self) -> dict[str, Any]:
-        return {"op": "requestlogin", "role": "web", "version": "1.4", "purpose": "login", "x-client": "web"}
-
-    def qr_expire_seconds(self, message: dict[str, Any]) -> float | None:
-        """消息中携带的二维码有效期；无提示时返回 None。"""
-        raw = message.get("expire_seconds")
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
-
-    async def qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
-        """把本轮消息中的二维码展示给用户；默认无图像载荷。"""
-        return None
-
-    @abstractmethod
-    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
-        """用扫码回执换取会话 Cookie。"""
 
     @abstractmethod
     async def get_courses(self) -> list[Course]: ...

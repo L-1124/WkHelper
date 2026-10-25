@@ -4,8 +4,10 @@ from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
 
+from wkhelper.auth.service import login_account
 from wkhelper.cli.context import PlatformCode, get_context
 from wkhelper.cli.deps import (
+    _PLATFORM_TYPES,
     _create_http_session,
     _open_platform,
     _parse_cookie_payload,
@@ -15,8 +17,6 @@ from wkhelper.cli.envelope import CommandResult
 from wkhelper.domain.accounts import AccountListData, AuthStatusResult, LoginResult, RemoveResult, StorageStatus
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.errors import ConfirmationRequiredError
-from wkhelper.platform.xuetangx import XuetangXPlatform
-from wkhelper.platform.yuketang import YuketangPlatform
 
 auth_app = App(name="auth", help="凭据与账号认证管理")
 
@@ -39,7 +39,7 @@ async def auth_status_cmd(
         user = plat.user
         return CommandResult(
             data=AuthStatusResult(
-                platform=platform or ("ykt" if isinstance(plat, YuketangPlatform) else "xtzx"),
+                platform=platform,
                 user_id=str(user.id if user else ""),
                 name=user.name if user else "",
                 valid=True,
@@ -50,33 +50,36 @@ async def auth_status_cmd(
 @auth_app.command(name="login")
 async def auth_login_cmd(
     platform: Annotated[PlatformCode, Parameter(name=["--platform", "-p"], help="平台代码")],
-    method: Annotated[Literal["qrcode", "cookie"], Parameter(name=["--method", "-m"], help="登录方式")],
+    method: Annotated[Literal["browser", "cookie", "qrcode"], Parameter(name=["--method", "-m"], help="登录方式")] = "browser",
     cookie_file: Annotated[str | None, Parameter(name=["--cookie-file"], help="Cookie 文件路径")] = None,
-    display: Annotated[Literal["image", "browser"], Parameter(name=["--display"], help="二维码呈现方式")] = "image",
-    open_browser: Annotated[bool, Parameter(name=["--open-browser"], help="自动打开浏览器")] = False,
-    timeout: Annotated[int, Parameter(name=["--timeout"], help="扫码超时秒数")] = 120,
+    timeout: Annotated[int, Parameter(name=["--timeout"], help="登录超时秒数")] = 120,
+    display: Annotated[
+        Literal["image", "browser"] | None, Parameter(name=["--display"], help="[已废弃] 二维码呈现方式", show=False)
+    ] = None,
+    open_browser: Annotated[bool | None, Parameter(name=["--open-browser"], help="[已废弃] 自动打开浏览器", show=False)] = None,
 ) -> CommandResult[LoginResult]:
     """账号登录并安全持久化凭据。"""
-    if open_browser and display != "browser":
-        raise ValueError("`--open-browser` 仅能与 `--display browser` 搭配使用")
     if timeout <= 0:
         raise ValueError("`--timeout` 必须为正数")
+    _ = (display, open_browser)  # 保留兼容历史输入
 
     store = get_context().get_store()
     actual_cookie_file = cookie_file or get_context().options.cookie_file
-    platform_cls = YuketangPlatform if platform == "ykt" else XuetangXPlatform
+    platform_cls = _PLATFORM_TYPES[platform]
+
+    cookies: dict[str, str] | None = None
+    if method == "cookie":
+        if not actual_cookie_file:
+            raise ValueError("Cookie 登录模式必须指定 `--cookie-file` 参数")
+        cookies = _parse_cookie_payload(_read_json_file_or_stdin(actual_cookie_file))
+
     async with _create_http_session(timeout=15, impersonate=platform_cls.impersonate) as client:
         plat = platform_cls(client)
-        if method == "cookie":
-            if not actual_cookie_file:
-                raise ValueError("Cookie 登录模式必须指定 `--cookie-file` 参数")
-            cookies = _parse_cookie_payload(_read_json_file_or_stdin(actual_cookie_file))
-            user = await plat.login(cookies=cookies)
-        else:
-            user = await plat.login(display=display, open_browser=open_browser, timeout=timeout)
+        user = await login_account(plat, cookies=cookies, timeout=timeout)
 
-        if plat.current_cookies:
-            store.save(platform, user, plat.current_cookies)
+        saved_cookies = plat.current_cookies or cookies
+        if saved_cookies:
+            store.save(platform, user, saved_cookies)
 
         data = LoginResult(
             platform=platform,

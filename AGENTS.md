@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-22
+**Updated:** 2026-10-25
 **Branch:** main
 
 ## OVERVIEW
@@ -41,7 +41,7 @@ wkhelper/
     serialization.py        # Pydantic TypeAdapter JSON 编码边界
     files.py                # 原子拒绝覆盖发布
     browser/                # Chromium 进程与 CDP 通用机制
-  auth/                     # Cookie 解析、二维码展示与扫码认证编排
+  auth/                     # Cookie 解析与官方页面 CDP 浏览器登录编排
   video/                    # 计划、引擎、编排、业务服务、抽帧与热池
     scripts/                # 就绪、Canvas 抽帧、截图回退页面资源
   homework/                 # 作业提交、编排与业务服务

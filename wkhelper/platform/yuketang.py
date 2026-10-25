@@ -4,7 +4,6 @@ import logging
 from typing import Any, override
 from urllib.parse import quote
 
-from wkhelper.auth.qr import QrCodeSession
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.content import NoticeDetail
 from wkhelper.domain.courses import Course
@@ -44,6 +43,8 @@ class YuketangPlatform(BasePlatform):
     api_base = "https://www.yuketang.cn"
     api_prefix = "mooc-api"
     cookie_domain = ".yuketang.cn"
+    login_url = "https://www.yuketang.cn/web"
+    essential_cookies = ("sessionid", "csrftoken")
 
     @property
     @override
@@ -79,45 +80,6 @@ class YuketangPlatform(BasePlatform):
         self.user = UserInfo(id=info["id"], name=info["name"], school=info.get("school"))
         self.current_cookies = cookies
         return self.user
-
-    qr_platform_name = "雨课堂"
-
-    @override
-    def qr_request_payload(self) -> dict[str, Any]:
-        return {
-            "op": "requestlogin",
-            "role": "web",
-            "version": "1.4",
-            "purpose": "login",
-            "xtbz": "ykt",
-            "x-client": "web",
-        }
-
-    @override
-    async def qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
-        qrcode_data = message.get("qrcode")
-        if qrcode_data:
-            qr_session.create_image(qrcode_data)
-            qr_session.emit_challenge(expires_in=expires_in)
-
-    @override
-    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
-        # 前端容错：UserID || user_id、Auth || auth
-        auth = login_data.get("Auth") or login_data.get("auth")
-        user_id = login_data.get("UserID") or login_data.get("user_id")
-        if not auth or not user_id:
-            raise AuthError("扫码回执缺少 Auth 或 UserID")
-        response = await self.client.post(
-            f"{self.api_base}/pc/web_login",
-            json={"Auth": auth, "UserID": int(user_id)},
-        )
-        cookies = {
-            "csrftoken": response.cookies.get("csrftoken") or self.client.cookies.get("csrftoken") or "",
-            "sessionid": response.cookies.get("sessionid") or self.client.cookies.get("sessionid") or "",
-        }
-        if not cookies["csrftoken"] or not cookies["sessionid"]:
-            raise AuthError("登录凭据换取失败")
-        return cookies
 
     @override
     async def get_courses(self) -> list[Course]:

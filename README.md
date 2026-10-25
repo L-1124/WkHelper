@@ -37,7 +37,7 @@ flowchart LR
     A[AI Agent / 终端用户] -->|CLI 参数| B[WkHelper CLI]
     B --> C[按业务组织的 service / runner]
     C --> D[domain: 数据模型与规则]
-    C --> E[platform: 雨课堂 / 学堂在线协议]
+    C --> E[platform: 雨课堂 / 学堂在线 / 中国大学 MOOC 协议]
     C --> F[infra: 凭据 / HTTP / 时钟 / CDP / 文件]
     E --> D
     E --> F
@@ -56,8 +56,8 @@ flowchart LR
 ### 环境要求
 
 - Python `>= 3.12`
+- 本地浏览器：Google Chrome 或 Microsoft Edge（浏览器登录及视频纯净抽帧依赖 CDP 驱动）
 - 包管理器任选其一：[`uv`](https://github.com/astral-sh/uv)（推荐）、[`pipx`](https://pipx.pypa.io/)、`pip`
-
 ### 安装
 
 项目尚未发布到 PyPI，请从 GitHub 仓库安装。
@@ -81,11 +81,18 @@ wkhelper status        # 本地凭据后端与已存账号
 
 ### 1. 账号认证 (`auth`)
 
-```bash
-# 微信扫码登录并自动在浏览器中打开二维码页面（支持 ykt / xtzx）
-wkhelper auth login -p ykt -m qrcode --display browser --open-browser
+登录默认采用官方页面浏览器驱动（基于 CDP）：自动启动受管浏览器窗口打开官方登录页，用户在浏览器中手动完成登录（扫码、手机验证码或账号密码均可）。WkHelper 自动监听捕获核心认证 Cookie（默认 120 秒超时），经服务端校验通过后自动关闭浏览器窗口并清理临时配置目录，将凭据持久化至系统安全保管库。
 
-# 导入 Cookie 文件登录（无图形环境）
+历史参数 `--method qrcode`、`--display` 与 `--open-browser` 仍可解析，统一使用官方页面浏览器登录；二维码协议与本地二维码服务已移除。
+
+```bash
+# 启动官方页面浏览器登录（支持 ykt / xtzx，默认方式）
+wkhelper auth login -p ykt
+
+# 显式指定浏览器登录方式与超时时间
+wkhelper auth login -p xtzx -m browser --timeout 180
+
+# 导入 Cookie 文件登录（无图形环境或自动化 CI）
 wkhelper auth login -p xtzx -m cookie --cookie-file cookies.json
 
 # 验证当前凭据有效性

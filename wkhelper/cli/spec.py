@@ -66,11 +66,12 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "auth login": {
-        "description": "通过扫码或导入 Cookie 登录并保存至系统安全凭据管理器。",
+        "description": "通过官方网页浏览器或导入 Cookie 登录并保存至系统安全凭据管理器。",
         "side_effects": "local_write",
         "examples": [
-            "wkhelper auth login --platform ykt --method qrcode",
-            "wkhelper auth login --platform ykt --method qrcode --display browser --open-browser",
+            "wkhelper auth login --platform ykt",
+            "wkhelper auth login --platform ykt --method browser",
+            "wkhelper auth login --platform xtzx --method browser",
             "wkhelper auth login --platform ykt --method cookie --cookie-file cookies.json",
         ],
     },

@@ -33,17 +33,6 @@ class FakeAsyncPlatform(BasePlatform):
         return HeartbeatProfile(lob="fake")
 
     @override
-    async def login(
-        self,
-        cookies: dict[str, str] | None = None,
-        display: str = "image",
-        open_browser: bool = False,
-        timeout: int = 120,
-    ) -> UserInfo:
-        self.user = UserInfo(id="1", name="tester")
-        return self.user
-
-    @override
     async def get_courses(self) -> list[Course]:
         return [Course(id="1", name="测试课程1", platform_id="test")]
 
@@ -94,10 +83,6 @@ class FakeAsyncPlatform(BasePlatform):
     async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:
         self.user = UserInfo(id="1", name="tester")
         return self.user
-
-    @override
-    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
-        return {"csrf": "stub", "session": "stub"}
 
 
 @pytest_asyncio.fixture

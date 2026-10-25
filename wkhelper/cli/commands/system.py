@@ -23,7 +23,7 @@ async def status_cmd() -> CommandResult[StatusData]:
     )
     next_actions: list[NextAction] = []
     if not accounts and not get_context().options.cookie_file:
-        next_actions.append(NextAction(reason="登录账号", argv=["wkhelper", "auth", "login", "--platform", "ykt", "--method", "qrcode"]))
+        next_actions.append(NextAction(reason="登录账号", argv=["wkhelper", "auth", "login", "--platform", "ykt"]))
     else:
         next_actions.append(NextAction(reason="查看课程列表", argv=["wkhelper", "course", "list"]))
     return CommandResult(data=data, next_actions=next_actions)

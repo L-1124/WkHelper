@@ -8,7 +8,6 @@ scripts = { wkhelper = "wkhelper.main:main" }
 dependencies = [
   "cyclopts>=5.2.0",
   "keyring>=25.7.0",
-  "qrcode>=8.2",
   "curl_cffi>=0.16.3,<0.17.0",
   "fonttools>=4.67.0",
   "markdownify>=1.2.3",

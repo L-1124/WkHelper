@@ -4,7 +4,6 @@ import logging
 from typing import Any, override
 from urllib.parse import quote
 
-from wkhelper.auth.qr import QrCodeSession
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.content import NoticeDetail
 from wkhelper.domain.courses import Course
@@ -33,6 +32,8 @@ class XuetangXPlatform(BasePlatform):
     api_base = "https://www.xuetangx.com"
     api_prefix = "api"
     cookie_domain = ".xuetangx.com"
+    login_url = "https://www.xuetangx.com/account/login"
+    essential_cookies = ("sessionid", "csrftoken")
 
     @property
     @override
@@ -71,57 +72,6 @@ class XuetangXPlatform(BasePlatform):
         self.user = UserInfo(id=info["id"], name=display_name, school=info.get("school"))
         self.current_cookies = cookies
         return self.user
-
-    qr_platform_name = "学堂在线"
-
-    @override
-    def qr_ws_url(self) -> str:
-        return "wss://www.xuetangx.com/wsapp/"
-
-    @override
-    def qr_request_payload(self) -> dict[str, Any]:
-        return {
-            "op": "requestlogin",
-            "role": "web",
-            "version": "1.4",
-            "purpose": "login",
-            "xtbz": "xt",
-            "x-client": "web",
-        }
-
-    @override
-    async def qr_publish_image(self, message: dict[str, Any], qr_session: QrCodeSession, expires_in: float) -> None:
-        ticket = message.get("ticket")
-        if not ticket:
-            return
-        ticket_resp = await self.client.get(str(ticket), headers={"Accept": "image/*,*/*"})
-        if ticket_resp.content:
-            qr_session.create_image(ticket_resp.content)
-            qr_session.emit_challenge(expires_in=expires_in)
-
-    @override
-    async def qr_exchange_cookies(self, login_data: dict[str, Any]) -> dict[str, str]:
-        # 前端：s_s = msg.is_new ? msg.s_s : msg.token
-        if login_data.get("is_new"):
-            token_val = login_data.get("s_s")
-        else:
-            token_val = login_data.get("token") or login_data.get("s_s")
-        if not token_val:
-            raise AuthError("扫码回执缺少 token 或 s_s")
-        response = await self.client.post(
-            f"{self.api_base}/api/v1/u/login/wx/",
-            json={"s_s": str(token_val)},
-        )
-        cookies = {
-            "csrftoken": response.cookies.get("csrftoken") or self.client.cookies.get("csrftoken") or "",
-            "sessionid": response.cookies.get("sessionid") or self.client.cookies.get("sessionid") or "",
-        }
-        if not cookies["csrftoken"] or not cookies["sessionid"]:
-            raise AuthError(
-                f"登录凭据换取失败: status={response.status_code}, text={response.text[:200]}, "
-                f"cookies={dict(response.cookies)}, client_cookies={dict(self.client.cookies)}"
-            )
-        return cookies
 
     @override
     async def get_courses(self) -> list[Course]:

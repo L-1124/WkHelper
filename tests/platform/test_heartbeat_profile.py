@@ -1,4 +1,6 @@
-"""心跳报文的平台差异契约测试。"""
+"""心跳报文的平台差异契约测试与参数隔离测试。"""
+
+from typing import Any
 
 import pytest
 from pydantic import JsonValue
@@ -8,6 +10,7 @@ from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.protocol_types import HeartbeatProfile
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
+from wkhelper.video.engine import VideoWatchOptions, generic_watch_video
 
 
 def _build(platform: BasePlatform) -> dict[str, JsonValue]:
@@ -65,9 +68,6 @@ def test_heartbeat_profile_is_required() -> None:
         async def login_with_cookies(self, cookies):  # noqa: ANN001, ANN202
             raise NotImplementedError
 
-        async def qr_exchange_cookies(self, login_data):  # noqa: ANN001, ANN202
-            return {}
-
         async def get_courses(self):
             return []
 
@@ -87,3 +87,72 @@ def test_heartbeat_profile_is_required() -> None:
         IncompletePlatform(None)  # type: ignore[arg-type]
 
     assert HeartbeatProfile(lob="x").interval == 5
+
+
+class _RecordingClient:
+    """记录 HTTP 调用参数的假客户端。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def get(self, url: str, **kwargs: Any) -> Any:
+        self.calls.append(("GET", url, kwargs))
+        return _ProgressResponse()
+
+    async def post(self, url: str, **kwargs: Any) -> Any:
+        self.calls.append(("POST", url, kwargs))
+        return _ProgressResponse()
+
+
+class _ProgressResponse:
+    text = '{"data": {"v1": {"rate": 0.1, "watch_length": 5}}}'
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return {}
+
+
+def _heartbeat_payload(
+    video_id: str,
+    classroom_id: str,
+    user_id: int,
+    course_id: int,
+    sku_id: int,
+    video_frame: float,
+    seq: int,
+    timestamp: int,
+    cc: str,
+    duration: float,
+) -> dict[str, Any]:
+    return {"sq": seq, "ts": timestamp}
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_request_excludes_progress_params() -> None:
+    """平台进度 query 参数只能出现在进度查询上，心跳 POST 不得携带。"""
+    client = _RecordingClient()
+    await generic_watch_video(
+        client=client,  # type: ignore[arg-type]
+        video_id="v1",
+        video_name="测试",
+        classroom_id="9",
+        user_id=1,
+        course_id=2,
+        sku_id=3,
+        progress_url="https://x/progress",
+        heartbeat_url="https://x/heartbeat",
+        payload_gen=_heartbeat_payload,
+        progress_params={"video_id": "v1", "vtype": "rate"},
+        request_kwargs={"headers": {"classroom-id": "9"}},
+        options=VideoWatchOptions(video_timeout=0.6, stall_timeout=0.3, completion_threshold=2.0, max_heartbeats=1),
+    )
+
+    gets = [c for c in client.calls if c[0] == "GET"]
+    posts = [c for c in client.calls if c[0] == "POST"]
+    assert gets and posts
+    assert all(c[2]["params"] == {"video_id": "v1", "vtype": "rate"} for c in gets)
+    assert all("params" not in c[2] for c in posts)
+    assert all(c[2]["headers"] == {"classroom-id": "9"} for c in client.calls)

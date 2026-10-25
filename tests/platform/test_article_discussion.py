@@ -39,10 +39,6 @@ class MockPlatform(BasePlatform):
     async def login_with_cookies(self, cookies):
         raise NotImplementedError
 
-    async def qr_exchange_cookies(self, login_data):
-
-        return {}
-
     async def get_courses(self):
         return [_sample_course()]
 

@@ -95,10 +95,6 @@ async def test_http_trace_emits_ndjson_events(monkeypatch):
         async def login_with_cookies(self, cookies):
             raise NotImplementedError
 
-        async def qr_exchange_cookies(self, login_data):
-
-            return {}
-
         async def get_courses(self):
             return []
 
