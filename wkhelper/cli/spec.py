@@ -278,12 +278,13 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
     },
     "questions export": {
-        "description": "将课程全量作业题目汇总导出为 Markdown 或 JSON 文件，可选下载配图与附件。",
+        "description": "将课程全量作业题目汇总导出为 Markdown 或 JSON，支持 --only-correct-answers 仅保留标准答案。",
         "side_effects": "local_file_write",
         "examples": [
             "wkhelper questions export --course 1001 --output ./questions.md",
             "wkhelper questions export --course 1001 --output ./questions.json",
-            "wkhelper questions export --course 1001 --output ./questions.json --download-resources",
+            "wkhelper questions export --course 1001 --output ./questions.json --only-correct-answers",
+            "wkhelper questions export --course 1001 --output ./questions.md --only-correct-answers",
             "wkhelper questions export --course 1001 --output ./dump --format json",
         ],
     },

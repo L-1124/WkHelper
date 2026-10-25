@@ -422,6 +422,48 @@ async def test_export_questions_to_json(fake_platform, tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_export_questions_only_correct_answers(fake_platform, tmp_path: Path, monkeypatch) -> None:
+    """验证使用 only_correct_answers 选项时排除个人作答信息。"""
+    course = Course(id="c1", name="数学分析", platform_id="test")
+    target_json = tmp_path / "questions_only_correct.json"
+    target_md = tmp_path / "questions_only_correct.md"
+
+    async def fake_get_homeworks(plat, cur):
+        return [Homework(id="hw1", name="第一周作业", deadline=1700000000, completed=True)]
+
+    async def fake_get_leaf_questions(hw_id, cur):
+        return [
+            {
+                "problem_id": 101,
+                "type": 1,
+                "content": {
+                    "Body": "<p>1 + 1 = ?</p>",
+                    "Options": [{"key": "A", "value": "<p>2</p>"}],
+                },
+                "user": {"answer": ["A"], "my_answer": ["B"], "is_right": False, "score": 0.0},
+            }
+        ]
+
+    monkeypatch.setattr("wkhelper.exporting.questions.get_homeworks", fake_get_homeworks)
+    fake_platform.get_leaf_questions = fake_get_leaf_questions
+
+    # 1. JSON 模式验证
+    await export_questions(fake_platform, course, output_path=target_json, only_correct_answers=True)
+    exported = CourseQuestionsExport.model_validate_json(target_json.read_bytes())
+    q = exported.homeworks[0].questions[0]
+    assert q.correct_answer == ["A"]
+    assert q.user_answer is None
+    assert q.is_correct is None
+    assert q.score is None
+
+    # 2. Markdown 模式验证
+    await export_questions(fake_platform, course, output_path=target_md, only_correct_answers=True)
+    md_text = target_md.read_text(encoding="utf-8")
+    assert "**正确答案：** A" in md_text
+    assert "**我的作答：**" not in md_text
+
+
+@pytest.mark.asyncio
 async def test_export_exam_paper_to_json(fake_platform, tmp_path: Path) -> None:
     """验证考试试卷导出为 JSON 格式并支持反序列化。"""
     course = Course(id="c1", name="期末考", platform_id="test")

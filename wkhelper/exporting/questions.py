@@ -40,8 +40,9 @@ async def export_questions(
     output_path: str | Path | None = None,
     download_resources: bool = False,
     format: Literal["md", "markdown", "json"] | None = None,
+    only_correct_answers: bool = False,
 ) -> ExportResult:
-    """导出课程题目为 Markdown 或 JSON，使用临时文件原子保存，支持后缀自动推断。"""
+    """导出课程题目为 Markdown 或 JSON，使用临时文件原子保存，支持后缀自动推断与仅导出正确答案。"""
     homeworks = await get_homeworks(platform, course)
     if not homeworks:
         return ExportResult(file_path=None, homeworks_count=0, questions_count=0)
@@ -103,6 +104,7 @@ async def export_questions(
                 homeworks=homeworks,
                 hw_questions=hw_questions,
                 assets_dir=assets_dir,
+                only_correct_answers=only_correct_answers,
             )
         else:
             total_questions, downloaded_resources_total = await _write_questions_markdown(
@@ -112,6 +114,7 @@ async def export_questions(
                 homeworks=homeworks,
                 hw_questions=hw_questions,
                 assets_dir=assets_dir,
+                only_correct_answers=only_correct_answers,
             )
         publish_file_no_clobber(temp_file_path, target_path)
     finally:
@@ -198,8 +201,8 @@ async def _write_questions_markdown(
     homeworks: list[Homework],
     hw_questions: dict[str | int, list[dict[str, Any]]],
     assets_dir: Path | None,
+    only_correct_answers: bool = False,
 ) -> tuple[int, int]:
-    """将抓取的题目数据写入 Markdown 临时文件。"""
     total_questions = 0
     downloaded_resources = 0
     with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
@@ -244,7 +247,7 @@ async def _write_questions_markdown(
                     f.write("\n")
 
                 correct_ans, my_ans, is_right = _extract_answers(q)
-                if my_ans is not None:
+                if not only_correct_answers and my_ans is not None:
                     status_tag = "（回答正确）" if is_right is True else ("（回答错误）" if is_right is False else "")
                     f.write(f"**我的作答：** {_format_answer_display(my_ans)} {status_tag}\n\n")
                 if correct_ans is not None:
@@ -287,8 +290,8 @@ async def _write_questions_json(
     homeworks: list[Homework],
     hw_questions: dict[str | int, list[dict[str, Any]]],
     assets_dir: Path | None,
+    only_correct_answers: bool = False,
 ) -> tuple[int, int]:
-    """将抓取的题目数据结构化序列化为 JSON 临时文件。"""
     total_questions = 0
     downloaded_resources = 0
     exported_hws: list[ExportedHomeworkItem] = []
@@ -341,9 +344,9 @@ async def _write_questions_json(
                     prompt=body,
                     options=opts,
                     correct_answer=correct_ans,
-                    user_answer=my_ans,
-                    is_correct=is_right,
-                    score=user_info.get("score") or user_info.get("my_score"),
+                    user_answer=None if only_correct_answers else my_ans,
+                    is_correct=None if only_correct_answers else is_right,
+                    score=None if only_correct_answers else (user_info.get("score") or user_info.get("my_score")),
                     library_id=content.get("LibraryID") or content.get("library_id"),
                     resources=item_res,
                 )

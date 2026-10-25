@@ -212,6 +212,9 @@ async def questions_export_cmd(
     download_resources: Annotated[
         bool, Parameter(name=["--download-resources", "--download-images"], help="是否下载题目配图及附件文件到本地并改写为相对路径")
     ] = False,
+    only_correct_answers: Annotated[
+        bool, Parameter(name=["--only-correct-answers"], help="仅导出官方标准正确答案，隐藏/排除个人提交的作答与判定")
+    ] = False,
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[ExportResult]:
@@ -224,6 +227,7 @@ async def questions_export_cmd(
                 output_path=output,
                 download_resources=download_resources,
                 format=format,
+                only_correct_answers=only_correct_answers,
             )
         )
 
