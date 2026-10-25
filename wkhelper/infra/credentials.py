@@ -1,27 +1,43 @@
 """系统安全凭据存储管理。"""
 
-import json
 import logging
 import os
 import sqlite3
 import time
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from threading import Lock
 from typing import Annotated
 
 import keyring
-from keyring.errors import KeyringError, PasswordDeleteError
+from cryptography.fernet import Fernet, InvalidToken
+from keyring.errors import PasswordDeleteError
 from pydantic import BeforeValidator, TypeAdapter
 
 from wkhelper.domain.accounts import AccountSummary, StorageStatus, UserInfo
 from wkhelper.domain.errors import AuthError
-from wkhelper.infra.serialization import decode_json
+from wkhelper.domain.model import Model
+from wkhelper.infra.serialization import decode_json, encode_json
 
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "wkhelper"
 _COOKIES_ADAPTER: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, Annotated[str, BeforeValidator(str)]])
+
+
+class _EncryptedCookiePayload(Model):
+    version: int = 1
+    platform: str
+    user_id: str
+    cookies: dict[str, str]
+
+
+def _build_fernet(key: str) -> Fernet:
+    try:
+        return Fernet(key.encode("ascii"))
+    except Exception:
+        raise AuthError("系统凭据存储中的主密钥格式无效") from None
 
 
 def get_default_data_dir() -> Path:
@@ -60,23 +76,22 @@ class KeyringSecretBackend(SecretBackend):
     def set_secret(self, service: str, key: str, secret: str) -> None:
         try:
             self._kr.set_password(service, key, secret)
-        except KeyringError as exc:
-            raise AuthError(f"写入系统凭据存储失败: {exc}") from exc
+        except Exception as exc:
+            raise AuthError("写入系统凭据存储失败") from exc
 
     def get_secret(self, service: str, key: str) -> str | None:
         try:
             return self._kr.get_password(service, key)
-        except KeyringError as exc:
-            raise AuthError(f"读取系统凭据存储失败: {exc}") from exc
+        except Exception as exc:
+            raise AuthError("读取系统凭据存储失败") from exc
 
     def delete_secret(self, service: str, key: str) -> None:
         try:
             self._kr.delete_password(service, key)
         except PasswordDeleteError:
-            # 秘密不存在，视为已删除
             pass
-        except KeyringError as exc:
-            raise AuthError(f"从系统凭据管理器删除凭据失败: {exc}") from exc
+        except Exception as exc:
+            raise AuthError("从系统凭据管理器删除凭据失败") from exc
 
     def get_status(self) -> StorageStatus:
         priority = getattr(self._kr, "priority", 0)
@@ -139,10 +154,9 @@ class CredentialStore:
 
         self._db_lock = Lock()
         if self._is_session:
-            # session 模式使用内存 SQLite，彻底隔离磁盘
             self.data_dir = Path(data_dir) if data_dir else Path(os.environ.get("TEMP", "/tmp"))
             self.db_path = Path(":memory:")
-            self._memory_conn: sqlite3.Connection | None = sqlite3.connect(":memory:", check_same_thread=False)
+            self._memory_conn: sqlite3.Connection | None = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
         else:
             self.data_dir = Path(data_dir) if data_dir else get_default_data_dir()
             self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -154,12 +168,15 @@ class CredentialStore:
     def _get_connection(self) -> sqlite3.Connection:
         if self._memory_conn is not None:
             return self._memory_conn
-        return sqlite3.connect(self.db_path)
+        return sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
 
     def _init_db(self) -> None:
         with self._db_lock:
             conn = self._get_connection()
+            in_tx = False
             try:
+                conn.execute("BEGIN IMMEDIATE")
+                in_tx = True
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS accounts (
                         platform TEXT,
@@ -168,55 +185,145 @@ class CredentialStore:
                         school TEXT,
                         key_id TEXT,
                         saved_at REAL,
+                        encrypted_cookies BLOB,
+                        encryption_version INTEGER,
                         PRIMARY KEY (platform, user_id)
                     )
                 """)
-                conn.commit()
+                cursor = conn.execute("PRAGMA table_info(accounts)")
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if "encrypted_cookies" not in existing_cols:
+                    conn.execute("ALTER TABLE accounts ADD COLUMN encrypted_cookies BLOB")
+                if "encryption_version" not in existing_cols:
+                    conn.execute("ALTER TABLE accounts ADD COLUMN encryption_version INTEGER")
+
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS storage_config (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        key_id TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS legacy_tombstones (
+                        key_id TEXT PRIMARY KEY
+                    )
+                """)
+                conn.execute("COMMIT")
+                in_tx = False
+            except Exception:
+                if in_tx:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                raise
             finally:
                 if self._memory_conn is None:
                     conn.close()
 
-    @staticmethod
-    def _make_key_id(platform: str, user_id: str | int) -> str:
-        return f"{platform}:{user_id}:cookies"
+    def _get_or_create_master_key_in_tx(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        create_if_missing: bool = False,
+    ) -> str:
+        cursor = conn.execute("SELECT key_id FROM storage_config WHERE id = 1")
+        row = cursor.fetchone()
+        if row is not None:
+            key_id = str(row[0])
+            secret = self.backend.get_secret(SERVICE_NAME, key_id)
+            if not secret:
+                raise AuthError(f"系统凭据存储中未找到数据库主密钥 ({key_id})，拒绝访问")
+            return secret
+
+        cursor = conn.execute("SELECT 1 FROM accounts WHERE encrypted_cookies IS NOT NULL LIMIT 1")
+        if cursor.fetchone() is not None:
+            raise AuthError("数据库缺少加密存储配置但已存在加密凭据，拒绝重新生成主密钥")
+
+        if not create_if_missing:
+            raise AuthError("数据库未初始化加密存储配置")
+
+        key_id = f"master:{uuid.uuid4().hex}"
+        fernet_key = Fernet.generate_key().decode("ascii")
+        self.backend.set_secret(SERVICE_NAME, key_id, fernet_key)
+        conn.execute("INSERT INTO storage_config (id, key_id) VALUES (1, ?)", (key_id,))
+        return fernet_key
+
+    def _drain_legacy_tombstones(self, conn: sqlite3.Connection) -> None:
+        try:
+            cursor = conn.execute("SELECT key_id FROM legacy_tombstones LIMIT 10")
+            rows = cursor.fetchall()
+            for (key_id,) in rows:
+                try:
+                    self.backend.delete_secret(SERVICE_NAME, key_id)
+                    conn.execute("DELETE FROM legacy_tombstones WHERE key_id = ?", (key_id,))
+                except Exception:
+                    break
+        except Exception:
+            pass
 
     def save(self, platform: str, user_info: UserInfo, cookies: dict[str, str]) -> None:
-        """保存凭据。原子性地操作秘密存储与元数据。"""
-        key_id = self._make_key_id(platform, user_info.id)
-        encoded_json = json.dumps(cookies, ensure_ascii=False)
+        """保存凭据。原子性地将加密 Cookie 与元数据持久化至 SQLite。"""
+        validated_cookies = _COOKIES_ADAPTER.validate_python(cookies)
         now = time.time()
+        uid = str(user_info.id)
 
         with self._db_lock:
-            # 记录修改前的旧秘密，以便在 SQLite 失败时精确恢复
-            old_secret = self.backend.get_secret(SERVICE_NAME, key_id)
-
-            # 1. 写秘密
-            self.backend.set_secret(SERVICE_NAME, key_id, encoded_json)
-            # 2. 写元数据（连接/执行/提交失败均进行补偿回滚与事务 rollback）
             conn: sqlite3.Connection | None = None
+            in_tx = False
             try:
                 conn = self._get_connection()
+                conn.execute("BEGIN IMMEDIATE")
+                in_tx = True
+
+                fernet_key = self._get_or_create_master_key_in_tx(conn, create_if_missing=True)
+                fernet = _build_fernet(fernet_key)
+
+                cursor = conn.execute("SELECT encrypted_cookies FROM accounts WHERE encrypted_cookies IS NOT NULL LIMIT 1")
+                sample = cursor.fetchone()
+                if sample and sample[0]:
+                    try:
+                        fernet.decrypt(sample[0])
+                    except Exception:
+                        raise AuthError("系统主密钥与现有凭据不匹配，拒绝操作") from None
+
+                payload = _EncryptedCookiePayload(
+                    version=1,
+                    platform=platform,
+                    user_id=uid,
+                    cookies=validated_cookies,
+                )
+                encrypted_blob = fernet.encrypt(encode_json(payload))
+
+                cursor = conn.execute(
+                    "SELECT key_id FROM accounts WHERE platform = ? AND user_id = ?",
+                    (platform, uid),
+                )
+                existing_row = cursor.fetchone()
+                if existing_row and existing_row[0]:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO legacy_tombstones (key_id) VALUES (?)",
+                        (str(existing_row[0]),),
+                    )
+
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO accounts (platform, user_id, name, school, key_id, saved_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO accounts (
+                        platform, user_id, name, school, key_id, saved_at, encrypted_cookies, encryption_version
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, 1)
                     """,
-                    (platform, str(user_info.id), user_info.name, user_info.school, key_id, now),
+                    (platform, uid, user_info.name, user_info.school, now, encrypted_blob),
                 )
-                conn.commit()
-            except Exception as db_exc:
-                if conn is not None:
+                conn.execute("COMMIT")
+                in_tx = False
+
+                self._drain_legacy_tombstones(conn)
+            except Exception:
+                if in_tx and conn is not None:
                     try:
-                        conn.rollback()
+                        conn.execute("ROLLBACK")
                     except Exception:
                         pass
-                try:
-                    if old_secret is not None:
-                        self.backend.set_secret(SERVICE_NAME, key_id, old_secret)
-                    else:
-                        self.backend.delete_secret(SERVICE_NAME, key_id)
-                except Exception as comp_exc:
-                    raise comp_exc from db_exc
                 raise
             finally:
                 if conn is not None and self._memory_conn is None:
@@ -252,47 +359,173 @@ class CredentialStore:
 
     def get_cookies(self, platform: str, user_id: str | int) -> dict[str, str] | None:
         """获取账号的 Cookie 字典。"""
-        key_id = self._make_key_id(platform, user_id)
+        uid = str(user_id)
         with self._db_lock:
-            raw_secret = self.backend.get_secret(SERVICE_NAME, key_id)
-        if not raw_secret:
-            return None
-        parsed = decode_json(raw_secret)
-        if isinstance(parsed, dict):
-            return _COOKIES_ADAPTER.validate_python(parsed)
-        return None
+            conn: sqlite3.Connection | None = None
+            in_tx = False
+            try:
+                conn = self._get_connection()
+                conn.execute("BEGIN IMMEDIATE")
+                in_tx = True
+
+                cursor = conn.execute(
+                    """
+                    SELECT platform, user_id, key_id, encrypted_cookies, encryption_version
+                    FROM accounts
+                    WHERE platform = ? AND user_id = ?
+                    """,
+                    (platform, uid),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    conn.execute("COMMIT")
+                    in_tx = False
+                    return None
+
+                row_plat, row_uid, key_id, encrypted_cookies, encryption_version = row
+
+                if encrypted_cookies is not None:
+                    if encryption_version != 1:
+                        raise AuthError(f"不支持的凭据加密版本: {encryption_version}")
+
+                    fernet_key = self._get_or_create_master_key_in_tx(conn, create_if_missing=False)
+                    fernet = _build_fernet(fernet_key)
+
+                    try:
+                        decrypted_bytes = fernet.decrypt(encrypted_cookies)
+                    except InvalidToken:
+                        raise AuthError("凭据密文损坏或认证失败") from None
+                    except Exception:
+                        raise AuthError("凭据解密失败") from None
+
+                    try:
+                        payload = _EncryptedCookiePayload.model_validate_json(decrypted_bytes)
+                    except Exception:
+                        raise AuthError("凭据载荷校验失败") from None
+
+                    if payload.version != 1:
+                        raise AuthError(f"不支持的载荷版本: {payload.version}")
+
+                    if payload.platform != platform or payload.user_id != uid:
+                        raise AuthError("凭据数据身份不匹配")
+
+                    if key_id:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO legacy_tombstones (key_id) VALUES (?)",
+                            (str(key_id),),
+                        )
+                        conn.execute(
+                            "UPDATE accounts SET key_id = NULL WHERE platform = ? AND user_id = ?",
+                            (platform, uid),
+                        )
+
+                    conn.execute("COMMIT")
+                    in_tx = False
+
+                    self._drain_legacy_tombstones(conn)
+                    return payload.cookies
+
+                if not key_id:
+                    conn.execute("COMMIT")
+                    in_tx = False
+                    return None
+
+                legacy_key_id = str(key_id)
+                raw_secret = self.backend.get_secret(SERVICE_NAME, legacy_key_id)
+                if not raw_secret:
+                    conn.execute("COMMIT")
+                    in_tx = False
+                    return None
+
+                parsed = decode_json(raw_secret)
+                if not isinstance(parsed, dict):
+                    conn.execute("COMMIT")
+                    in_tx = False
+                    return None
+                validated_cookies = _COOKIES_ADAPTER.validate_python(parsed)
+
+                fernet_key = self._get_or_create_master_key_in_tx(conn, create_if_missing=True)
+                fernet = _build_fernet(fernet_key)
+
+                payload = _EncryptedCookiePayload(
+                    version=1,
+                    platform=platform,
+                    user_id=uid,
+                    cookies=validated_cookies,
+                )
+                encrypted_blob = fernet.encrypt(encode_json(payload))
+
+                conn.execute(
+                    "INSERT OR REPLACE INTO legacy_tombstones (key_id) VALUES (?)",
+                    (legacy_key_id,),
+                )
+                conn.execute(
+                    """
+                    UPDATE accounts
+                    SET encrypted_cookies = ?, encryption_version = 1, key_id = NULL
+                    WHERE platform = ? AND user_id = ?
+                    """,
+                    (encrypted_blob, platform, uid),
+                )
+                conn.execute("COMMIT")
+                in_tx = False
+
+                self._drain_legacy_tombstones(conn)
+                return validated_cookies
+            except Exception:
+                if in_tx and conn is not None:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                raise
+            finally:
+                if conn is not None and self._memory_conn is None:
+                    conn.close()
 
     def delete(self, platform: str, user_id: str | int) -> bool:
         """原子删除指定账号的凭据与元数据。"""
-        key_id = self._make_key_id(platform, user_id)
+        uid = str(user_id)
         with self._db_lock:
-            # 记录修改前的旧秘密，以便在 SQLite 失败时精确恢复
-            old_secret = self.backend.get_secret(SERVICE_NAME, key_id)
-
-            # 1. 先删秘密
-            self.backend.delete_secret(SERVICE_NAME, key_id)
-
-            # 2. 删元数据（连接/执行/提交失败均进行补偿回滚与事务 rollback）
             conn: sqlite3.Connection | None = None
+            in_tx = False
             try:
                 conn = self._get_connection()
+                conn.execute("BEGIN IMMEDIATE")
+                in_tx = True
+
                 cursor = conn.execute(
-                    "DELETE FROM accounts WHERE platform = ? AND user_id = ?",
-                    (platform, str(user_id)),
+                    "SELECT key_id FROM accounts WHERE platform = ? AND user_id = ?",
+                    (platform, uid),
                 )
-                conn.commit()
-                return cursor.rowcount > 0
-            except Exception as db_exc:
-                if conn is not None:
+                row = cursor.fetchone()
+                if row is None:
+                    conn.execute("COMMIT")
+                    in_tx = False
+                    return False
+
+                legacy_key_id = str(row[0]) if row[0] else None
+                if legacy_key_id:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO legacy_tombstones (key_id) VALUES (?)",
+                        (legacy_key_id,),
+                    )
+
+                conn.execute(
+                    "DELETE FROM accounts WHERE platform = ? AND user_id = ?",
+                    (platform, uid),
+                )
+                conn.execute("COMMIT")
+                in_tx = False
+
+                self._drain_legacy_tombstones(conn)
+                return True
+            except Exception:
+                if in_tx and conn is not None:
                     try:
-                        conn.rollback()
+                        conn.execute("ROLLBACK")
                     except Exception:
                         pass
-                try:
-                    if old_secret is not None:
-                        self.backend.set_secret(SERVICE_NAME, key_id, old_secret)
-                except Exception as comp_exc:
-                    raise comp_exc from db_exc
                 raise
             finally:
                 if conn is not None and self._memory_conn is None:

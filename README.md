@@ -25,7 +25,7 @@
   - **浏览器指纹**：默认伪装 Chrome 的 TLS/JA3 与 HTTP/2 指纹（`WKHELPER_IMPERSONATE` 可切换目标或 `none`），UA 与指纹保持一致。
   - **网络出口**：全局支持指定代理通道（`--proxy`）与自定义浏览器标头（`--user-agent`，指定后会关闭指纹伪装）。
 - **安全凭据存储**
-  - 接入操作系统安全保管库（Windows Vault / macOS Keychain / SecretService），不以明文存储会话秘密；支持系统凭据或纯内存会话（`--credential-mode session`）。
+  - 系统安全保管库（Windows Vault / macOS Keychain / SecretService）仅保存主密钥；Cookie 使用 Fernet 认证加密后存入 SQLite，避免系统凭据的单条容量限制。`--credential-mode session` 全程仅使用内存。
 - **完备的机器契约自省**
   - 提供 `wkhelper schema`，供 LLM Agent 按需自省命令规范、参数定义、副作用等级与调用示例。
 
@@ -82,7 +82,7 @@ wkhelper status        # 本地凭据后端与已存账号
 
 ### 1. 账号认证 (`auth`)
 
-登录默认采用官方页面浏览器驱动（基于 CDP）：自动启动受管浏览器窗口打开官方登录页，用户在浏览器中手动完成登录（扫码、手机验证码或账号密码均可）。WkHelper 自动监听捕获核心认证 Cookie（默认 120 秒超时），经服务端校验通过后自动关闭浏览器窗口并清理临时配置目录，将凭据持久化至系统安全保管库。
+登录默认采用官方页面浏览器驱动（基于 CDP）：自动启动受管浏览器窗口打开官方登录页，用户在浏览器中手动完成登录（扫码、手机验证码或账号密码均可）。WkHelper 自动捕获认证 Cookie（默认 120 秒超时），经服务端校验通过后关闭浏览器并清理临时配置目录，默认将 Cookie 加密保存至本地 SQLite，主密钥保存在系统安全保管库。
 
 历史参数 `--method qrcode`、`--display` 与 `--open-browser` 仍可解析，统一使用官方页面浏览器登录；二维码协议与本地二维码服务已移除。
 
@@ -103,7 +103,9 @@ wkhelper auth status -p ykt
 wkhelper auth list
 ```
 
-凭据保存或删除遇到数据库连接、执行或提交失败时，会回滚事务并补偿恢复旧秘密；若秘密补偿本身失败，错误会保留数据库故障的因果链。
+账号元数据与 Cookie 密文在同一个 SQLite 事务中保存或删除；事务失败时保留原数据。旧版 Keyring Cookie 在读取时自动加密迁移，数据库提交成功后才清理旧秘密；清理失败会保留待处理记录供后续重试。
+
+每个数据库使用独立主密钥。密钥缺失、密文损坏或账号身份不匹配时会明确报错，不自动重置或覆盖。备份、迁移环境时必须同时保留 SQLite 数据库及对应的系统 Keyring 主密钥；仅复制数据库无法恢复登录态，当前 CLI 不提供密钥导出命令。`session` 模式不创建磁盘数据库，也不访问系统 Keyring。
 
 ### 2. 课程查询 (`course`)
 
@@ -260,8 +262,8 @@ wkhelper schema --path "homework submit" --full
 | **全局** | `--proxy <url>` | 无 | 路由全局网络流量通过 HTTP / SOCKS5 代理出口 |
 | **全局** | `--user-agent <ua>` | 伪装目标自带 | 指定真实浏览器 UA；与指纹伪装互斥，指定后回退为 libcurl 默认指纹 |
 | **全局** | `--format <json\|md>` | 按 TTY 推断 | 强制输出格式，非 TTY 下默认 `json` |
-| **全局** | `--credential-mode <system\|session>` | `system` | 凭据写入系统保险库，或仅驻留内存 |
-| **全局** | `--data-dir <dir>` | 平台默认目录 | 凭据元数据与检查点数据目录 |
+| **全局** | `--credential-mode <system\|session>` | `system` | SQLite 加密保存 Cookie、系统 Keyring 保存主密钥，或全程仅使用内存 |
+| **全局** | `--data-dir <dir>` | 平台默认目录 | 加密凭据数据库与检查点数据目录 |
 | **全局** | `--cookie-file <path>` | 无 | 会话 Cookie 文件，需配合 `--credential-mode session` |
 | **作业提交** | `--concurrency <N>` | `1` | 严格限制并发提交数，默认单线程顺序提交 |
 | **作业提交** | `--delay <sec>` | `8.0` | 每个提交任务获得并发槽位后等待；默认并发 1 时逐题保持间隔，并发大于 1 时不承诺全局请求间隔 |

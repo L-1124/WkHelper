@@ -36,7 +36,7 @@ wkhelper/
   infra/
     http.py                 # 唯一会话构造出口、HTTP 请求与重试
     clock.py                # 服务器时钟校准
-    credentials.py          # Keyring 秘密 + SQLite 元数据
+    credentials.py          # Keyring 主密钥 + SQLite 加密 Cookie 与账号元数据
     events.py               # NDJSON 事件与 notifier
     serialization.py        # Pydantic TypeAdapter JSON 编码边界
     files.py                # 原子拒绝覆盖发布
@@ -70,7 +70,7 @@ tests/
 | 平台 API 适配     | `wkhelper/platform/*.py`          | 只写平台协议，不导入业务引擎或 runner |
 | CLI 契约与 Schema | `wkhelper/cli/spec.py`             | 命令规范与渐进披露 |
 | 输出契约与数据模型| `wkhelper/domain/*.py`             | 按业务归属；输入计划在 `video/plan.py` |
-| 凭据存储策略      | `wkhelper/infra/credentials.py`    | 系统 Keyring 与元数据分离 |
+| 凭据存储策略      | `wkhelper/infra/credentials.py`    | Fernet 认证加密、SQLite 事务与 Keyring 主密钥；旧 Cookie 按需安全迁移 |
 
 ## CONVENTIONS
 
