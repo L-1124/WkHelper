@@ -59,12 +59,14 @@ class MockPlatform(BasePlatform):
                         "leaf_type": 4,
                         "is_show": True,
                     },
+                    {"id": 103, "name": "课程讲义", "leaf_type": 7, "is_show": True},
+                    {"id": 104, "name": "未发布讲义", "leaf_type": 7, "is_show": False},
                 ],
             }
         ]
 
     async def get_leaf_schedules(self, course):
-        return {101: 1.0, 102: 0.0}
+        return {101: 1.0, 102: 0.0, 103: 0.99, 104: 1.0}
 
     def _build_leaf_info_url(self, leaf_id, course):
         return f"https://api.test/leaf_info/{leaf_id}"
@@ -96,9 +98,7 @@ async def test_get_articles_and_read_article():
         course = _sample_course()
 
         articles = await get_articles(plat, course)
-        assert len(articles) == 1
-        assert articles[0].id == "101"
-        assert articles[0].completed is True
+        assert [(item.id, item.completed) for item in articles] == [("101", True), ("103", False)]
 
         res = await read_article(plat, "101", course)
         assert res.success is True

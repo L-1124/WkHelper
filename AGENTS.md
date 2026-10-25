@@ -5,9 +5,9 @@
 
 ## OVERVIEW
 
-`wkhelper` 是面向 AI Agent 的非交互网课自动化 CLI 工具，支持雨课堂与学堂在线。
+`wkhelper` 是面向 AI Agent 的非交互网课自动化 CLI 工具，支持雨课堂、学堂在线与中国大学 MOOC 的登录和信息查询。
 
-- 平台：`yuketang.cn` / `xuetangx.com`
+- 平台：`yuketang.cn` / `xuetangx.com` / `icourse163.org`
 - 架构：异步（`asyncio` + `curl_cffi` + `TaskGroup`）+ 系统凭据存储（`keyring`）
 - 交互：标准单行 JSON 信封（stdout）+ 结构化 NDJSON 事件（stderr）
 - 命令框架：Cyclopts 5.x 声明式类型化命令树（根应用统一 `help_formatter="plain"`，无 ANSI；全局会话参数由 meta 应用承载）

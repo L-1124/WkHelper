@@ -19,6 +19,7 @@ from wkhelper.infra.credentials import CredentialStore
 from wkhelper.infra.http import AsyncSession, build_session
 from wkhelper.infra.serialization import decode_json
 from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.icourse163 import Icourse163Platform
 from wkhelper.platform.xuetangx import XuetangXPlatform
 from wkhelper.platform.yuketang import YuketangPlatform
 from wkhelper.video.plan import VideoPlan
@@ -90,11 +91,15 @@ def _paginate[T](items: Sequence[T], limit: int, cursor: str | None) -> tuple[li
 
 def _validate_platform_code(platform: str | None) -> None:
     """校验平台代码（命令行由 `Literal` 兜底，此处守住计划文件等外部输入）。"""
-    if platform is not None and platform not in ("ykt", "xtzx"):
-        raise ValueError(f"不支持的平台代码: {platform}，仅支持 ykt 或 xtzx")
+    if platform is not None and platform not in ("ykt", "xtzx", "icourse163"):
+        raise ValueError(f"不支持的平台代码: {platform}，仅支持 ykt、xtzx 或 icourse163")
 
 
-_PLATFORM_TYPES: dict[str, type[BasePlatform]] = {"ykt": YuketangPlatform, "xtzx": XuetangXPlatform}
+_PLATFORM_TYPES: dict[str, type[BasePlatform]] = {
+    "ykt": YuketangPlatform,
+    "xtzx": XuetangXPlatform,
+    "icourse163": Icourse163Platform,
+}
 
 
 def _create_platform_instance(platform_code: str, client: AsyncSession) -> BasePlatform:

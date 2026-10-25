@@ -72,6 +72,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper auth login --platform ykt",
             "wkhelper auth login --platform ykt --method browser",
             "wkhelper auth login --platform xtzx --method browser",
+            "wkhelper auth login --platform icourse163 --method browser",
             "wkhelper auth login --platform ykt --method cookie --cookie-file cookies.json",
         ],
     },

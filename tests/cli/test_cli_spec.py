@@ -195,7 +195,7 @@ def test_schema_union_resolution_preserves_alternatives():
     assert on_error_arg.choices == ["stop", "continue"]
 
     platform_arg = next(arg for arg in spec.arguments if arg.name == "platform")
-    assert platform_arg.choices == ["ykt", "xtzx"]
+    assert platform_arg.choices == ["ykt", "xtzx", "icourse163"]
 
     schema = get_command_schema("video learn", full=True)
     schema_params = cast(list[dict[str, Any]], schema["parameters"])
@@ -203,7 +203,7 @@ def test_schema_union_resolution_preserves_alternatives():
     assert on_error_param["choices"] == ["stop", "continue"]
 
     platform_param = next(p for p in schema_params if p["name"] == "platform")
-    assert platform_param["choices"] == ["ykt", "xtzx"]
+    assert platform_param["choices"] == ["ykt", "xtzx", "icourse163"]
 
 
 def test_app_build_and_error():

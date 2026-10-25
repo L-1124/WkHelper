@@ -13,7 +13,7 @@ async def get_articles(platform: BasePlatform, course: Course) -> list[ArticleIt
     schedules = await platform.get_leaf_schedules(course)
     articles: list[ArticleItem] = []
     for leaf, chapter_name, section_name in iter_leaves_with_context(data):
-        if leaf.get("leaf_type") != 3 or not leaf.get("is_show", True):
+        if leaf.get("leaf_type") not in (3, 7) or not leaf.get("is_show", True):
             continue
         leaf_id = leaf.get("id")
         if leaf_id is None:

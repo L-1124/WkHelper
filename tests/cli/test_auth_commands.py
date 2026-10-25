@@ -1,6 +1,6 @@
 """CLI 凭据与账号认证命令集成测试。
 
-覆盖 ykt、xtzx 的官方浏览器登录、Cookie 文件导入登录、
+覆盖 ykt、xtzx、icourse163 三平台的官方浏览器登录、Cookie 文件导入登录、
 历史参数向后兼容（qrcode/display/open-browser）以及状态自省。
 """
 
@@ -25,13 +25,13 @@ def credential_store(monkeypatch: pytest.MonkeyPatch) -> CredentialStore:
     return store
 
 
-@pytest.mark.parametrize("platform", ["ykt", "xtzx"])
+@pytest.mark.parametrize("platform", ["ykt", "xtzx", "icourse163"])
 @pytest.mark.parametrize("method_args", [[], ["-m", "browser", "--timeout", "45"]])
 @pytest.mark.asyncio
 async def test_auth_login_browser_default_three_platforms(
     platform: str, method_args: list[str], monkeypatch: pytest.MonkeyPatch, credential_store: CredentialStore
 ) -> None:
-    """默认不传 -m 时采用 browser 方式登录，并持久化凭据。"""
+    """默认不传 -m 时采用 browser 方式登录，三个平台均正确调用 login_account 并持久化。"""
     captured_calls: list[dict[str, Any]] = []
 
     async def fake_login_account(plat: BasePlatform, *, cookies: dict[str, str] | None = None, timeout: int = 120) -> UserInfo:
@@ -67,7 +67,7 @@ async def test_auth_login_browser_default_three_platforms(
     assert accounts[0].name == f"User_{platform}"
 
 
-@pytest.mark.parametrize("platform", ["ykt", "xtzx"])
+@pytest.mark.parametrize("platform", ["ykt", "xtzx", "icourse163"])
 @pytest.mark.asyncio
 async def test_auth_login_cookie_file_three_platforms(
     platform: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, credential_store: CredentialStore

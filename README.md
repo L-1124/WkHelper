@@ -4,8 +4,9 @@
 [![Package Manager](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square)](https://github.com/astral-sh/uv)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff)
 
-面向 AI Agent 与自动化工作流的 Headless 网课自动化 CLI，支持**雨课堂**（`yuketang.cn` / 高校定制平台）与**学堂在线**（`xuetangx.com`）。
+面向 AI Agent 与自动化工作流的 Headless 网课自动化 CLI，支持**雨课堂**（`yuketang.cn` / 高校定制平台）、**学堂在线**（`xuetangx.com`）与**中国大学 MOOC**（`icourse163.org`）。
 
+> **平台支持范围说明**：中国大学 MOOC（`icourse163`）支持账号登录、课程分页、多层章节大纲与节点进度查询，以及视频、章级评测、考试、资料和讨论的只读列表。随堂测验与章级评测分别分类，课件/PDF 与图文均计入资料列表。视频学习执行与作业提交等写操作仍由雨课堂（`ykt`）与学堂在线（`xtzx`）支持。
 ---
 
 ## 核心特性
@@ -86,14 +87,14 @@ wkhelper status        # 本地凭据后端与已存账号
 历史参数 `--method qrcode`、`--display` 与 `--open-browser` 仍可解析，统一使用官方页面浏览器登录；二维码协议与本地二维码服务已移除。
 
 ```bash
-# 启动官方页面浏览器登录（支持 ykt / xtzx，默认方式）
+# 启动官方页面浏览器登录（支持 ykt / xtzx / icourse163，默认方式）
 wkhelper auth login -p ykt
 
 # 显式指定浏览器登录方式与超时时间
 wkhelper auth login -p xtzx -m browser --timeout 180
 
 # 导入 Cookie 文件登录（无图形环境或自动化 CI）
-wkhelper auth login -p xtzx -m cookie --cookie-file cookies.json
+wkhelper auth login -p icourse163 -m cookie --cookie-file cookies.json
 
 # 验证当前凭据有效性
 wkhelper auth status -p ykt

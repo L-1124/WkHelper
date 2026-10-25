@@ -203,7 +203,7 @@ async def _get_generic_summary(platform: BasePlatform, course: Course) -> Course
             counts["讨论"]["total"] += 1
             if done:
                 counts["讨论"]["done"] += 1
-        elif ltype == 3:
+        elif ltype in (3, 7):
             counts["资料"]["total"] += 1
             if done:
                 counts["资料"]["done"] += 1

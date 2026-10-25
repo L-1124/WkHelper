@@ -10,6 +10,7 @@ import pytest
 from wkhelper.auth import browser
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.errors import APIError, AuthError
+from wkhelper.platform.icourse163 import Icourse163Platform
 
 pytestmark = pytest.mark.asyncio
 
@@ -111,6 +112,17 @@ async def test_browser_platform_failure_propagates(login_browser):
     state.platform.login_with_cookies = AsyncMock(side_effect=APIError("服务不可用"))
     with pytest.raises(APIError, match="服务不可用"):
         await browser.login_with_browser(state.platform)
+    assert_released(state)
+
+
+async def test_mooc_browser_accepts_actual_session_cookie(login_browser):
+    state = login_browser
+    platform = Icourse163Platform(state.platform.client)
+    user = UserInfo(id="42", name="MOOC 用户")
+    state.cookie_batches = [{"STUDY_SESS": "authenticated", "NTESSTUDYSI": "csrf"}]
+    platform.login_with_cookies = AsyncMock(return_value=user)
+    assert await browser.login_with_browser(platform, timeout=1) == user
+    assert platform.current_cookies == {"STUDY_SESS": "authenticated", "NTESSTUDYSI": "csrf"}
     assert_released(state)
 
 

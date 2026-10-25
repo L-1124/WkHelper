@@ -15,7 +15,7 @@ from wkhelper.infra.events import debug_scope
 
 type OutputFormat = Literal["json", "md", "markdown"]
 type CredentialMode = Literal["system", "session"]
-type PlatformCode = Literal["ykt", "xtzx"]
+type PlatformCode = Literal["ykt", "xtzx", "icourse163"]
 
 
 class SessionOptions(Model):
