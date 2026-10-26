@@ -14,12 +14,7 @@
 |---|---|---|---|
 | `ykt` | 雨课堂 | `yuketang.cn` / 高校定制平台 | 账号登录、课程大纲、视频学习/抽帧、作业与题目检索/提交/导出、资料、讨论、考试 |
 | `xtzx` | 学堂在线 | `xuetangx.com` | 账号登录、课程大纲、视频学习/抽帧、作业与题目检索/提交/导出、资料、讨论、考试 |
-| `icourse163` | 中国大学 MOOC | `icourse163.org` | 账号登录、课程列表、多层章节大纲与进度查询，视频/作业/资料/讨论/考试只读列表 |
-
-> [!NOTE]
-> 中国大学 MOOC（`icourse163`）目前支持账号登录、课程大纲与进度查询，以及各模块只读列表；视频学习推进与作业提交等写操作暂未接入。
-
----
+| `icourse163` | 中国大学 MOOC | `icourse163.org` | 账号登录、课程列表、多层章节大纲与进度查询，双路协议视频学习、只读作业/资料/讨论/考试列表 |
 
 ## 核心特性
 
@@ -118,9 +113,6 @@ wkhelper auth status
 wkhelper auth remove -p ykt -a 123456 --confirm
 ```
 
-> [!NOTE]
-> 凭据数据库与操作系统 Keyring 主密钥一一对应。备份或迁移环境时需同时保留 SQLite 数据库与系统保管库中的主密钥。`--credential-mode session` 全程仅驻留内存，退出即销毁。
-
 ### 2. 课程查询 (`course`)
 
 ```bash
@@ -153,9 +145,6 @@ wkhelper video learn --plan-file plan.json --checkpoint-file cp.json --confirm
 wkhelper video snapshot -c 1966245:31318907 -v 75369628 --timestamps 30,60,90
 wkhelper video snapshot -c 1966245:31318907 -v 75369628 --count 5 -o ./frames
 ```
-
-> [!TIP]
-> 批量执行支持断点续学。传入 `--resume-from cp.json` 可跳过已达到阈值的视频；遇到停滞任务时将依 `--on-error` 策略决定终止或跳过。
 
 ### 4. 作业与题目检索 (`homework` / `question`)
 
@@ -246,9 +235,6 @@ wkhelper exam status -c 1966245:31318907 -e 84705331
 wkhelper exam close
 ```
 
-> [!IMPORTANT]
-> 考场作答依托真实前台浏览器完成，最终交卷属于不可逆高危操作，必须由考生本人在考场页面核对后自行点击。启用在线人脸监考、截屏检测或线下考场的考试会触发安全锁定，拒绝执行自动化写操作。
-
 ### 9. 命令规范与 Schema 自省 (`schema`)
 
 ```bash
@@ -263,35 +249,22 @@ wkhelper schema --path "homework submit" --full
 
 ## 防风控参数与会话配置
 
-| 作用域 | 参数 | 默认值 | 说明 |
-|---|---|---|---|
-| **全局** | `--proxy <url>` | 无 | 全局网络流量代理（支持 HTTP / SOCKS5） |
-| **全局** | `--user-agent <ua>` | 自动模拟 | 自定义浏览器 User-Agent（指定后回退为通用指纹） |
-| **全局** | `--format <json\|md>` | 自动推断 | 统一输出格式，终端环境下默认 `md`，脚本管线默认 `json` |
-| **全局** | `--credential-mode <system\|session>` | `system` | 凭据存储模式（`system` 为加密存储，`session` 为纯内存） |
-| **全局** | `--data-dir <dir>` | 默认数据目录 | 凭据数据库与检查点存储目录 |
-| **全局** | `--cookie-file <path>` | 无 | 静态会话 Cookie 文件（需配合 `--credential-mode session`） |
-| **作业提交** | `--concurrency <N>` | `1` | 并发提交任务数，默认单任务顺序提交 |
-| **作业提交** | `--delay <sec>` | `8.0` | 单题提交基础间隔秒数 |
-| **作业提交** | `--delay-jitter <sec>`| `3.0` | 提交间隔随机抖动秒数，实际间隔为 `delay ± jitter` |
-| **作业提交** | `--random-order` | `false` | 随机打乱题目提交顺序 |
-| **单题/考试** | `--delay <sec>` | `0.0` | 提交前等待思考秒数 |
-| **单题/考试** | `--delay-jitter <sec>`| `0.0` | 提交等待随机浮动秒数 |
-| **视频学习** | `--jitter <ratio>` | `0.2` | 心跳间隔随机浮动比例（如 `1.5s ± 20%`） |
-| **视频学习** | `--video-delay <sec>` | `3.0` | 连续视频切换之间的冷却等待秒数 |
-
----
-
-## 调试模式与事件流 (`--debug`)
-
-追加全局 `--debug` 选项可输出面向 Agent 的排错数据：
-
-```bash
-wkhelper --debug course inspect -c 1966245:31318907
-```
-
-- **异常诊断**：错误信封（stdout）自动携带结构化堆栈信息（`error.details.traceback`）。
-- **实时网络事件**：stderr 通道输出 `http.trace` 等实时 NDJSON 事件，包含请求方法、URL、HTTP 状态码与耗时。
+| 作用域        | 参数                                  | 默认值       | 说明                                                       |
+|---------------|---------------------------------------|--------------|------------------------------------------------------------|
+| **全局**      | `--proxy <url>`                       | 无           | 全局网络流量代理（支持 HTTP / SOCKS5）                     |
+| **全局**      | `--user-agent <ua>`                   | 自动模拟     | 自定义浏览器 User-Agent（指定后回退为通用指纹）            |
+| **全局**      | `--format <json\|md>`                 | 自动推断     | 统一输出格式，终端环境下默认 `md`，脚本管线默认 `json`     |
+| **全局**      | `--credential-mode <system\|session>` | `system`     | 凭据存储模式（`system` 为加密存储，`session` 为纯内存）    |
+| **全局**      | `--data-dir <dir>`                    | 默认数据目录 | 凭据数据库与检查点存储目录                                 |
+| **全局**      | `--cookie-file <path>`                | 无           | 静态会话 Cookie 文件（需配合 `--credential-mode session`） |
+| **作业提交**  | `--concurrency <N>`                   | `1`          | 并发提交任务数，默认单任务顺序提交                         |
+| **作业提交**  | `--delay <sec>`                       | `8.0`        | 单题提交基础间隔秒数                                       |
+| **作业提交**  | `--delay-jitter <sec>`                | `3.0`        | 提交间隔随机抖动秒数，实际间隔为 `delay ± jitter`          |
+| **作业提交**  | `--random-order`                      | `false`      | 随机打乱题目提交顺序                                       |
+| **单题/考试** | `--delay <sec>`                       | `0.0`        | 提交前等待思考秒数                                         |
+| **单题/考试** | `--delay-jitter <sec>`                | `0.0`        | 提交等待随机浮动秒数                                       |
+| **视频学习**  | `--jitter <ratio>`                    | `0.2`        | 心跳间隔随机浮动比例（如 `1.5s ± 20%`）                    |
+| **视频学习**  | `--video-delay <sec>`                 | `3.0`        | 连续视频切换之间的冷却等待秒数                             |
 
 ---
 

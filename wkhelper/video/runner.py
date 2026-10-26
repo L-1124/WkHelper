@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import AuthError, RiskControlError
 from wkhelper.domain.video import VideoPlanSummary, VideoStatus, VideoTargetResult, VideoWatchResult
 from wkhelper.infra.serialization import decode_json, to_json_value
 from wkhelper.platform.base import BasePlatform
+from wkhelper.platform.icourse163 import Icourse163Platform
 from wkhelper.video.engine import VideoWatchOptions
 from wkhelper.video.plan import VideoParameters, VideoTarget
 from wkhelper.video.service import do_video
@@ -110,7 +112,11 @@ class VideoPlanRunner:
         resume_from: str | Path | None = None,
     ) -> VideoPlanSummary:
         """执行 Agent 编写的批量视频计划。"""
-        base_options = default_options or VideoWatchOptions()
+        raw_base = default_options or VideoWatchOptions()
+        if isinstance(self.platform, Icourse163Platform):
+            base_options = VideoWatchOptions.model_validate(raw_base.model_dump() | {"heartbeat_interval": 10.0, "jitter": 0.0})
+        else:
+            base_options = raw_base
         semaphore = asyncio.Semaphore(max(1, concurrency))
 
         # 1. 目标排重（相同 course_id + video_id 只保留第一个）并计算有效阈值
@@ -133,6 +139,7 @@ class VideoPlanRunner:
         results: list[VideoTargetResult] = list(preserved_records)
         lock = asyncio.Lock()
         stop_flag = False
+        fatal_errors: list[AuthError | RiskControlError] = []
         plan_deadline = asyncio.get_running_loop().time() + base_options.total_timeout
 
         def _save_checkpoint() -> None:
@@ -223,6 +230,9 @@ class VideoPlanRunner:
                         stop_flag = True
                 except Exception as exc:
                     async with lock:
+                        if isinstance(self.platform, Icourse163Platform) and isinstance(exc, (AuthError, RiskControlError)):
+                            fatal_errors.append(exc)
+                            stop_flag = True
                         results.append(self._failed_result(target, str(exc)))
                         _save_checkpoint()
                         if on_error == "stop":
@@ -231,6 +241,8 @@ class VideoPlanRunner:
         async with asyncio.TaskGroup() as tg:
             for target in deduped_targets:
                 tg.create_task(worker(target))
+        if fatal_errors:
+            raise fatal_errors[0]
 
         completed_count = sum(1 for record in results if record.status in ("completed", "threshold_reached"))
         return VideoPlanSummary(

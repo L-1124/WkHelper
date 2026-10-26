@@ -2,7 +2,7 @@
 
 import random
 
-from pydantic import ConfigDict, Field, JsonValue, field_validator
+from pydantic import ConfigDict, Field, JsonValue, ValidationInfo, field_validator
 
 from wkhelper.domain.model import Model
 
@@ -36,6 +36,37 @@ class HeartbeatProfile(Model):
     n: str = ""
     sp: float = 1.0
     interval: int = 5
+
+
+class MoocVideoContext(Model):
+    """中国大学 MOOC 视频学习上下文。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    course_id: str = Field(min_length=1)
+    unit_id: str = Field(pattern=r"^[0-9]+$")
+    term_id: int = Field(gt=0, strict=True)
+    lesson_id: int = Field(gt=0, strict=True)
+    video_id: int = Field(gt=0, strict=True)
+    duration: float = Field(gt=0, allow_inf_nan=False, strict=True)
+    start: float = Field(ge=0, allow_inf_nan=False, strict=True)
+    unit_view_status: int | None = None
+    lesson_view_status: int | None = None
+
+    @field_validator("unit_id")
+    @classmethod
+    def _positive_unit(cls, value: str) -> str:
+        if int(value) <= 0:
+            raise ValueError("unit_id 必须为正整数 ID")
+        return value
+
+    @field_validator("start")
+    @classmethod
+    def _validate_start(cls, value: float, info: ValidationInfo) -> float:
+        duration = info.data.get("duration")
+        if duration is not None and value > duration:
+            raise ValueError("start 不能超过 duration")
+        return value
 
 
 class PlatformExamTokenData(Model):

@@ -49,6 +49,9 @@ class VideoProgress(Model):
     video_id: str
     current_rate: float
     completed: bool
+    unit_view_status: int | None = None
+    lesson_view_status: int | None = None
+    resume_position: float | None = None
 
 
 class VideoListData(Model):
@@ -67,6 +70,7 @@ class VideoWatchResult(Model):
     initial_rate: float = 0.0
     final_rate: float = 0.0
     heartbeats_sent: int = 0
+    learning_reports_sent: int = 0
     duration_seconds: float = 0.0
     message: str = ""
 

@@ -40,6 +40,7 @@ from wkhelper.infra.throttle import RateGate, RetryPolicy
 from wkhelper.platform.parsing import parse_exercise_response
 from wkhelper.platform.protocol_types import (
     HeartbeatProfile,
+    MoocVideoContext,
     PlatformExamCacheData,
     PlatformExamCoverData,
     PlatformExamPaperData,
@@ -568,7 +569,28 @@ class BasePlatform(ABC):
         return bytes(response.content or b"")
 
     @abstractmethod
-    async def prepare_video_context(self, video_id: str, course: Course) -> VideoContext: ...
+    async def prepare_video_context(self, video_id: str, course: Course) -> VideoContext | MoocVideoContext: ...
+
+    async def report_video_learning(
+        self,
+        context: MoocVideoContext,
+        *,
+        video_time: int,
+        learned_seconds: int,
+        finished: bool,
+        index: int,
+        timeout: float,
+    ) -> None:
+        """上报视频学习记录（MOOC 平台实现）。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现视频学习上报接口")
+
+    async def record_video_visit(self, context: MoocVideoContext, *, timeout: float) -> None:
+        """初次访问视频单元打点（MOOC 平台实现）。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现视频初访打点接口")
+
+    async def send_video_heartbeat(self, context: MoocVideoContext, *, timeout: float) -> None:
+        """发送 VOD 播放器心跳（MOOC 平台实现）。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 VOD 心跳接口")
 
     @property
     @abstractmethod

@@ -70,8 +70,10 @@ async def video_learn_cmd(
     video: Annotated[list[str] | None, Parameter(name=["--video", "-v"], help="视频 ID (可多次指定)")] = None,
     plan_file: Annotated[str | None, Parameter(name=["--plan-file"], help="批量执行计划 JSON 文件")] = None,
     concurrency: Annotated[int | None, Parameter(name=["--concurrency"], help="并发任务数")] = None,
-    learning_rate: Annotated[float | None, Parameter(name=["--learning-rate"], help="播放速率倍数")] = None,
-    heartbeat_interval: Annotated[float | None, Parameter(name=["--heartbeat-interval"], help="心跳间隔 (秒)")] = None,
+    learning_rate: Annotated[float | None, Parameter(name=["--learning-rate"], help="播放速率倍数（MOOC 仅支持 1.0）")] = None,
+    heartbeat_interval: Annotated[
+        float | None, Parameter(name=["--heartbeat-interval"], help="心跳间隔 (秒，MOOC 为 VOD 心跳且固定 10.0，课程记录独立固定 60.0)")
+    ] = None,
     progress_interval: Annotated[float | None, Parameter(name=["--progress-interval"], help="进度复查间隔 (秒)")] = None,
     completion_threshold: Annotated[
         float | None, Parameter(name=["--completion-threshold"], help="完成进度阈值 (0 到 1 之间的小数)")
@@ -79,8 +81,10 @@ async def video_learn_cmd(
     video_timeout: Annotated[float | None, Parameter(name=["--video-timeout"], help="单视频总超时 (秒)")] = None,
     total_timeout: Annotated[float | None, Parameter(name=["--total-timeout"], help="批任务总超时 (秒)")] = None,
     stall_timeout: Annotated[float | None, Parameter(name=["--stall-timeout"], help="无进展停滞超时（秒）")] = None,
-    max_heartbeats: Annotated[int | None, Parameter(name=["--max-heartbeats"], help="单视频最大心跳数")] = None,
-    jitter: Annotated[float | None, Parameter(name=["--jitter"], help="心跳间隔随机抖动比例 (0-1)")] = None,
+    max_heartbeats: Annotated[
+        int | None, Parameter(name=["--max-heartbeats"], help="单视频最大心跳数（MOOC 约束 VOD 心跳尝试次数）")
+    ] = None,
+    jitter: Annotated[float | None, Parameter(name=["--jitter"], help="心跳间隔随机抖动比例 (0-1，MOOC 仅支持 0.0)")] = None,
     video_delay: Annotated[float | None, Parameter(name=["--video-delay"], help="多视频切换冷却间隔 (秒)")] = None,
     on_error: Annotated[Literal["stop", "continue"] | None, Parameter(name=["--on-error"], help="出错策略")] = None,
     checkpoint_file: Annotated[str | None, Parameter(name=["--checkpoint-file"], help="检查点状态文件")] = None,
@@ -90,7 +94,12 @@ async def video_learn_cmd(
     platform: Annotated[PlatformCode | None, Parameter(name=["--platform", "-p"], help="平台代码")] = None,
     account: Annotated[str | None, Parameter(name=["--account", "-a"], help="账号 ID")] = None,
 ) -> CommandResult[VideoLearnPreview] | CommandResult[VideoPlanSummary]:
-    """执行视频学习任务。"""
+    """执行视频学习任务。
+
+    雨课堂/学堂在线使用打点心跳；中国大学 MOOC 使用 10 秒 VOD 心跳与 60 秒学习记录双路协议
+    （要求 learning_rate=1, heartbeat_interval=10, jitter=0）。
+    结果中的心跳数表示常规/VOD 心跳尝试，学习上报数表示 MOOC 初访与课程记录上报尝试。
+    """
     plan: VideoPlan | None = None
     effective_platform: str | None = platform
     confirm_argv: list[str] = ["wkhelper", "video", "learn"]
@@ -153,13 +162,13 @@ async def video_learn_cmd(
                 targets=targets,
                 requested_config=base_execution,
                 effective_config=effective_execution,
-                note="预览模式不产生网络心跳写入，确认执行请传入 `--confirm`",
+                note="预览模式不发送初访、心跳或学习记录，确认执行请传入 `--confirm`",
             )
         )
 
     if not confirm:
         raise ConfirmationRequiredError(
-            message="视频学习操作涉及向平台提交心跳，必须附加 `--confirm` 参数",
+            message="视频学习涉及向平台写入初访、心跳或学习记录，必须附加 `--confirm` 参数",
             next_actions=[NextAction(reason="确认执行视频学习", argv=[*confirm_argv, "--confirm"])],
         )
 

@@ -1,17 +1,20 @@
 """中国大学MOOC (icourse163.org) 平台适配实现。"""
 
-import logging
+import hashlib
+import math
+import random
+import re
+import time
 from typing import Any, override
 
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError, AuthError
 from wkhelper.domain.homework import Homework
-from wkhelper.domain.video import VideoContext
+from wkhelper.infra.events import emit_event
+from wkhelper.infra.serialization import encode_json
 from wkhelper.platform.base import BasePlatform
-from wkhelper.platform.protocol_types import HeartbeatProfile
-
-logger = logging.getLogger(__name__)
+from wkhelper.platform.protocol_types import HeartbeatProfile, MoocVideoContext
 
 _CONTENT_TYPE_TO_LEAF_TYPE: dict[int, int] = {
     1: 0,
@@ -22,8 +25,18 @@ _CONTENT_TYPE_TO_LEAF_TYPE: dict[int, int] = {
 }
 
 
+def _positive_video_id(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).isascii() or not str(value).isdigit():
+        raise APIError("MOOC 返回了无效的正整数 ID", retryable=False)
+    number = int(value)
+    if number <= 0:
+        raise APIError("MOOC 返回了非正数 ID", retryable=False)
+    return number
+
+
 def _unit_leaf(unit: dict[str, Any]) -> dict[str, Any]:
     content_type = int(unit.get("contentType") or 0)
+    view_status = unit.get("viewStatus")
     return {
         "id": unit.get("id"),
         "name": unit.get("name") or "未命名任务",
@@ -32,6 +45,7 @@ def _unit_leaf(unit: dict[str, Any]) -> dict[str, Any]:
         "content_type": content_type,
         "duration": unit.get("durationInSeconds"),
         "is_show": unit.get("visible") != 0,
+        "unit_view_status": int(view_status) if view_status is not None else None,
     }
 
 
@@ -52,10 +66,12 @@ class Icourse163Platform(BasePlatform):
     """中国大学MOOC (icourse163.org) 平台。"""
 
     api_base = "https://www.icourse163.org"
+    vod_heartbeat_url = "https://vod.study.163.com/submit/heartBeat"
     cookie_domain = ".icourse163.org"
     impersonate = "chrome"
     login_url = "https://www.icourse163.org/member/login.htm"
     essential_cookies = ("STUDY_SESS", "NTESSTUDYSI")
+    _AUTH_SALT = "fu2s2kxcswgn5hqanx7asmlogyr5wu29"
 
     @property
     @override
@@ -220,6 +236,7 @@ class Icourse163Platform(BasePlatform):
                     "id": lesson.get("id"),
                     "name": lesson.get("name") or "未命名小节",
                     "leaf_list": [],
+                    "lesson_view_status": int(lesson["viewStatus"]) if lesson.get("viewStatus") is not None else None,
                 }
                 lesson_item["leaf_list"] = [_unit_leaf(unit) for unit in lesson.get("units") or [] if isinstance(unit, dict)]
                 if lesson.get("test"):
@@ -279,8 +296,250 @@ class Icourse163Platform(BasePlatform):
         return schedules
 
     @override
-    async def prepare_video_context(self, video_id: str, course: Course) -> VideoContext:
-        raise NotImplementedError("中国大学MOOC视频学习上下文尚未接入")
+    async def prepare_video_context(self, video_id: str, course: Course) -> MoocVideoContext:
+        """构建 MOOC 视频学习上下文。"""
+        chapters = await self.get_chapter_data(course)
+        target_unit: dict[str, Any] | None = None
+        target_lesson_id: int | None = None
+        target_lesson_view_status: int | None = None
+
+        for ch in chapters:
+            for sec in ch.get("section_list") or []:
+                for leaf in sec.get("leaf_list") or []:
+                    if str(leaf.get("id")) == str(video_id):
+                        target_unit = leaf
+                        target_lesson_id = sec.get("id")
+                        target_lesson_view_status = sec.get("lesson_view_status")
+                        break
+                if target_unit is not None:
+                    break
+            if target_unit is not None:
+                break
+
+        if target_unit is None:
+            raise LookupError(f"在课程 {course.id} 中未找到视频单元 {video_id}")
+        if not target_unit.get("is_show", True):
+            raise LookupError(f"视频单元 {video_id} 当前不可见或未发布")
+        if target_unit.get("leaf_type") != 0:
+            raise LookupError(f"单元 {video_id} 不是视频任务（leaf_type={target_unit.get('leaf_type')}）")
+
+        content_id = target_unit.get("content_id")
+        unit_view_status = target_unit.get("unit_view_status")
+        term_id = _positive_video_id(course.metadata.get("term_id") or course.id)
+        lesson_id = _positive_video_id(target_lesson_id)
+        unit_id = _positive_video_id(target_unit.get("id"))
+        content_id = _positive_video_id(content_id)
+
+        result = await self._rpc_post(
+            "courseBean.getLessonUnitLearnVo",
+            {
+                "contentId": content_id,
+                "contentType": 1,
+                "isDraft": 0,
+                "unitId": target_unit.get("id"),
+            },
+        )
+        if not isinstance(result, dict):
+            raise APIError("获取视频单元详情失败: 平台未返回有效结果", retryable=False)
+
+        video_vo = result.get("videoVo") if isinstance(result.get("videoVo"), dict) else {}
+
+        raw_vid = video_vo.get("videoId") or result.get("videoId") or content_id
+        video_id_int = _positive_video_id(raw_vid)
+        dur_float = 0.0
+        for raw_dur in (video_vo.get("duration"), result.get("duration"), target_unit.get("duration")):
+            if isinstance(raw_dur, bool) or not isinstance(raw_dur, (str, int, float)):
+                continue
+            try:
+                candidate = float(raw_dur)
+            except ValueError:
+                continue
+            if math.isfinite(candidate) and candidate > 0:
+                dur_float = candidate
+                break
+        if dur_float <= 0:
+            raise APIError("平台未提供有限正数的视频时长", retryable=False)
+
+        raw_start = None
+        if "start" in video_vo:
+            raw_start = video_vo["start"]
+        elif "videoLearnTime" in result:
+            raw_start = result["videoLearnTime"]
+
+        if "start" not in video_vo and "videoLearnTime" not in result:
+            start_float = 0.0
+            emit_event("video.status", {"video_id": video_id, "message": "平台未提供续播位置，从头开始"})
+        else:
+            try:
+                if isinstance(raw_start, bool) or raw_start is None:
+                    raise ValueError
+                start_float = float(raw_start)
+                if not math.isfinite(start_float) or not 0 <= start_float <= dur_float:
+                    raise ValueError
+            except (TypeError, ValueError) as err:
+                raise APIError("平台返回的续播位置无效或超出视频时长", retryable=False) from err
+
+        return MoocVideoContext(
+            course_id=str(course.id),
+            unit_id=str(unit_id),
+            term_id=term_id,
+            lesson_id=lesson_id,
+            video_id=video_id_int,
+            duration=dur_float,
+            start=start_float,
+            unit_view_status=unit_view_status,
+            lesson_view_status=target_lesson_view_status,
+        )
+
+    def _gene_auth_headers(self, body_bytes: bytes) -> dict[str, str]:
+        """对齐前端 geneAuthHeaders：大写 MD5(body_str + nonce + timestamp + salt)。"""
+        timestamp = str(int(time.time() * 1000))
+        nonce = str(random.randint(1000, 9999))
+        body_str = body_bytes.decode("utf-8")
+        raw_sign = f"{body_str}{nonce}{timestamp}{self._AUTH_SALT}"
+        signature = hashlib.md5(raw_sign.encode("utf-8")).hexdigest().upper()
+        return {
+            "Timestamp": timestamp,
+            "Auth-Signature": signature,
+            "Nonce": nonce,
+            "System": "v1",
+            "Content-Type": "application/json;charset=UTF-8",
+        }
+
+    async def _signed_post_once(self, endpoint: str, dto: dict[str, Any], *, timeout: float) -> None:
+        """以签名 JSON 形式向课程 RPC 单次发送 DTO，不经自动重试。"""
+        csrf = self._get_csrf_key()
+        if not csrf:
+            raise AuthError("缺少 csrfKey 凭据，无法发送课程学习记录")
+
+        url = f"{self.api_base}/web/j/{endpoint}.rpc"
+        body = encode_json({"dto": dto})
+        headers = self._gene_auth_headers(body)
+        headers.update(
+            {
+                "Origin": self.api_base,
+                "Referer": f"{self.api_base}/",
+            }
+        )
+
+        await self.gate.acquire()
+        resp = await self._request_json_once("POST", url, params={"csrfKey": csrf}, data=body, headers=headers, timeout=timeout)
+        code = resp.get("code")
+        if code != 0:
+            msg = str(resp.get("message") or "")
+            if code == 1 and ("not_auth" in msg or "login" in msg.lower()):
+                raise AuthError("中国大学MOOC 登录凭据无效或已过期")
+            raise APIError(f"中国大学MOOC 学习请求失败 [{code}]: {msg or '未知错误'}", retryable=False)
+        if resp.get("result") is not True:
+            raise APIError(f"中国大学MOOC 学习请求未确认成功: result={resp.get('result')}", retryable=False)
+
+    @override
+    async def report_video_learning(
+        self,
+        context: MoocVideoContext,
+        *,
+        video_time: int,
+        learned_seconds: int,
+        finished: bool,
+        index: int,
+        timeout: float,
+    ) -> None:
+        """持续学习与完播上报原子方法。"""
+        if any(type(value) is not int for value in (video_time, learned_seconds, index)):
+            raise ValueError("学习位置、计数与序号必须为整数")
+        if not 0 <= video_time <= context.duration:
+            raise ValueError("持续学习位置必须位于视频时长范围内")
+        if learned_seconds < 0:
+            raise ValueError(f"学习秒数不能为负数: learned_seconds={learned_seconds}")
+        if learned_seconds > 60:
+            raise ValueError(f"单次学习秒数不能超过60秒: learned_seconds={learned_seconds}")
+        if index <= 0:
+            raise ValueError(f"上报序号必须为正整数: index={index}")
+
+        dto = {
+            "unitId": int(context.unit_id),
+            "lessonId": context.lesson_id,
+            "termId": context.term_id,
+            "videoId": context.video_id,
+            "finished": finished,
+            "resolutionType": 1,
+            "action": "LEARN_TIME_COUNT",
+            "index": int(index),
+            "videoTime": int(video_time),
+            "learnedVideoTimeCount": int(learned_seconds),
+        }
+        await self._signed_post_once("courseRpcBean.saveMocContentLearn", dto, timeout=timeout)
+
+    @override
+    async def record_video_visit(self, context: MoocVideoContext, *, timeout: float) -> None:
+        """初次访问视频单元打点原子方法。"""
+        dto = {
+            "unitId": int(context.unit_id),
+            "finished": False,
+            "resolutionType": 1,
+            "contentType": 1,
+            "action": "LEARN_TIME_COUNT",
+            "videoTime": -1,
+            "learnedVideoTimeCount": 0,
+        }
+        await self._signed_post_once("courseRpcBean.saveMocContentLearn", dto, timeout=timeout)
+
+    @staticmethod
+    def _detect_browser(user_agent: str) -> str:
+        """对齐前端 _getBrowser 的 UA 解析顺序与后匹配覆盖规则。"""
+        ua = user_agent.lower()
+        browser = "undefined/undefined"
+        # 无 DOM/mimeTypes 时只使用 UA，不能推测 360 插件检测结果。
+        for name, pattern in (
+            ("IE", r"(?:msie\s|trident.*rv:)(\d+)"),
+            ("Chrome", r"chrome/(\d+)"),
+            ("Firefox", r"firefox/(\d+)"),
+            ("Opera", r"opera/(\d+)"),
+            ("Safari", r"version/(\d+)"),
+            ("Edge", r"edge/(\d+)"),
+            ("QQBrowser", r"qqbrowser/(\d+)"),
+        ):
+            if name == "Chrome" and "safari" not in ua:
+                continue
+            if name == "Safari" and ("safari" not in ua or "chrome" in ua):
+                continue
+            match = re.search(pattern, ua)
+            if match:
+                browser = f"{name}/{int(match.group(1))}"
+        if "micromessenger" in ua:
+            browser = "WeixinBrowser/NaN"
+        return browser
+
+    @override
+    async def send_video_heartbeat(self, context: MoocVideoContext, *, timeout: float) -> None:
+        """发送 VOD 播放器遥测心跳原子方法。"""
+        if self.user is None:
+            raise AuthError("未登录 MOOC，无法发送 VOD 心跳")
+        user_id = self.user.id
+
+        ua = self.client.headers.get("User-Agent") or ""
+        device_name = self._detect_browser(ua)
+
+        payload = {
+            "errorCode": None,
+            "errorMsg": None,
+            "preLoadTime": 0,
+            "currentKbps": 0,
+            "userId": user_id,
+            "videoId": context.video_id,
+            "rate": 1,
+            "deviceName": device_name,
+            "source": "web",
+            "time": int(time.time() * 1000),
+        }
+        body = encode_json(payload)
+        headers = {
+            "Content-Type": "application/json",
+            "Origin": self.api_base,
+            "Referer": f"{self.api_base}/",
+        }
+        response = await self.client.post(self.vod_heartbeat_url, data=body, headers=headers, timeout=timeout)
+        response.raise_for_status()
 
     @override
     async def prepare_submit_context(self, homework: Homework, course: Course) -> dict[str, Any]:

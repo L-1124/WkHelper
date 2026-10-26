@@ -1,17 +1,19 @@
 """video 业务流程。"""
 
+import math
 import sys
 from functools import partial
 
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.courses import Course
-from wkhelper.domain.errors import RiskControlError
+from wkhelper.domain.errors import APIError, RiskControlError
 from wkhelper.domain.video import VideoProgress, VideoWatchResult
 from wkhelper.infra.events import EventCallback
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.parsing import format_leaf_label, iter_leaves_with_context
-from wkhelper.platform.protocol_types import create_page_nonce
+from wkhelper.platform.protocol_types import MoocVideoContext, create_page_nonce
 from wkhelper.video.engine import VideoWatchOptions, generic_watch_video, parse_progress_completed, parse_progress_text
+from wkhelper.video.icourse163 import watch_mooc_video
 
 
 async def get_videos(platform: BasePlatform, course: Course) -> dict[int, str]:
@@ -53,6 +55,9 @@ async def do_video(
 ) -> VideoWatchResult:
     """观看单个视频。"""
     ctx = await platform.prepare_video_context(video_id, course)
+    if isinstance(ctx, MoocVideoContext):
+        opts = options or VideoWatchOptions(heartbeat_interval=10.0, jitter=0.0)
+        return await watch_mooc_video(platform, ctx, video_name, course, opts, on_event)
     opts = options or VideoWatchOptions()
     page_nonce = create_page_nonce()
     try:
@@ -87,6 +92,20 @@ async def do_video(
 async def get_video_progress(platform: BasePlatform, video_id: str, course: Course) -> VideoProgress:
     """查询单视频服务端进度与完成标识。"""
     vctx = await platform.prepare_video_context(video_id, course)
+    if isinstance(vctx, MoocVideoContext):
+        schedules = await platform.get_leaf_schedules(course)
+        rate = schedules.get(int(vctx.unit_id))
+        if rate is None or not math.isfinite(rate) or not 0 <= rate <= 1:
+            raise APIError("MOOC 未返回有效的目标视频进度", retryable=False)
+        return VideoProgress(
+            course_id=str(course.id),
+            video_id=video_id,
+            current_rate=rate,
+            completed=rate >= 1.0 and vctx.start / vctx.duration >= 1.0,
+            unit_view_status=vctx.unit_view_status,
+            lesson_view_status=vctx.lesson_view_status,
+            resume_position=vctx.start,
+        )
     resp = await platform.client.get(
         vctx.progress_url,
         params=vctx.progress_params,

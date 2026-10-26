@@ -209,39 +209,61 @@ def _render_course_detail(data: CourseDetail) -> list[str]:
 @renderer(VideoListData)
 def _render_video_list(data: VideoListData) -> list[str]:
     rows = [[i, video.id, video.name, "已完成" if video.completed else "未完成"] for i, video in enumerate(data.videos, 1)]
-    return [f"## 视频列表 (共 {len(data.videos)} 个)", "", *_table(["序号", "视频 ID", "视频节点名称", "状态"], rows)]
+    return [f"## 视频列表 (共 {len(data.videos)} 个)", "", *_table(["序号", "视频 ID", "视频节点名称", "平台记录状态"], rows)]
 
 
 @renderer(VideoProgress)
 def _render_video_progress(data: VideoProgress) -> list[str]:
     tag = "已完成" if data.completed else "进行中"
-    return [
+    rate_label = "平台记录进度" if data.resume_position is not None or data.unit_view_status is not None else "观看进度"
+    lines = [
         f"## 视频进度：`{data.video_id}`",
         "",
         f"- **课程 ID**：`{data.course_id}`",
-        f"- **观看进度**：**{data.current_rate * 100:.1f}%** ({tag})",
+        f"- **{rate_label}**：**{data.current_rate * 100:.1f}%** ({tag})",
     ]
+    if data.unit_view_status is not None:
+        lines.append(f"- **单元查看状态（平台原值）**：`{data.unit_view_status}`")
+    if data.lesson_view_status is not None:
+        lesson_status_desc = {
+            0: "未开始",
+            3: "学习中",
+            5: "已查看",
+        }.get(data.lesson_view_status, str(data.lesson_view_status))
+        lines.append(f"- **小节查看状态**：`{data.lesson_view_status}` ({lesson_status_desc})")
+    if data.resume_position is not None:
+        lines.append(f"- **续播位置（秒）**：`{data.resume_position:.1f}`")
+    return lines
 
 
 @renderer(VideoPlanSummary)
 def _render_video_plan_summary(data: VideoPlanSummary) -> list[str]:
-    rows = [
-        [
+    has_learning_reports = any(result.learning_reports_sent > 0 for result in data.results)
+    headers = ["视频 ID", "初始进度", "最终进度", "状态", "心跳数"]
+    if has_learning_reports:
+        headers.append("学习上报数")
+    headers.extend(["耗时", "详细说明"])
+
+    rows = []
+    for result in data.results:
+        row = [
             result.video_id,
             f"{result.initial_rate * 100:.1f}%",
             f"{result.final_rate * 100:.1f}%",
             result.status,
-            f"{result.duration_seconds:.1f}s",
-            result.message,
+            str(result.heartbeats_sent),
         ]
-        for result in data.results
-    ]
+        if has_learning_reports:
+            row.append(str(result.learning_reports_sent))
+        row.extend([f"{result.duration_seconds:.1f}s", result.message])
+        rows.append(row)
+
     return [
         "## 视频计划学习汇总",
         "",
         f"- **目标总数**：{data.total} | **已完成**：{data.completed} | **失败/中断**：{data.failed}",
         "",
-        *_table(["视频 ID", "初始进度", "最终进度", "状态", "耗时", "详细说明"], rows),
+        *_table(headers, rows),
     ]
 
 

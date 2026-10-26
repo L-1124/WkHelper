@@ -1,5 +1,8 @@
 """中国大学MOOC (icourse163) 平台实现测试。"""
 
+import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -201,3 +204,237 @@ async def test_icourse163_outline_falls_back_to_wrapped_progress(monkeypatch: py
         monkeypatch.setattr(platform, "_request_json", fake_request_json)
         chapters = await platform.get_chapter_data(_sample_course())
         assert [leaf["id"] for leaf, _, _ in iter_leaves_with_context(chapters)] == [3]
+
+
+@pytest.fixture
+def mooc_clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """只替换业务循环的时钟，避免污染 pytest 事件循环。"""
+    from wkhelper.video import icourse163
+
+    clock = SimpleNamespace(now=0.0)
+
+    async def sleep(delay: float) -> None:
+        clock.now += delay
+
+    @asynccontextmanager
+    async def timeout_at(deadline: float):
+        yield
+
+    monkeypatch.setattr(
+        icourse163,
+        "asyncio",
+        SimpleNamespace(get_running_loop=lambda: SimpleNamespace(time=lambda: clock.now), sleep=sleep, timeout_at=timeout_at),
+    )
+    return clock
+
+
+@pytest.fixture
+def mooc_server(monkeypatch: pytest.MonkeyPatch, mooc_clock: SimpleNamespace):
+    """课程记录与 VOD 分路，只有持久化的学习写才能改变断点。"""
+    state = SimpleNamespace(
+        duration=469,
+        start=359,
+        rate=0.99,
+        view=0,
+        persist=True,
+        freeze_rate=False,
+        fail_learning=False,
+        fail_vod=False,
+        calls=[],
+        vod=[],
+        events=[],
+        resume_field="start",
+        resume_value=359,
+    )
+
+    def install(platform: Icourse163Platform) -> None:
+        platform.current_cookies = {"NTESSTUDYSI": "local-csrf"}
+        from wkhelper.domain.accounts import UserInfo
+
+        platform.user = UserInfo(id="888", name="本地用户")
+
+        async def read(method: str, url: str, **kwargs: Any):
+            unit = {
+                "id": 301,
+                "contentId": 9001,
+                "contentType": 1,
+                "viewStatus": state.view,
+                "durationInSeconds": state.duration,
+                "completePercent": state.rate,
+            }
+            tree = {"chapters": [{"id": 101, "lessons": [{"id": 201, "viewStatus": 5, "units": [unit]}]}]}
+            if "getLessonUnitLearnVo" in url:
+                video = {"videoId": 9001, "duration": state.duration}
+                result = {"videoVo": video}
+                if state.resume_field == "start":
+                    video["start"] = state.resume_value
+                elif state.resume_field == "videoLearnTime":
+                    result["videoLearnTime"] = state.resume_value
+                return {"code": 0, "result": result}
+            return {"code": 0, "result": {"mocTermDto": tree} if "getLastLearned" in url else tree}
+
+        async def write(method: str, url: str, **kwargs: Any):
+            assert url.endswith("/web/j/courseRpcBean.saveMocContentLearn.rpc")
+            dto = json.loads(kwargs["data"])["dto"]
+            state.calls.append((mooc_clock.now, dto))
+            if dto["videoTime"] == -1:
+                state.view = 5
+            else:
+                if state.fail_learning:
+                    return {"code": -1, "result": False}
+                if state.persist:
+                    state.resume_value = dto["videoTime"]
+                    if not state.freeze_rate:
+                        state.rate = dto["videoTime"] / state.duration
+            return {"code": 0, "result": True}
+
+        async def vod(url: str, **kwargs: Any):
+            assert url == platform.vod_heartbeat_url
+            assert "Auth-Signature" not in kwargs["headers"]
+            state.vod.append((mooc_clock.now, json.loads(kwargs["data"])))
+
+            def check() -> None:
+                if state.fail_vod:
+                    raise RuntimeError("local HTTP 500")
+
+            return SimpleNamespace(raise_for_status=check)
+
+        monkeypatch.setattr(platform, "_request_json", read)
+        monkeypatch.setattr(platform, "_request_json_once", write)
+        monkeypatch.setattr(platform.client, "post", vod)
+
+    state.install = install
+    return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rate", [0.99, 1.0])
+async def test_mooc_view_resume_and_dual_rhythm(mooc_server, rate: float) -> None:
+    """已查看和高比例不能跳过官方断点，两个写通道独立计时。"""
+    from wkhelper.video.engine import VideoWatchOptions
+    from wkhelper.video.service import do_video
+
+    state = mooc_server
+    state.rate = rate
+    async with AsyncSession() as client:
+        platform = Icourse163Platform(client)
+        state.install(platform)
+        result = await do_video(
+            platform,
+            "301",
+            "视频",
+            _sample_course(),
+            VideoWatchOptions(heartbeat_interval=10, jitter=0, video_timeout=61),
+            lambda event, payload: state.events.append((event, payload)),
+        )
+    visit, learning = [dto for _, dto in state.calls]
+    assert visit["videoTime"] == -1 and visit["learnedVideoTimeCount"] == 0 and visit["finished"] is False
+    assert "index" not in visit
+    assert learning["index"] == 1 and learning["videoTime"] == 419
+    assert learning["learnedVideoTimeCount"] == 60 and learning["finished"] is False
+    assert [time for time, _ in state.vod] == [10, 20, 30, 40, 50, 60]
+    assert all(body["videoId"] == 9001 for _, body in state.vod)
+    assert result.status == "timed_out" and not result.platform_completed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("persist", "fail_learning", "fail_vod", "freeze_rate", "expected"),
+    [
+        (True, False, False, False, "completed"),
+        (False, False, False, False, "timed_out"),
+        (True, True, False, False, "failed"),
+        (True, False, True, False, "completed"),
+        (True, False, False, True, "timed_out"),
+    ],
+)
+async def test_mooc_acceptance_requires_both_persisted_values(
+    mooc_server,
+    persist: bool,
+    fail_learning: bool,
+    fail_vod: bool,
+    freeze_rate: bool,
+    expected: str,
+) -> None:
+    """末尾只写一次，VOD 失败可继续，课程失败不重放。"""
+    from wkhelper.video.engine import VideoWatchOptions
+    from wkhelper.video.service import do_video
+
+    state = mooc_server
+    state.duration, state.resume_value, state.rate = 21, 1, 1.0
+    state.persist, state.fail_learning, state.fail_vod = persist, fail_learning, fail_vod
+    state.freeze_rate = freeze_rate
+    if freeze_rate:
+        state.rate = 0.0
+    async with AsyncSession() as client:
+        platform = Icourse163Platform(client)
+        state.install(platform)
+        result = await do_video(
+            platform,
+            "301",
+            "视频",
+            _sample_course(),
+            VideoWatchOptions(heartbeat_interval=10, jitter=0, video_timeout=25, progress_interval=2),
+            lambda event, payload: state.events.append((event, payload)),
+        )
+    assert result.status == expected
+    assert result.platform_completed is (expected == "completed")
+    assert [time for time, _ in state.vod] == [10]
+    assert [dto["finished"] for _, dto in state.calls] == [False, True]
+    assert state.calls[-1][1]["videoTime"] == 21
+    assert state.calls[-1][1]["learnedVideoTimeCount"] == 20
+    if fail_vod:
+        assert any(event == "video.status" and "VOD" in payload["message"] for event, payload in state.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("start", 0, 0),
+        ("videoLearnTime", 12, 12),
+        ("missing", None, 0),
+        ("start", -1, None),
+        ("start", float("inf"), None),
+        ("start", 470, None),
+    ],
+)
+async def test_mooc_official_resume_boundary(mooc_server, field: str, value, expected) -> None:
+    """合法零与缺失分别处理，损坏断点不能变成从头或比例推算。"""
+    from wkhelper.domain.errors import APIError
+
+    state = mooc_server
+    state.resume_field, state.resume_value = field, value
+    async with AsyncSession() as client:
+        platform = Icourse163Platform(client)
+        state.install(platform)
+        if expected is None:
+            with pytest.raises(APIError):
+                await platform.prepare_video_context("301", _sample_course())
+        else:
+            context = await platform.prepare_video_context("301", _sample_course())
+            assert context.start == expected
+
+
+@pytest.mark.asyncio
+async def test_mooc_plan_preserves_auth_failure(mooc_server, monkeypatch: pytest.MonkeyPatch) -> None:
+    """学习写认证失效保留退出码语义，即使计划允许继续也不重放。"""
+    from wkhelper.video.plan import VideoTarget
+    from wkhelper.video.runner import VideoPlanRunner
+
+    calls = []
+    async with AsyncSession() as client:
+        platform = Icourse163Platform(client)
+        mooc_server.install(platform)
+
+        async def reject(method: str, url: str, **kwargs: Any):
+            calls.append(json.loads(kwargs["data"])["dto"])
+            return {"code": 1, "message": "not_auth"}
+
+        monkeypatch.setattr(platform, "_request_json_once", reject)
+        course = _sample_course()
+        with pytest.raises(AuthError):
+            await VideoPlanRunner(platform).execute_video_plan(
+                {str(course.id): course}, [VideoTarget(course_id=str(course.id), video_id="301")], on_error="continue"
+            )
+    assert len(calls) == 1 and calls[0]["videoTime"] == -1
