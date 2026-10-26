@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import urllib.request
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -265,7 +265,7 @@ class BrowserManager:
         cookie_domain: str | None = None,
         extra_args: list[str] | None = None,
         timeout: float = 8.0,
-    ) -> AsyncIterator[BrowserProcess]:
+    ) -> AsyncGenerator[BrowserProcess, None]:
         b_proc = cls.launch_browser(mode=mode, extra_args=extra_args, detached=False)
         try:
             browser_ws, page_ws = await wait_debugger(b_proc.port, timeout=timeout)

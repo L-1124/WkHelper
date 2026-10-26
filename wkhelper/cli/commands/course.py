@@ -51,9 +51,7 @@ async def course_inspect_cmd(
 ) -> CommandResult[CourseDetail]:
     """查看指定课程的详细信息与大纲。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        clean_meta = {
-            str(k): to_json_value(v) for k, v in matched.metadata.items() if not str(k).startswith("_") and not isinstance(v, set)
-        }
+        clean_meta = {k: to_json_value(v) for k, v in matched.metadata.items() if not k.startswith("_") and not isinstance(v, set)}
         scores = await get_course_score_summary(plat, matched)
         return CommandResult(
             data=CourseDetail(

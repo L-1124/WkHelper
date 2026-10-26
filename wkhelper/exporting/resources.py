@@ -106,7 +106,7 @@ async def localize_question_detail(
 
     new_options: list[OptionItem] = []
     for opt in detail.options:
-        key_str = _safe_filename_part(str(opt.key))
+        key_str = _safe_filename_part(opt.key)
         new_text, opt_res = await localize_text_resources(
             fetch, opt.text, assets_dir, f"{prefix}_opt_{key_str}", relative_base=relative_base
         )

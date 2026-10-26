@@ -74,13 +74,13 @@ def get_session_file(
     account_id: str | None = None,
     platform: str | None = None,
 ) -> Path:
-    safe_cid = re.sub(r"[^\w\-.]", "_", str(course_id))
-    safe_vid = re.sub(r"[^\w\-.]", "_", str(video_id))
+    safe_cid = re.sub(r"[^\w\-.]", "_", course_id)
+    safe_vid = re.sub(r"[^\w\-.]", "_", video_id)
     parts = []
     if platform:
-        parts.append(re.sub(r"[^\w\-.]", "_", str(platform)))
+        parts.append(re.sub(r"[^\w\-.]", "_", platform))
     if account_id:
-        parts.append(re.sub(r"[^\w\-.]", "_", str(account_id)))
+        parts.append(re.sub(r"[^\w\-.]", "_", account_id))
     parts.extend([safe_cid, safe_vid])
     file_name = f"session_{'_'.join(parts)}.json"
     target_dir = session_dir or get_default_video_session_dir()
@@ -436,9 +436,9 @@ def spawn_watchdog(
         "--pid",
         str(pid),
         "--profile-dir",
-        str(profile_dir),
+        profile_dir,
         "--meta-file",
-        str(meta_file),
+        meta_file,
         "--ttl",
         str(ttl_seconds),
         "--check-interval",
@@ -527,8 +527,8 @@ async def get_or_create_warm_session(
             )
 
             new_session = VideoWarmSession(
-                course_id=str(course_id),
-                video_id=str(video_id),
+                course_id=course_id,
+                video_id=video_id,
                 pid=b_proc.pid,
                 port=b_proc.port,
                 profile_dir=b_proc.profile_dir,
@@ -546,8 +546,8 @@ async def get_or_create_warm_session(
         except BaseException:
             clean_session_resources(
                 VideoWarmSession(
-                    course_id=str(course_id),
-                    video_id=str(video_id),
+                    course_id=course_id,
+                    video_id=video_id,
                     pid=b_proc.pid,
                     port=b_proc.port,
                     profile_dir=b_proc.profile_dir,

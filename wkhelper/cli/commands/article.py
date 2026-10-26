@@ -48,8 +48,8 @@ async def article_read_cmd(
     if dry_run:
         return CommandResult(
             data=ArticleReadResult(
-                course_id=str(course),
-                leaf_id=str(article),
+                course_id=course,
+                leaf_id=article,
                 name=f"资料 {article}",
                 success=True,
                 completed=True,

@@ -75,7 +75,7 @@ def _warn_proctoring(cover: ExamCoverDetail) -> None:
 async def _bind_browser_session(plat: Any, exam: str) -> None:
     """有活跃考场浏览器会话时复用它：注入浏览器 Cookie 并绑定会话。"""
     session = load_session(get_context().options.data_dir)
-    if session is None or session.exam_id != str(exam):
+    if session is None or session.exam_id != exam:
         return
     cookies = await browser_cookies(session)
     for name, value in cookies.items():
@@ -219,7 +219,7 @@ async def exam_start_cmd(
             preview = ExamStartPreview(
                 dry_run=True,
                 course_id=str(matched.id),
-                exam_id=str(exam),
+                exam_id=exam,
                 title=cover.title,
                 limit_minutes=cover.limit_minutes,
                 note="预览模式不会向平台申请考试令牌，确认进入考场请传入 `--confirm`",
@@ -238,7 +238,7 @@ async def exam_start_cmd(
         parsed = urlparse(result.web_url)
         eid = int(parse_qs(parsed.query).get("exam_id", ["0"])[0])
         session = await open_exam_browser(
-            exam_id=str(exam),
+            exam_id=exam,
             platform=plat.__class__.__name__,
             host=f"{parsed.scheme}://{parsed.netloc}",
             eid=eid,
@@ -249,7 +249,7 @@ async def exam_start_cmd(
         result.browser_port = session.port
         emit_event(
             "exam.browser_opened",
-            {"exam_id": str(exam), "port": session.port, "web_url": session.web_url},
+            {"exam_id": exam, "port": session.port, "web_url": session.web_url},
         )
         if begin:
             await begin_browser_exam(session)
@@ -355,8 +355,8 @@ async def exam_answer_cmd(
         return CommandResult[ExamAnswerResult](
             data=ExamAnswerResult(
                 dry_run=True,
-                exam_id=str(exam),
-                problem_id=str(question),
+                exam_id=exam,
+                problem_id=question,
                 answer=[raw_answer],
                 saved=False,
                 message="预览模式不会向浏览器或平台写入；作答方式在确认后依据试卷题型判定",
@@ -372,7 +372,7 @@ async def exam_answer_cmd(
 
         # 考场安全门禁：所有作答必须依托已打开的真实浏览器会话
         session = load_session(get_context().options.data_dir)
-        if session is None or session.exam_id != str(exam):
+        if session is None or session.exam_id != exam:
             raise APIError(
                 f"考场作答必须依托已打开的前台考场浏览器会话。\n"
                 f"请先运行：wkhelper exam start -c {course} -e {exam} --confirm\n"
@@ -385,7 +385,7 @@ async def exam_answer_cmd(
         _warn_proctoring(cover)
 
         paper = await plat.get_exam_paper(exam, matched)
-        problem = next((item for item in paper.problems if item.id == str(question)), None)
+        problem = next((item for item in paper.problems if item.id == question), None)
         if problem is None:
             raise APIError(f"考场试卷中不存在题目 {question}，未执行任何作答", retryable=False)
 
@@ -422,8 +422,8 @@ async def exam_answer_cmd(
             return CommandResult[ExamAnswerResult](
                 data=ExamAnswerResult(
                     dry_run=False,
-                    exam_id=str(exam),
-                    problem_id=str(problem.id),
+                    exam_id=exam,
+                    problem_id=problem.id,
                     answer=keys,
                     saved=True,
                     message="考场页面已提交本题作答且平台返回成功。交卷请在浏览器核对无误后由本人点击交卷。",
@@ -436,8 +436,8 @@ async def exam_answer_cmd(
             return CommandResult[ExamAnswerResult](
                 data=ExamAnswerResult(
                     dry_run=False,
-                    exam_id=str(exam),
-                    problem_id=str(problem.id),
+                    exam_id=exam,
+                    problem_id=problem.id,
                     answer=keys,
                     saved=False,
                     message=f"考场页面已发出作答请求，但{reason}，与预期 {expected} 不符。请在浏览器中核对。",
@@ -459,17 +459,17 @@ async def exam_answer_cmd(
                 if observed
                 else "已在考场浏览器页面中完成模拟点击/输入，但既未捕获到页面提交请求，也无法读取服务端暂存作答；请在浏览器中确认页面状态。"
             )
-        elif _normalize_answer(cached.get(str(problem.id)) or [], mode) == expected:
+        elif _normalize_answer(cached.get(problem.id) or [], mode) == expected:
             saved = True
             message = "已在考场浏览器页面完成模拟点击/输入，服务端暂存作答与预期一致。交卷请在浏览器核对无误后由本人点击交卷。"
         else:
             saved = False
-            actual = cached.get(str(problem.id))
+            actual = cached.get(problem.id)
             message = f"页面已执行模拟点击/输入，但服务端暂存作答与预期不一致（暂存: {actual or '空'}）。请在浏览器中核对。"
         result = ExamAnswerResult(
             dry_run=False,
-            exam_id=str(exam),
-            problem_id=str(problem.id),
+            exam_id=exam,
+            problem_id=problem.id,
             answer=keys,
             saved=saved,
             message=message,
@@ -523,7 +523,7 @@ async def exam_result_cmd(
                 message = "答卷尚未提交，暂无成绩"
         return CommandResult[ExamResultData](
             data=ExamResultData(
-                exam_id=str(exam),
+                exam_id=exam,
                 grade=float(grade) if isinstance(grade, (int, float)) else None,
                 duration=int(duration) if isinstance(duration, (int, float)) else None,
                 problem_count=len(problems),
@@ -547,7 +547,7 @@ async def exam_status_cmd(
         raw = await plat.get_exam_status_snapshot(exam, matched)
         return CommandResult[ExamStatusData](
             data=ExamStatusData(
-                exam_id=str(exam),
+                exam_id=exam,
                 room_status=raw.get("room_status"),
                 room_status_raw=raw.get("room_status_raw") if isinstance(raw.get("room_status_raw"), int) else None,
                 lms_status=raw.get("lms_status") if isinstance(raw.get("lms_status"), int) else None,

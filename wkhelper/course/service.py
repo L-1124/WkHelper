@@ -238,7 +238,7 @@ async def _get_generic_summary(platform: BasePlatform, course: Course) -> Course
 
     exam_items: list[ExamScoreItem] = [
         ExamScoreItem(
-            exam_id=str(ex.id),
+            exam_id=ex.id,
             title=ex.name,
             status="已完成" if ex.completed else ("已缺考" if ex.overdue else "未开始"),
         )

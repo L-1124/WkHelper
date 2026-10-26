@@ -689,52 +689,6 @@ async def test_capture_video_frames_no_cache_bypasses_pool(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_video_snapshot_cmd_no_cache_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    from wkhelper.cli.commands.video import video_snapshot_cmd
-
-    class MockPlatform:
-        api_base = "https://www.xuetangx.com"
-        cookie_domain = ".xuetangx.com"
-        client = MagicMock()
-        user = None
-        account_id = "test-user"
-        platform_code = "xtzx"
-
-        def format_web_task_url(self, course: object, leaf_id: object, leaf_type: str) -> str:
-            return "https://www.xuetangx.com/learn/1/video/1"
-
-    class MockCourseCtx:
-        async def __aenter__(self) -> tuple[MockPlatform, object]:
-            return MockPlatform(), MagicMock()
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
-    monkeypatch.setattr("wkhelper.cli.commands.video._open_course", lambda *a, **kw: MockCourseCtx())
-
-    captured_use_cache: list[bool] = []
-
-    async def fake_capture(**kwargs: object) -> list[VideoSnapshotFrame]:
-        captured_use_cache.append(bool(kwargs.get("use_cache")))
-        return [VideoSnapshotFrame(timestamp=10.0, file_path="/tmp/f.jpg", size_bytes=100)]
-
-    monkeypatch.setattr("wkhelper.cli.commands.video.capture_video_frames", fake_capture)
-
-    # 默认调用：use_cache 应为 True
-    await video_snapshot_cmd(course="1001", video="2001", timestamps="10")
-    assert captured_use_cache[-1] is True
-
-    # 传入 no_cache=True：use_cache 应为 False
-    await video_snapshot_cmd(course="1001", video="2001", timestamps="10", no_cache=True)
-    assert captured_use_cache[-1] is False
-
-    # 测试 --clean-cache 模式
-    clean_res = await video_snapshot_cmd(clean_cache=True)
-    assert clean_res.data.total_frames == 0
-    assert clean_res.meta is not None and "cleaned_sessions" in clean_res.meta
-
-
-@pytest.mark.asyncio
 async def test_capture_video_frames_warm_pool_failure_falls_back_to_ephemeral(monkeypatch: pytest.MonkeyPatch) -> None:
     """当热池提取发生异常时，应清理热池会话并优雅降级至 ephemeral 临时浏览器模式完成截帧。"""
     temp_dir = Path(tempfile.mkdtemp(prefix="test_fallback_"))

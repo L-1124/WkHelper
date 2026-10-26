@@ -127,7 +127,7 @@ async def open_exam_browser(
                 await cdp.close()
 
         record = ExamBrowserSession(
-            exam_id=str(exam_id),
+            exam_id=exam_id,
             platform=platform,
             host=host,
             eid=eid,

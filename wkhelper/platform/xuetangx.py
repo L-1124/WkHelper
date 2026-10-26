@@ -208,7 +208,7 @@ class XuetangXPlatform(BasePlatform):
             "classroom_id": classroom_id,
             "video_type": "video",
             "vtype": "rate",
-            "video_id": str(video_id),
+            "video_id": video_id,
         }
         # 浏览器仅在解析出 uv 标识时才带这两个头，空值会形成异常指纹
         headers = {"classroom-id": classroom_id}
@@ -218,7 +218,7 @@ class XuetangXPlatform(BasePlatform):
         request_kwargs = {"headers": headers}
 
         return VideoContext(
-            video_id=str(video_id),
+            video_id=video_id,
             classroom_id=classroom_id,
             user_id=user_id,
             course_id=course_id,
@@ -354,7 +354,7 @@ class XuetangXPlatform(BasePlatform):
         face_status = cover_data.get("face_auth_status") if isinstance(cover_data.get("face_auth_status"), dict) else {}
         online_proctor = bool(cover_data.get("online_proctor") or face_status.get("online_proctor"))
         identity_auth = bool(cover_data.get("identity_auth") or face_status.get("has_idphoto"))
-        face_auth = bool(identity_auth or online_proctor)
+        face_auth = identity_auth or online_proctor
         capture_screen = bool(cover_data.get("capture_screen"))
         app_capture_screen = bool(cover_data.get("app_capture_screen"))
         front_random_snap = bool(cover_data.get("app_front_random_snap"))

@@ -67,8 +67,8 @@ async def discussion_reply_cmd(
     if dry_run:
         return CommandResult(
             data=DiscussionCommentResult(
-                course_id=str(course),
-                leaf_id=str(discussion),
+                course_id=course,
+                leaf_id=discussion,
                 topic_id=0,
                 comment_id=None,
                 success=True,
@@ -81,9 +81,9 @@ async def discussion_reply_cmd(
             "discussion",
             "reply",
             "--course",
-            str(course),
+            course,
             "--discussion",
-            str(discussion),
+            discussion,
             "--content",
             content.strip(),
             "--confirm",
@@ -118,14 +118,14 @@ async def discussion_delete_cmd(
     if dry_run:
         return CommandResult(
             data=DiscussionDeleteResult(
-                course_id=str(course),
-                comment_id=str(comment),
+                course_id=course,
+                comment_id=comment,
                 success=True,
                 message="[dry-run] 校验成功，未执行删除",
             )
         )
     if not confirm:
-        confirm_argv = ["wkhelper", "discussion", "delete", "--course", str(course), "--comment", str(comment), "--confirm"]
+        confirm_argv = ["wkhelper", "discussion", "delete", "--course", course, "--comment", comment, "--confirm"]
         if platform:
             confirm_argv.extend(["--platform", platform])
         if account:

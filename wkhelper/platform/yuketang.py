@@ -320,7 +320,7 @@ class YuketangPlatform(BasePlatform):
         course_id = course.metadata["course_id"]
         sku_id = course.metadata["free_sku_id"]
 
-        vid_str = str(video_id)
+        vid_str = video_id
         progress_params = {
             "cid": course_id,
             "user_id": user_id,
@@ -536,7 +536,7 @@ class YuketangPlatform(BasePlatform):
         face_status = cover_data.get("face_auth_status") if isinstance(cover_data.get("face_auth_status"), dict) else {}
         online_proctor = bool(cover_data.get("online_proctor") or face_status.get("online_proctor"))
         identity_auth = bool(cover_data.get("identity_auth") or face_status.get("has_idphoto"))
-        face_auth = bool(identity_auth or online_proctor)
+        face_auth = identity_auth or online_proctor
         capture_screen = bool(cover_data.get("capture_screen"))
         app_capture_screen = bool(cover_data.get("app_capture_screen"))
         front_random_snap = bool(cover_data.get("app_front_random_snap"))

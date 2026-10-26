@@ -94,10 +94,10 @@ async def get_video_progress(platform: BasePlatform, video_id: str, course: Cour
     )
     resp.raise_for_status()
     text = resp.text or ""
-    rate, _ = parse_progress_text(text, str(video_id))
+    rate, _ = parse_progress_text(text, video_id)
     return VideoProgress(
         course_id=str(course.id),
-        video_id=str(video_id),
+        video_id=video_id,
         current_rate=rate,
-        completed=parse_progress_completed(text, str(video_id)) or rate >= 1.0,
+        completed=parse_progress_completed(text, video_id) or rate >= 1.0,
     )

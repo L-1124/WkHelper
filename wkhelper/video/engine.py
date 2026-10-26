@@ -194,7 +194,7 @@ async def generic_watch_video(
 
     rate_multiplier = float(opts.learning_rate)
     sample_interval = max(0.01, float(opts.sample_interval))
-    batch_size = max(1, int(opts.batch_size))
+    batch_size = max(1, opts.batch_size)
     seq = 1  # 前端 sq 在页面生命周期内从 1 单调自增，跨批次不重置
 
     while current_rate < opts.completion_threshold:
@@ -303,7 +303,7 @@ async def generic_watch_video(
                     parsed = None
                 if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
                     data_dict = parsed["data"]
-                    if str(video_id) in data_dict:
+                    if video_id in data_dict:
                         observed_rate, _ = parse_progress_text(resp.text, video_id)
                         current_rate = observed_rate
         except Exception:

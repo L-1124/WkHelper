@@ -212,7 +212,7 @@ class BasePlatform(ABC):
         from wkhelper.exam.session import load_session
 
         session = load_session()
-        if session is not None and str(session.exam_id) == str(leaf_id):
+        if session is not None and session.exam_id == str(leaf_id):
             self.bind_exam_room(session.host, session.eid, session.web_url)
             return session.host, session.eid, session.web_url
         return await self._mint_exam_room(leaf_id, course)
@@ -564,13 +564,13 @@ class BasePlatform(ABC):
             "fp": 0,
             "tp": 0,
             "sp": profile.sp,
-            "ts": str(int(timestamp) + int(round(self.clock.offset_ms))),
-            "u": int(user_id),
+            "ts": str(timestamp + round(self.clock.offset_ms)),
+            "u": user_id,
             "uip": "",
-            "c": int(course_id),
+            "c": course_id,
             "v": _as_int_or_str(video_id),
             "skuid": _as_int_or_str(sku_id),
-            "classroomid": str(classroom_id),
+            "classroomid": classroom_id,
             "cc": cc,
             "d": round(float(duration), 1),
             "pg": f"{video_id}_{nonce}",

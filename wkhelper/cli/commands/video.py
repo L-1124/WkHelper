@@ -115,12 +115,12 @@ async def video_learn_cmd(
         video_ids = video or []
         if not video_ids:
             raise ValueError("必须通过 `--course` 与 `--video`，或通过 `--plan-file` 指定学习目标")
-        targets = [validate_input(VideoTarget, {"course_id": str(course), "video_id": str(video_id)}) for video_id in video_ids]
+        targets = [validate_input(VideoTarget, {"course_id": course, "video_id": video_id}) for video_id in video_ids]
         base_execution = ExecutionSettings()
         plan_defaults = VideoParameters()
-        confirm_argv += ["--course", str(course)]
+        confirm_argv += ["--course", course]
         for video_id in video_ids:
-            confirm_argv += ["--video", str(video_id)]
+            confirm_argv += ["--video", video_id]
 
     cli_parameters = validate_input(
         VideoParameters,
@@ -207,8 +207,8 @@ async def video_snapshot_cmd(
         cleaned_count = cleanup_all_warm_sessions()
         return CommandResult(
             data=VideoSnapshotData(
-                course_id=str(course or ""),
-                video_id=str(video or ""),
+                course_id=course or "",
+                video_id=video or "",
                 total_frames=0,
                 frames=[],
             ),
@@ -251,16 +251,16 @@ async def video_snapshot_cmd(
             end=snapshot_input.end,
             step=snapshot_input.step,
             count=snapshot_input.effective_count,
-            course_id=str(snapshot_input.course),
-            video_id=str(snapshot_input.video),
+            course_id=snapshot_input.course,
+            video_id=snapshot_input.video,
             use_cache=not no_cache,
             account_id=str(plat.user.id) if plat.user is not None else plat.account_id,
             platform=plat.platform_code or matched.platform_id,
         )
 
         data = VideoSnapshotData(
-            course_id=str(snapshot_input.course),
-            video_id=str(snapshot_input.video),
+            course_id=snapshot_input.course,
+            video_id=snapshot_input.video,
             total_frames=len(frames),
             frames=frames,
         )

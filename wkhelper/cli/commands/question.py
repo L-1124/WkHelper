@@ -93,7 +93,7 @@ async def question_get_cmd(
     """查看单道题目的完整内容与作答结果。"""
     async with _open_course(course, platform, account) as (plat, matched):
         questions = await plat.get_leaf_questions(homework, matched)
-        target_question = next((item for item in questions if str(item.get("problem_id") or item.get("id")) == str(question)), None)
+        target_question = next((item for item in questions if str(item.get("problem_id") or item.get("id")) == question), None)
         if target_question is None:
             raise KeyError(f"未找到题目 ID: {question}")
 
@@ -103,7 +103,7 @@ async def question_get_cmd(
         user_info = target_question.get("user", {})
         attempt_count = PlatformCounters.model_validate(user_info).my_count
         detail = QuestionDetail(
-            id=str(question),
+            id=question,
             type=_type_text(target_question),
             prompt=body,
             options=[OptionItem(key=option.get("key"), text=html_to_md(option.get("value", ""))) for option in options],
@@ -158,7 +158,7 @@ async def question_submit_cmd(
     async with _open_course(course, platform, account) as (plat, matched):
         # 校验题目存在性与选项合法性
         questions = await plat.get_leaf_questions(homework, matched)
-        target_question = next((item for item in questions if str(item.get("problem_id") or item.get("id")) == str(question)), None)
+        target_question = next((item for item in questions if str(item.get("problem_id") or item.get("id")) == question), None)
         if target_question is None:
             raise KeyError(f"题目 ID '{question}' 不属于作业 '{homework}'")
         answer_list = normalize_judgement_answer(target_question, answer_list)
@@ -174,8 +174,8 @@ async def question_submit_cmd(
                 data=QuestionSubmitPreview(
                     dry_run=True,
                     course_id=str(matched.id),
-                    homework_id=str(homework),
-                    question_id=str(question),
+                    homework_id=homework,
+                    question_id=question,
                     answer=answer_list,
                 )
             )
@@ -191,7 +191,7 @@ async def question_submit_cmd(
             await asyncio.sleep(actual_delay)
         result = await submit_question(
             plat,
-            Homework(id=str(homework), name=str(homework)),
+            Homework(id=homework, name=homework),
             matched,
             question,
             answer_list,

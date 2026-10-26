@@ -351,7 +351,7 @@ async def simulate_browser_answer(
     script = _get_script("answer.js")
     args = {
         "pid": str(problem_id),
-        "keys": [str(key) for key in answer_keys],
+        "keys": answer_keys,
         "mode": mode,
     }
     expression = f"({script})({json.dumps(args, ensure_ascii=False)})"

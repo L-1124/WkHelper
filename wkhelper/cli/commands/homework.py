@@ -92,7 +92,7 @@ async def homework_inspect_cmd(
         return CommandResult(
             data=HomeworkOutline(
                 course_id=str(matched.id),
-                homework_id=str(homework),
+                homework_id=homework,
                 total_questions=len(questions),
                 questions_summary=outlines,
             )
@@ -179,7 +179,7 @@ async def homework_submit_cmd(
                 data=HomeworkSubmitPreview(
                     dry_run=True,
                     course_id=str(matched.id),
-                    homework_id=str(homework),
+                    homework_id=homework,
                     answers_count=len(answers_map),
                     validated=True,
                 )
@@ -191,7 +191,7 @@ async def homework_submit_cmd(
         result = await run_homework_submit(
             plat,
             matched,
-            Homework(id=str(homework), name=str(homework)),
+            Homework(id=homework, name=homework),
             answers=answers_map,
             concurrency=concurrency,
             delay=delay,

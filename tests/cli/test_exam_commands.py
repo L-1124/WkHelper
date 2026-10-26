@@ -466,7 +466,7 @@ def _observed(
 ) -> dict[str, Any]:
     """构造页面自身已发出作答请求的证据。"""
     is_rejected = not accepted if rejected is None and unknown is None else bool(rejected)
-    is_unknown = bool(unknown) if unknown is not None else (not accepted and not is_rejected)
+    is_unknown = unknown if unknown is not None else (not accepted and not is_rejected)
     return {
         "observed": True,
         "accepted": accepted,
