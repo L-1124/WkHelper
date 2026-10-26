@@ -3,12 +3,33 @@
 import logging
 from typing import Any
 
-from wkhelper.domain.courses import Course, CourseScoreSummary, ExamScoreItem, ModuleEvaluation
+from pydantic import ValidationError
+
+from wkhelper.domain.courses import Course, CourseLearningStats, CourseScoreSummary, ExamScoreItem, ModuleEvaluation
+from wkhelper.domain.errors import APIError
 from wkhelper.exam.service import get_exams
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.parsing import iter_leaves_with_context
 
 logger = logging.getLogger(__name__)
+
+
+async def get_course_learning_stats(platform: BasePlatform, course: Course) -> CourseLearningStats | None:
+    """保留平台累计秒数，缺失或损坏的统计不伪装成零。"""
+    raw = await platform.get_course_learning_stats(course)
+    if raw is None:
+        return None
+    try:
+        return CourseLearningStats.model_validate(
+            {
+                "video_learning_seconds": raw.get("learnedTimeCount"),
+                "videos_watched": raw.get("learnedVideoCount"),
+                "lessons_learned": raw.get("learnedCount"),
+                "lessons_total": raw.get("lessonCount"),
+            }
+        )
+    except ValidationError as exc:
+        raise APIError("平台返回的课程学习统计缺失或无效", retryable=False) from exc
 
 
 async def get_course_score_summary(platform: BasePlatform, course: Course) -> CourseScoreSummary | None:

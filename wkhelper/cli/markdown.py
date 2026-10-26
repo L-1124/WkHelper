@@ -163,6 +163,24 @@ def _render_course_detail(data: CourseDetail) -> list[str]:
         f"- **课程引用 ID**：`{data.id}`",
         f"- **所属平台**：`{data.platform}`",
     ]
+    if data.learning_stats is not None:
+        stats = data.learning_stats
+        seconds = stats.video_learning_seconds
+        hours, remainder = divmod(seconds, 3600)
+        minutes = (remainder + 59) // 60
+        website_time = (f"{hours} 时 " if hours else "") + f"{minutes} 分" if seconds else "-"
+        lines.extend(
+            [
+                "",
+                "### 课程累计学习统计（平台记录）",
+                "",
+                f"- **课时学习进度**：{stats.lessons_learned} / {stats.lessons_total}",
+                f"- **视频学习时长**：{seconds} 秒（官网显示：{website_time}）",
+                f"- **视频观看个数**：{stats.videos_watched} 个",
+                "",
+                "> 老师课程管理后台的学习数据将隔天更新；课时学习进度不代表视频完播率。",
+            ]
+        )
     if data.scores:
         s = data.scores
         if s.modules:

@@ -7,6 +7,7 @@ import pytest
 from tests.conftest import FakeAsyncPlatform
 from wkhelper.course.service import get_course_score_summary
 from wkhelper.domain.courses import Course
+from wkhelper.domain.errors import APIError, AuthError
 from wkhelper.infra.http import AsyncSession
 
 
@@ -88,3 +89,53 @@ async def test_yuketang_score_summary_preserves_weights_and_exam_scores() -> Non
     assert mod_map["考试"].weight == 0.4
     assert mod_map["考试"].score == 36.0
     assert summary.exams[0].exam_id == "501"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "code", "error"),
+    [
+        (None, 0, APIError),
+        ({}, 0, APIError),
+        ({"learnedTimeCount": -1, "learnedVideoCount": 3, "learnedCount": 1, "lessonCount": 23}, 0, APIError),
+        ({"learnedTimeCount": True, "learnedVideoCount": 3, "learnedCount": 1, "lessonCount": 23}, 0, APIError),
+        (None, 1, AuthError),
+    ],
+)
+async def test_mooc_learning_stats_reject_missing_or_invalid_data(
+    monkeypatch: pytest.MonkeyPatch, result, code: int, error: type[Exception]
+) -> None:
+    """损坏统计不能变成零学习时长，认证失败保留原类型。"""
+    from wkhelper.course.service import get_course_learning_stats
+    from wkhelper.platform.icourse163 import Icourse163Platform
+
+    async with AsyncSession() as client:
+        platform = Icourse163Platform(client)
+
+        async def response(*args, **kwargs):
+            return {"code": code, "message": "not_auth" if code == 1 else "", "result": result}
+
+        monkeypatch.setattr(platform, "_request_json", response)
+        with pytest.raises(error):
+            await get_course_learning_stats(platform, Course(id="1001", name="课程", platform_id="icourse163"))
+
+
+@pytest.mark.parametrize(
+    ("seconds", "display"),
+    [(59, "1 分"), (60, "1 分"), (61, "2 分"), (1294, "22 分"), (3600, "1 时 0 分"), (3601, "1 时 1 分")],
+)
+def test_course_learning_duration_preserves_seconds_and_rounds_like_website(seconds: int, display: str) -> None:
+    """课程累计秒数保留精度，官网时间按分钟向上取整并区分小时边界。"""
+    from wkhelper.cli.markdown import format_result_markdown
+    from wkhelper.domain.courses import CourseDetail, CourseLearningStats
+
+    detail = CourseDetail(
+        id="1001",
+        name="课程",
+        platform="icourse163",
+        metadata={},
+        learning_stats=CourseLearningStats(video_learning_seconds=seconds, videos_watched=3, lessons_learned=1, lessons_total=23),
+    )
+    markdown = format_result_markdown(detail)
+    assert f"{seconds} 秒" in markdown
+    assert display in markdown

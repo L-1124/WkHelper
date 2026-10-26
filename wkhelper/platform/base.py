@@ -122,6 +122,10 @@ class BasePlatform(ABC):
         """获取课程大纲与节点进度树原始结构（雨课堂 c27 进度树等）。未实现时抛出异常。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现课程进度树接口")
 
+    async def get_course_learning_stats(self, course: Course) -> dict[str, Any] | None:
+        """获取课程累计学习统计原始载荷；不支持的平台返回 None。"""
+        return None
+
     async def get_leaf_info(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
         """获取课件叶子节点详细元数据。"""
         url = self._build_leaf_info_url(leaf_id, course)

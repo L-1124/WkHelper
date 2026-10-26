@@ -79,12 +79,22 @@ class CourseScoreSummary(Model):
     total_predicted_score: float | None = None
 
 
+class CourseLearningStats(Model):
+    """平台记录的课程累计学习统计，不代表单个视频的续播位置。"""
+
+    video_learning_seconds: int = Field(ge=0)
+    videos_watched: int = Field(ge=0)
+    lessons_learned: int = Field(ge=0)
+    lessons_total: int = Field(ge=0)
+
+
 class CourseDetail(Model):
     id: str
     name: str
     platform: str
     metadata: dict[str, JsonValue]
     scores: CourseScoreSummary | None = None
+    learning_stats: CourseLearningStats | None = None
 
 
 class CourseListData(Model):

@@ -14,7 +14,7 @@
 |---|---|---|---|
 | `ykt` | 雨课堂 | `yuketang.cn` / 高校定制平台 | 账号登录、课程大纲、视频学习/抽帧、作业与题目检索/提交/导出、资料、讨论、考试 |
 | `xtzx` | 学堂在线 | `xuetangx.com` | 账号登录、课程大纲、视频学习/抽帧、作业与题目检索/提交/导出、资料、讨论、考试 |
-| `icourse163` | 中国大学 MOOC | `icourse163.org` | 账号登录、课程列表、多层章节大纲与进度查询，双路协议视频学习、只读作业/资料/讨论/考试列表 |
+| `icourse163` | 中国大学 MOOC | `icourse163.org` | 账号登录、课程列表、大纲与进度、课程累计学习统计，双路协议视频学习、只读作业/资料/讨论/考试列表 |
 
 ## 核心特性
 
@@ -122,6 +122,14 @@ wkhelper course list -p ykt --limit 10
 # 查看指定课程详情、考核权重与成绩看板
 wkhelper course inspect -c 1966245:31318907
 ```
+
+中国大学 MOOC 的 `course inspect -p icourse163` 同时返回课程累计学习统计：
+
+- `learning_stats.video_learning_seconds`：平台记录的视频累计观看秒数，保留原始精度。
+- `learning_stats.videos_watched`：视频观看个数。
+- `learning_stats.lessons_learned` / `lessons_total`：已学习小节数 / 总小节数，独立于视频完播率。
+
+Markdown 同时展示原始秒数与官网按分钟向上取整的时长。老师管理后台的数据隔天更新；统计未接入的平台返回 `learning_stats: null`。这组课程累计值与 `video inspect` 的单视频续播位置分别展示。
 
 ### 3. 视频学习与抽帧 (`video`)
 

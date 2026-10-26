@@ -91,10 +91,10 @@ class Icourse163Platform(BasePlatform):
                 return val
         return ""
 
-    async def _rpc_post(self, bean_and_method: str, data: dict[str, Any]) -> Any:
+    async def _rpc_post(self, bean_and_method: str, data: dict[str, Any], *, path_prefix: str = "") -> Any:
         """调用中国大学MOOC通用 Web RPC 接口。"""
         csrf = self._get_csrf_key()
-        url = f"{self.api_base}/web/j/{bean_and_method}.rpc"
+        url = f"{self.api_base}{path_prefix}/web/j/{bean_and_method}.rpc"
         if csrf:
             url = f"{url}?csrfKey={csrf}"
 
@@ -111,6 +111,17 @@ class Icourse163Platform(BasePlatform):
                 raise AuthError("中国大学MOOC 登录凭据无效或已过期")
             raise APIError(f"中国大学MOOC 接口调用失败 [{code}]: {msg or '未知错误'}")
         return resp.get("result")
+
+    @override
+    async def get_course_learning_stats(self, course: Course) -> dict[str, Any]:
+        result = await self._rpc_post(
+            "mocMemberLearnBean.getTermLearn",
+            {"termId": course.metadata.get("term_id") or course.id},
+            path_prefix="/mm-course",
+        )
+        if not isinstance(result, dict):
+            raise APIError("中国大学 MOOC 未返回课程学习统计", retryable=False)
+        return result
 
     @override
     async def login_with_cookies(self, cookies: dict[str, str]) -> UserInfo:

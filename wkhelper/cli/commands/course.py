@@ -8,7 +8,7 @@ from wkhelper.cli.context import PlatformCode
 from wkhelper.cli.deps import _open_course, _open_platform, _paginate
 from wkhelper.cli.envelope import CommandResult
 from wkhelper.cli.inputs import Limit, validate_positive_limit
-from wkhelper.course.service import get_course_score_summary
+from wkhelper.course.service import get_course_learning_stats, get_course_score_summary
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.courses import CourseDetail, CourseItem, CourseListData, course_reference, dedupe_courses
 from wkhelper.infra.serialization import to_json_value
@@ -52,6 +52,7 @@ async def course_inspect_cmd(
     """查看指定课程的详细信息与大纲。"""
     async with _open_course(course, platform, account) as (plat, matched):
         clean_meta = {k: to_json_value(v) for k, v in matched.metadata.items() if not k.startswith("_") and not isinstance(v, set)}
+        learning_stats = await get_course_learning_stats(plat, matched)
         scores = await get_course_score_summary(plat, matched)
         return CommandResult(
             data=CourseDetail(
@@ -60,6 +61,7 @@ async def course_inspect_cmd(
                 platform=matched.platform_id,
                 metadata=clean_meta,
                 scores=scores,
+                learning_stats=learning_stats,
             )
         )
 
