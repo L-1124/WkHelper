@@ -21,10 +21,10 @@ from wkhelper.domain.homework import (
     QuestionSummary,
 )
 from wkhelper.domain.questions import normalize_judgement_answer, question_type
-from wkhelper.exporting.markdown import html_to_md
 from wkhelper.exporting.questions import export_questions
 from wkhelper.exporting.resources import localize_question_detail
 from wkhelper.homework.service import submit_question
+from wkhelper.infra.markdown import html_to_md
 from wkhelper.infra.serialization import encode_json
 from wkhelper.platform.parsing import PlatformCounters
 

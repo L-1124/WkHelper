@@ -151,7 +151,7 @@ async def test_start_exam_reuses_bound_room(monkeypatch: pytest.MonkeyPatch) -> 
     """已绑定考场会话时不得重新换票，避免把浏览器端挤下线。"""
     async with AsyncSession() as client:
         platform = _platform(client)
-        platform.bind_exam_room("https://exam.test", 42, "https://exam.test/exam/42")
+        platform.bind_exam_room("https://exam.test", 42, "https://exam.test/exam/42", leaf_id="1")
         calls: list[str] = []
 
         async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:

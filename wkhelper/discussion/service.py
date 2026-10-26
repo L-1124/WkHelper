@@ -5,7 +5,7 @@ import logging
 
 from wkhelper.domain.content import DiscussionCommentResult, DiscussionDeleteResult, DiscussionItem, DiscussionTopicDetail
 from wkhelper.domain.courses import Course
-from wkhelper.exporting.markdown import html_to_md
+from wkhelper.infra.markdown import html_to_md
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.parsing import format_leaf_label, iter_leaves_with_context
 

@@ -12,7 +12,6 @@ from wkhelper.domain.errors import APIError, OutputExistsError
 from wkhelper.domain.exporting import CourseQuestionsExport, ExportedHomeworkItem, ExportedQuestionItem, ExportResult
 from wkhelper.domain.homework import Homework, OptionItem
 from wkhelper.domain.questions import question_type
-from wkhelper.exporting.markdown import html_to_md
 from wkhelper.exporting.resources import (
     _extract_extension,
     _safe_filename_part,
@@ -21,6 +20,7 @@ from wkhelper.exporting.resources import (
 )
 from wkhelper.homework.service import get_homeworks
 from wkhelper.infra.files import publish_file_no_clobber
+from wkhelper.infra.markdown import html_to_md
 from wkhelper.infra.serialization import encode_json
 from wkhelper.platform.base import BasePlatform
 

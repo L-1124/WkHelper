@@ -7,12 +7,15 @@ from typing import Any, override
 import pytest
 
 from tests.conftest import FakeAsyncPlatform
+from wkhelper.cli.context import ExecutionContext
+from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError
 from wkhelper.domain.exam import ExamCoverDetail, ExamPaperData, ExamProblemItem, ExamStartResult
 from wkhelper.domain.homework import OptionItem
 from wkhelper.domain.time_types import EpochMillis
 from wkhelper.exam.session import ExamBrowserSession
+from wkhelper.infra.credentials import CredentialStore
 from wkhelper.main import async_main
 
 
@@ -150,6 +153,10 @@ async def _proctored_cover(self, leaf_id: str | int, course: Course) -> ExamCove
 
 @pytest.fixture
 def mock_exam_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = CredentialStore(credential_mode="session")
+    store.save("xtzx", UserInfo(id="1", name="tester"), {"sessionid": "exam-test"})
+    monkeypatch.setattr(ExecutionContext, "get_store", lambda self: store)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: None)
     monkeypatch.setattr(
         "wkhelper.cli.deps._create_platform_instance",
         lambda code, client: _ExamMockPlatform(client),
@@ -157,6 +164,7 @@ def mock_exam_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     async def _fake_open_browser(**kwargs: Any) -> ExamBrowserSession:
         return ExamBrowserSession(
+            account_id=str(kwargs["account_id"]),
             exam_id=str(kwargs["exam_id"]),
             platform=str(kwargs["platform"]),
             host=str(kwargs["host"]),
@@ -171,7 +179,7 @@ def mock_exam_env(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_browser_cookies(session: ExamBrowserSession) -> dict[str, str]:
         return {}
 
-    monkeypatch.setattr("wkhelper.cli.commands.exam.browser_cookies", _fake_browser_cookies)
+    monkeypatch.setattr("wkhelper.exam.service.browser_cookies", _fake_browser_cookies)
 
     async def _fake_begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0) -> None:
         return None
@@ -328,15 +336,16 @@ async def test_exam_answer_dry_run_and_confirm(mock_exam_env: None, monkeypatch:
     monkeypatch.setattr("sys.stdout", buf)
 
     session = ExamBrowserSession(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         port=1,
         profile="p",
         web_url="https://examination.test/exam/42",
     )
-    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: session)
 
     class _FakeCdp:
         events: list[dict[str, Any]] = []
@@ -407,7 +416,7 @@ async def test_exam_answer_dry_run_and_confirm(mock_exam_env: None, monkeypatch:
 @pytest.mark.asyncio
 async def test_exam_answer_requires_live_browser_session(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """没有考场浏览器会话时拒绝作答，且不触碰页面。"""
-    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: None)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: None)
     called: list[str] = []
 
     async def _fake_connect(*args: Any) -> Any:
@@ -428,15 +437,16 @@ def _patch_answer_driver(
 ) -> None:
     """固定浏览器会话、页面模拟结果与页面提交证据，便于验证落库判定。"""
     session = ExamBrowserSession(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         port=1,
         profile="p",
         web_url="https://examination.test/exam/42",
     )
-    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: session)
 
     class _FakeCdp:
         events: list[dict[str, Any]] = []
@@ -654,15 +664,16 @@ async def test_exam_answer_unknown_submission_fails_on_cache_error(mock_exam_env
 async def test_exam_answer_reports_simulation_failure(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """页面定位失败必须报错，不得伪称已作答。"""
     session = ExamBrowserSession(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         port=1,
         profile="p",
         web_url="https://examination.test/exam/42",
     )
-    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: session)
 
     class _FakeCdp:
         events: list[dict[str, Any]] = []
@@ -687,15 +698,16 @@ async def test_exam_answer_reports_simulation_failure(mock_exam_env: None, monke
 async def test_exam_answer_text_question_keeps_raw_answer(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """主观题不按逗号拆分，逐字送入页面输入框。"""
     session = ExamBrowserSession(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         port=1,
         profile="p",
         web_url="https://examination.test/exam/42",
     )
-    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: session)
 
     async def _text_paper(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> ExamPaperData:
         return ExamPaperData(
@@ -949,15 +961,16 @@ async def test_exam_start_and_answer_blocked_by_proctoring(mock_exam_env: None, 
     """强监考考试只允许预览，进入考场与作答都在触达页面前被拦下。"""
     monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", _proctored_cover)
     session = ExamBrowserSession(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         port=1,
         profile="p",
         web_url="https://examination.test/exam/42",
     )
-    monkeypatch.setattr("wkhelper.cli.commands.exam.load_session", lambda *args: session)
+    monkeypatch.setattr("wkhelper.exam.service.load_session", lambda *args: session)
 
     async def _fail_connect(*args: Any) -> Any:
         raise AssertionError("强监考考试不得连接考场页面")
@@ -975,8 +988,9 @@ def test_exam_session_roundtrip(tmp_path) -> None:
     from wkhelper.exam.session import ExamBrowserSession, clear_session, load_session, save_session
 
     session = ExamBrowserSession(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         port=1,

@@ -453,7 +453,7 @@ async def test_bound_exam_room_skips_token_mint(monkeypatch) -> None:
     """绑定已有考场会话后不得再次换票，否则会把浏览器端挤下线。"""
     async with AsyncSession() as client:
         platform = XuetangXPlatform(client)
-        platform.bind_exam_room("https://examination.test", 42, "https://examination.test/exam/42")
+        platform.bind_exam_room("https://examination.test", 42, "https://examination.test/exam/42", leaf_id="999")
 
         async def boom(*args: Any, **kwargs: Any) -> Any:
             raise AssertionError("不应重新换票")

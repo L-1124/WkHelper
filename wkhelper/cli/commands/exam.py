@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import random
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
 from pydantic import JsonValue
@@ -36,8 +36,8 @@ from wkhelper.exam.browser import (
 )
 from wkhelper.exam.export import export_exam_paper
 from wkhelper.exam.proctoring import assess_proctoring_risk, ensure_exam_operation_allowed
-from wkhelper.exam.service import get_exams
-from wkhelper.exam.session import browser_cookies, close_exam_browser, load_session, open_exam_browser
+from wkhelper.exam.service import bind_browser_session, get_exams
+from wkhelper.exam.session import close_exam_browser, load_session, open_exam_browser
 from wkhelper.infra.events import emit_event
 
 logger = logging.getLogger(__name__)
@@ -70,17 +70,6 @@ def _warn_proctoring(cover: ExamCoverDetail) -> None:
     payload = proctoring_payload(cover)
     if payload is not None:
         emit_event("security.exam_proctoring", payload)
-
-
-async def _bind_browser_session(plat: Any, exam: str) -> None:
-    """有活跃考场浏览器会话时复用它：注入浏览器 Cookie 并绑定会话。"""
-    session = load_session(get_context().options.data_dir)
-    if session is None or session.exam_id != exam:
-        return
-    cookies = await browser_cookies(session)
-    for name, value in cookies.items():
-        plat.client.cookies.set(name, value)
-    plat.bind_exam_room(session.host, session.eid, session.web_url)
 
 
 def _ensure_not_overdue(cover: ExamCoverDetail) -> None:
@@ -141,7 +130,7 @@ async def exam_inspect_cmd(
 ) -> CommandResult[ExamCoverDetail]:
     """查看考试详情与考场规则。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         is_restricted, reasons = assess_proctoring_risk(cover)
         if is_restricted:
@@ -209,7 +198,7 @@ async def exam_start_cmd(
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         _ensure_not_submitted(cover)
@@ -237,9 +226,11 @@ async def exam_start_cmd(
 
         parsed = urlparse(result.web_url)
         eid = int(parse_qs(parsed.query).get("exam_id", ["0"])[0])
+        assert plat.platform_code is not None and plat.user is not None
         session = await open_exam_browser(
             exam_id=exam,
-            platform=plat.__class__.__name__,
+            platform=plat.platform_code,
+            account_id=str(plat.user.id),
             host=f"{parsed.scheme}://{parsed.netloc}",
             eid=eid,
             web_url=result.web_url,
@@ -266,7 +257,7 @@ async def exam_paper_cmd(
 ) -> CommandResult[ExamPaperData]:
     """查看考场试卷题目 (只读)。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         ensure_exam_operation_allowed(cover)
@@ -288,7 +279,7 @@ async def exam_export_cmd(
 ) -> CommandResult[ExamExportResult]:
     """导出考场试卷为 Markdown 或 JSON 文件。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         ensure_exam_operation_allowed(cover)
@@ -365,14 +356,13 @@ async def exam_answer_cmd(
         )
 
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        session = await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         _ensure_not_overdue(cover)
         _ensure_not_submitted(cover)
 
         # 考场安全门禁：所有作答必须依托已打开的真实浏览器会话
-        session = load_session(get_context().options.data_dir)
-        if session is None or session.exam_id != exam:
+        if session is None:
             raise APIError(
                 f"考场作答必须依托已打开的前台考场浏览器会话。\n"
                 f"请先运行：wkhelper exam start -c {course} -e {exam} --confirm\n"
@@ -506,7 +496,7 @@ async def exam_result_cmd(
 ) -> CommandResult[ExamResultData]:
     """查看考试成绩与作答结果 (只读)。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         ensure_exam_operation_allowed(cover)
         raw = await plat.get_exam_result(exam, matched)
@@ -541,7 +531,7 @@ async def exam_status_cmd(
 ) -> CommandResult[ExamStatusData]:
     """检查考场接口与暂存状态 (只读诊断)。"""
     async with _open_course(course, platform, account) as (plat, matched):
-        await _bind_browser_session(plat, exam)
+        await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         ensure_exam_operation_allowed(cover)
         raw = await plat.get_exam_status_snapshot(exam, matched)

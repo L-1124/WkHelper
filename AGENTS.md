@@ -39,6 +39,7 @@ wkhelper/
     credentials.py          # Keyring 主密钥 + SQLite 加密 Cookie 与账号元数据
     events.py               # NDJSON 事件与 notifier
     serialization.py        # Pydantic TypeAdapter JSON 编码边界
+    markdown.py             # 平台与导出共享的富文本转换
     files.py                # 原子拒绝覆盖发布
     browser/                # Chromium 进程与 CDP 通用机制
   auth/                     # Cookie 解析与官方页面 CDP 浏览器登录编排
@@ -50,8 +51,8 @@ wkhelper/
   article/                  # 资料列表与完成业务
   discussion/               # 讨论列表、详情与提交业务
   notice/                   # 公告列表业务
-  exporting/                # 作业导出、共享资源下载与 Markdown 转换
-  platform/                 # BasePlatform 公开协议、章节解析、两平台适配与字体资源
+  exporting/                # 作业导出与共享资源下载
+  platform/                 # BasePlatform 公开协议、章节解析、平台适配与字体资源
 
 tests/
   cli/                      # 命令规范、信封、入口流程
@@ -140,3 +141,6 @@ uv run pytest -q
 - 全局配置由不可变 `SessionOptions` 声明，`async_main()` 用 `execution_context()` 建立调用级 `ContextVar` 作用域，异常、取消与嵌套调用均恢复外层状态；通过 `get_context()` 访问，不保留全局可变 `ctx`。
 - 默认选择为 `(platform, user_id)`，由凭据库 `active_context` 保存；显式参数优先，跨平台不会沿用默认账号 ID。`auth switch` 仅修改本地设置，不联网、不解密 Cookie。
 - 账号与默认指针在同一个 SQLite 事务中更新；账号重新登录使用 UPSERT，避免 `INSERT OR REPLACE` 触发外键级联清除默认选择。
+- 考场会话由 `exam.service.bind_browser_session` 按当前数据目录、平台代码、登录用户与考试节点校验并注入；平台只保存按节点区分的显式绑定，不读取业务会话文件。无账号标识的旧会话需重新打开考场。
+- 课程统计通过 `BasePlatform.get_course_progress` / `get_leaf_info` 获取原始协议数据；考试列表复用同一份章节与进度快照，业务投影保留在对应服务中。
+- 通用 HTML 转 Markdown 位于 `infra.markdown`；平台层不导入 `exam`、`exporting` 等业务包。

@@ -27,10 +27,10 @@ async def _get_yuketang_summary(platform: BasePlatform, course: Course) -> Cours
     if not cid:
         return await _get_generic_summary(platform, course)
 
-    kwargs = getattr(platform, "_get_course_kwargs", lambda _: {})(course)
-    p_url = f"https://www.yuketang.cn/c27/online_courseware/schedule/course/progress/?classroom_id={cid}"
-    p_resp = await platform._request_json("GET", p_url, **kwargs)
-    cp = p_resp.get("data", {}).get("course_progress", []) if isinstance(p_resp.get("data"), dict) else []
+    try:
+        cp = await platform.get_course_progress(course)
+    except NotImplementedError:
+        return await _get_generic_summary(platform, course)
 
     module_counts: dict[str, dict[str, int]] = {
         "视频": {"total": 0, "done": 0},
@@ -100,18 +100,13 @@ async def _get_yuketang_summary(platform: BasePlatform, course: Course) -> Cours
     weights: dict[str, float] = {}
     for mod_name, sample_id in sample_nodes.items():
         try:
-            build_url = getattr(platform, "_build_leaf_info_url", None)
-            get_params = getattr(platform, "_get_leaf_info_params", None)
-            if callable(build_url) and callable(get_params):
-                url = build_url(sample_id, course)
-                params = get_params(sample_id, course)
-                res = await platform._request_json("GET", url, params=params, **kwargs)
-                ci = res.get("data", {}).get("content_info", {}) if isinstance(res.get("data"), dict) else {}
-                se = ci.get("score_evaluation") if isinstance(ci, dict) else None
-                if isinstance(se, dict):
-                    prop = se.get("score_proportion", {}).get("proportion")
-                    if isinstance(prop, (int, float)):
-                        weights[mod_name] = float(prop)
+            data = await platform.get_leaf_info(sample_id, course)
+            ci = data.get("content_info", {}) if isinstance(data, dict) else {}
+            se = ci.get("score_evaluation") if isinstance(ci, dict) else None
+            if isinstance(se, dict):
+                prop = se.get("score_proportion", {}).get("proportion")
+                if isinstance(prop, (int, float)):
+                    weights[mod_name] = float(prop)
         except Exception:
             pass
 
@@ -177,7 +172,7 @@ async def _get_generic_summary(platform: BasePlatform, course: Course) -> Course
     """通用平台（如学堂在线）统计各模块完成情况。"""
     data = await platform.get_chapter_data(course)
     schedules = await platform.get_leaf_schedules(course)
-    exams_raw = await get_exams(platform, course)
+    exams_raw = await get_exams(platform, course, chapter_data=data, schedules=schedules)
 
     counts: dict[str, dict[str, int]] = {
         "视频": {"total": 0, "done": 0},

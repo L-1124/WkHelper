@@ -30,6 +30,7 @@ class ExamBrowserSession(Model):
 
     exam_id: str
     platform: str
+    account_id: str
     host: str
     eid: int
     port: int
@@ -87,6 +88,7 @@ async def open_exam_browser(
     *,
     exam_id: str,
     platform: str,
+    account_id: str,
     host: str,
     eid: int,
     web_url: str,
@@ -129,6 +131,7 @@ async def open_exam_browser(
         record = ExamBrowserSession(
             exam_id=exam_id,
             platform=platform,
+            account_id=account_id,
             host=host,
             eid=eid,
             port=port,

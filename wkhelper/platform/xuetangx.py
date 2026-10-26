@@ -434,7 +434,7 @@ class XuetangXPlatform(BasePlatform):
     @override
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         cover = await self.get_exam_cover(leaf_id, course)
-        binding = getattr(self, "_exam_room_binding", None)
+        binding = self._exam_room_bindings.get(str(leaf_id))
         if binding is not None:
             _host, _eid, login_url = binding
         else:

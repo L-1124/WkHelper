@@ -14,10 +14,10 @@ from wkhelper.domain.exam import ExamPaperData, ExamProblemItem
 from wkhelper.domain.exporting import CourseQuestionsExport
 from wkhelper.domain.homework import Homework, OptionItem, QuestionDetail
 from wkhelper.exam.export import export_exam_paper, export_exam_paper_to_markdown
-from wkhelper.exporting.markdown import html_to_md
 from wkhelper.exporting.questions import export_questions, export_questions_to_markdown
 from wkhelper.exporting.resources import localize_question_detail
 from wkhelper.infra.files import publish_file_no_clobber
+from wkhelper.infra.markdown import html_to_md
 
 
 @pytest.mark.asyncio

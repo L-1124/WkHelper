@@ -64,7 +64,9 @@ async def test_begin_rejects_unconfirmed_or_failed_business_response(monkeypatch
     monkeypatch.setattr("wkhelper.exam.browser.connect_exam_page", connect)
     with pytest.raises(APIError):
         await begin_browser_exam(
-            ExamBrowserSession(exam_id="leaf", platform="ykt", host="https://exam.test", eid=42, port=1, profile="", web_url=""),
+            ExamBrowserSession(
+                account_id="1", exam_id="leaf", platform="ykt", host="https://exam.test", eid=42, port=1, profile="", web_url=""
+            ),
             timeout=0.2,
         )
     assert page.closed
@@ -83,7 +85,9 @@ async def test_begin_requires_matching_exam_response_and_loaded_questions(monkey
     monkeypatch.setattr("wkhelper.exam.browser.connect_exam_page", connect)
     with pytest.raises(APIError):
         await begin_browser_exam(
-            ExamBrowserSession(exam_id="leaf", platform="ykt", host="https://exam.test", eid=42, port=1, profile="", web_url=""),
+            ExamBrowserSession(
+                account_id="1", exam_id="leaf", platform="ykt", host="https://exam.test", eid=42, port=1, profile="", web_url=""
+            ),
             timeout=0.15,
         )
     assert page.closed
@@ -98,6 +102,9 @@ async def test_begin_confirms_success_only_after_questions_load(monkeypatch) -> 
 
     monkeypatch.setattr("wkhelper.exam.browser.connect_exam_page", connect)
     await begin_browser_exam(
-        ExamBrowserSession(exam_id="leaf", platform="ykt", host="https://exam.test", eid=42, port=1, profile="", web_url=""), timeout=0.3
+        ExamBrowserSession(
+            account_id="1", exam_id="leaf", platform="ykt", host="https://exam.test", eid=42, port=1, profile="", web_url=""
+        ),
+        timeout=0.3,
     )
     assert page.closed

@@ -20,7 +20,6 @@ from wkhelper.domain.errors import APIError, RiskControlError
 from wkhelper.domain.exam import ExamCoverDetail, ExamPaperData, ExamProblemItem, ExamStartResult
 from wkhelper.domain.homework import Homework, OptionItem, QuestionSubmitOutcome
 from wkhelper.domain.video import VideoContext
-from wkhelper.exporting.markdown import html_to_md, html_to_md_with_images
 from wkhelper.infra.clock import ServerClock
 from wkhelper.infra.http import (
     AsyncSession,
@@ -28,6 +27,7 @@ from wkhelper.infra.http import (
     request_json,
     request_json_once,
 )
+from wkhelper.infra.markdown import html_to_md, html_to_md_with_images
 from wkhelper.infra.throttle import RateGate, RetryPolicy
 from wkhelper.platform.parsing import parse_exercise_response
 from wkhelper.platform.protocol_types import HeartbeatProfile, create_page_nonce
@@ -71,7 +71,7 @@ class BasePlatform(ABC):
         self.user: UserInfo | None = None
         self.platform_code: str | None = None
         self.account_id: str | None = None
-        self._exam_room_binding: tuple[str, int, str] | None = None
+        self._exam_room_bindings: dict[str, tuple[str, int, str]] = {}
         self.current_cookies: dict[str, str] | None = None
         self.gate = gate or RateGate()
         self.retry_policy = retry_policy or RetryPolicy()
@@ -100,6 +100,19 @@ class BasePlatform(ABC):
 
     @abstractmethod
     async def get_leaf_schedules(self, course: Course) -> dict[int, float]: ...
+
+    async def get_course_progress(self, course: Course) -> list[dict[str, Any]]:
+        """获取课程大纲与节点进度树原始结构（雨课堂 c27 进度树等）。未实现时抛出异常。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现课程进度树接口")
+
+    async def get_leaf_info(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+        """获取课件叶子节点详细元数据。"""
+        url = self._build_leaf_info_url(leaf_id, course)
+        params = self._get_leaf_info_params(leaf_id, course)
+        kwargs = self.get_request_kwargs(course) or {}
+        resp = await self._request_json("GET", url, params=params, **kwargs)
+        data = resp.get("data")
+        return data if isinstance(data, dict) else {}
 
     def _classroom_id(self, course: Course) -> str:
         """课程所属课堂 ID，两个平台都以 `metadata['classroom_id']` 承载。"""
@@ -200,21 +213,15 @@ class BasePlatform(ABC):
         """进入考场并申请考试授权令牌。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现进入考场接口")
 
-    def bind_exam_room(self, host: str, eid: int, login_url: str) -> None:
-        """绑定已存在的考场会话。"""
-        self._exam_room_binding = (host, eid, login_url)
+    def bind_exam_room(self, host: str, eid: int, login_url: str, *, leaf_id: str | int) -> None:
+        """为指定考试节点绑定已有考场，避免重新换票挤下浏览器。"""
+        self._exam_room_bindings[str(leaf_id)] = (host, eid, login_url)
 
     async def _open_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
-        """返回 (exam_host, exam_id, 考场直达 URL)；已绑定或检测到活跃会话时直接复用。"""
-        binding = getattr(self, "_exam_room_binding", None)
+        """返回考场地址、ID 与直达 URL；只复用当前节点的显式绑定。"""
+        binding = self._exam_room_bindings.get(str(leaf_id))
         if binding is not None:
             return binding
-        from wkhelper.exam.session import load_session
-
-        session = load_session()
-        if session is not None and session.exam_id == str(leaf_id):
-            self.bind_exam_room(session.host, session.eid, session.web_url)
-            return session.host, session.eid, session.web_url
         return await self._mint_exam_room(leaf_id, course)
 
     async def _mint_exam_room(self, leaf_id: str | int, course: Course) -> tuple[str, int, str]:
@@ -403,11 +410,7 @@ class BasePlatform(ABC):
 
     async def get_leaf_questions(self, leaf_id: str | int, course: Course) -> list[dict[str, Any]]:
         """获取指定叶子节点的习题列表。"""
-        url = self._build_leaf_info_url(leaf_id, course)
-        params = self._get_leaf_info_params(leaf_id, course)
-        kwargs = self.get_request_kwargs(course) or {}
-        resp = await self._request_json("GET", url, params=params, **kwargs)
-        data = resp.get("data")
+        data = await self.get_leaf_info(leaf_id, course)
         leaf_type = data.get("leaf_type") if isinstance(data, dict) else None
         # leaf_type 以平台前端为准：5=考试，6=作业（走习题接口），7=课件，8=线下课堂，9=随堂测验，10=公告
         if leaf_type == 5:
@@ -429,6 +432,7 @@ class BasePlatform(ABC):
             return []
         sku_id = data.get("sku_id") if isinstance(data, dict) else None
 
+        kwargs = self.get_request_kwargs(course) or {}
         ex_url = self._build_exercise_list_url(leaf_type_id, sku_id)
         try:
             q_resp = await self._request_json("GET", ex_url, **kwargs)

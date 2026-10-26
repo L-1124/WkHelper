@@ -1,7 +1,7 @@
-"""HTML 转 Markdown 的共享转换器。
+"""HTML 转 Markdown 的通用基础设施。
 
-`core` 内部多处需要把平台富文本降级为 Markdown（题目导出、讨论题详情），
-单独成模块以避免 `exporter` 与 `base_platform` 互相导入。
+供导出、讨论区及平台层解析富文本题目与公告时降级为 Markdown，
+作为无状态文本转换基础设施独立存在，避免跨层循环依赖。
 """
 
 import html

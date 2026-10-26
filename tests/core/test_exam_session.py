@@ -7,9 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.conftest import FakeAsyncPlatform
+from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.errors import APIError
-from wkhelper.exam.session import ExamBrowserSession, open_exam_browser
+from wkhelper.exam.service import bind_browser_session
+from wkhelper.exam.session import ExamBrowserSession, load_session, open_exam_browser, save_session, session_file
 from wkhelper.infra.browser.process import BrowserManager, BrowserProcess
+from wkhelper.infra.http import build_session
 
 
 def _make_fake_proc(tmp_path: Path, port: int = 9222) -> BrowserProcess:
@@ -46,8 +50,9 @@ async def test_open_browser_reclaims_on_debugger_timeout(tmp_path: Path, monkeyp
 
     with pytest.raises(APIError, match="调试端口未就绪"):
         await open_exam_browser(
+            account_id="1",
             exam_id="3001",
-            platform="XuetangXPlatform",
+            platform="xtzx",
             host="https://examination.test",
             eid=42,
             web_url="https://examination.test/exam/42",
@@ -89,8 +94,9 @@ async def test_open_browser_reclaims_on_ws_failure(tmp_path: Path, monkeypatch: 
 
     with pytest.raises(ConnectionRefusedError):
         await open_exam_browser(
+            account_id="1",
             exam_id="3001",
-            platform="XuetangXPlatform",
+            platform="xtzx",
             host="https://examination.test",
             eid=42,
             web_url="https://examination.test/exam/42",
@@ -120,8 +126,9 @@ async def test_open_browser_reclaims_on_cancellation(tmp_path: Path, monkeypatch
 
     with pytest.raises(asyncio.CancelledError):
         await open_exam_browser(
+            account_id="1",
             exam_id="3001",
-            platform="XuetangXPlatform",
+            platform="xtzx",
             host="https://examination.test",
             eid=42,
             web_url="https://examination.test/exam/42",
@@ -176,8 +183,9 @@ async def test_open_browser_reclaims_on_save_session_failure(tmp_path: Path, mon
 
     with pytest.raises(OSError, match="Disk full"):
         await open_exam_browser(
+            account_id="1",
             exam_id="3001",
-            platform="XuetangXPlatform",
+            platform="xtzx",
             host="https://examination.test",
             eid=42,
             web_url="https://examination.test/exam/42",
@@ -225,8 +233,9 @@ async def test_open_browser_successful_handover_keeps_process(tmp_path: Path, mo
     monkeypatch.setattr("wkhelper.exam.session.CdpClient", lambda ws: cdp)
 
     session = await open_exam_browser(
+        account_id="1",
         exam_id="3001",
-        platform="XuetangXPlatform",
+        platform="xtzx",
         host="https://examination.test",
         eid=42,
         web_url="https://examination.test/exam/42",
@@ -239,3 +248,79 @@ async def test_open_browser_successful_handover_keeps_process(tmp_path: Path, mo
     assert session.profile == fake_proc.profile_dir
     # 成功交接：进程未被关闭，常驻等待复用
     assert fake_proc not in closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_platform", "session_account", "session_exam", "matches"),
+    [
+        ("xtzx", "1", "3001", True),
+        ("ykt", "1", "3001", False),
+        ("xtzx", "2", "3001", False),
+        ("xtzx", "1", "3002", False),
+    ],
+)
+async def test_browser_session_reuse_is_scoped_to_identity_and_data_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_platform: str,
+    session_account: str,
+    session_exam: str,
+    matches: bool,
+) -> None:
+    selected_dir = tmp_path / "selected"
+    default_dir = tmp_path / "default"
+    record = ExamBrowserSession(
+        platform=session_platform,
+        account_id=session_account,
+        exam_id=session_exam,
+        host="https://exam.test",
+        eid=42,
+        port=1,
+        profile="",
+        web_url="https://exam.test/exam/42",
+    )
+    save_session(record, selected_dir)
+    save_session(
+        ExamBrowserSession(
+            platform="xtzx",
+            account_id="1",
+            exam_id="3001",
+            host="https://other.test",
+            eid=99,
+            port=1,
+            profile="",
+            web_url="https://other.test/exam/99",
+        ),
+        default_dir,
+    )
+    monkeypatch.setattr("wkhelper.exam.session.get_default_data_dir", lambda: default_dir)
+    monkeypatch.setattr("wkhelper.exam.session._port_alive", lambda port: True)
+
+    async def read_browser_cookies(session: ExamBrowserSession) -> dict[str, str]:
+        return {"sessionid": "browser-account"}
+
+    monkeypatch.setattr("wkhelper.exam.service.browser_cookies", read_browser_cookies)
+    async with build_session(proxy=None, user_agent=None, impersonate=None) as client:
+        platform = FakeAsyncPlatform(client)
+        platform.platform_code = "xtzx"
+        platform.user = UserInfo(id="1", name="Current")
+        client.cookies.set("sessionid", "current-account")
+        reused = await bind_browser_session(platform, "3001", data_dir=selected_dir)
+        assert reused == (record if matches else None)
+        assert client.cookies.get("sessionid") == ("browser-account" if matches else "current-account")
+
+
+def test_browser_session_without_owner_is_rejected(tmp_path: Path) -> None:
+    record = ExamBrowserSession(
+        platform="xtzx",
+        account_id="1",
+        exam_id="3001",
+        host="https://exam.test",
+        eid=42,
+        port=1,
+        profile="",
+        web_url="https://exam.test/exam/42",
+    )
+    session_file(tmp_path).write_text(record.model_dump_json(exclude={"account_id"}), encoding="utf-8")
+    assert load_session(tmp_path, verify=False) is None

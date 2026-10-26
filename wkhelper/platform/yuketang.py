@@ -13,7 +13,7 @@ from wkhelper.domain.homework import Homework
 from wkhelper.domain.questions import is_fill_in_question, normalize_judgement_answer
 from wkhelper.domain.time_types import epoch_millis
 from wkhelper.domain.video import VideoContext
-from wkhelper.exporting.markdown import html_to_md
+from wkhelper.infra.markdown import html_to_md
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.parsing import PlatformCounters
 from wkhelper.platform.protocol_types import HeartbeatProfile
@@ -196,9 +196,7 @@ class YuketangPlatform(BasePlatform):
                 continue
         # 补充从 c27 接口获取作业与测验多类型叶子的真实完成状态
         try:
-            p_url = f"https://www.yuketang.cn/c27/online_courseware/schedule/course/progress/?classroom_id={cid}"
-            p_resp = await self._request_json("GET", p_url, **kwargs)
-            cp = p_resp.get("data", {}).get("course_progress", [])
+            cp = await self.get_course_progress(course)
 
             def walk(nodes: list[dict[str, Any]]) -> None:
                 for n in nodes:
@@ -220,6 +218,20 @@ class YuketangPlatform(BasePlatform):
             logger.debug(f"获取多类型任务进度失败: {exc}")
 
         return schedules
+
+    @override
+    async def get_course_progress(self, course: Course) -> list[dict[str, Any]]:
+        """拉取雨课堂 c27 课程大纲与各叶子进度列表。"""
+        cid = course.metadata["classroom_id"]
+        url = f"{self.api_base}/c27/online_courseware/schedule/course/progress/"
+        kwargs = self._get_course_kwargs(course)
+        resp = await self._request_json("GET", url, params={"classroom_id": cid}, **kwargs)
+        data = resp.get("data")
+        if isinstance(data, dict):
+            cp = data.get("course_progress")
+            if isinstance(cp, list):
+                return cp
+        return []
 
     @override
     async def get_completed_video_ids(self, course: Course) -> set[int] | None:
@@ -621,7 +633,7 @@ class YuketangPlatform(BasePlatform):
     @override
     async def start_exam(self, leaf_id: str | int, course: Course) -> ExamStartResult:
         cover = await self.get_exam_cover(leaf_id, course)
-        binding = getattr(self, "_exam_room_binding", None)
+        binding = self._exam_room_bindings.get(str(leaf_id))
         if binding is not None:
             _host, _eid, login_url = binding
         else:
