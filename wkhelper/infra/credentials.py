@@ -166,9 +166,11 @@ class CredentialStore:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        if self._memory_conn is not None:
-            return self._memory_conn
-        return sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
+        conn = self._memory_conn
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
     def _init_db(self) -> None:
         with self._db_lock:
@@ -206,6 +208,15 @@ class CredentialStore:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS legacy_tombstones (
                         key_id TEXT PRIMARY KEY
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS active_context (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        platform TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        updated_at REAL NOT NULL,
+                        FOREIGN KEY (platform, user_id) REFERENCES accounts(platform, user_id) ON DELETE CASCADE
                     )
                 """)
                 conn.execute("COMMIT")
@@ -308,12 +319,26 @@ class CredentialStore:
 
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO accounts (
+                    INSERT INTO accounts (
                         platform, user_id, name, school, key_id, saved_at, encrypted_cookies, encryption_version
                     ) VALUES (?, ?, ?, ?, NULL, ?, ?, 1)
+                    ON CONFLICT (platform, user_id) DO UPDATE SET
+                        name = excluded.name, school = excluded.school, key_id = NULL,
+                        saved_at = excluded.saved_at, encrypted_cookies = excluded.encrypted_cookies,
+                        encryption_version = excluded.encryption_version
                     """,
                     (platform, uid, user_info.name, user_info.school, now, encrypted_blob),
                 )
+                cursor = conn.execute("""
+                    SELECT 1 FROM active_context c
+                    JOIN accounts a ON a.platform = c.platform AND a.user_id = c.user_id
+                    WHERE c.id = 1
+                """)
+                if cursor.fetchone() is None:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO active_context (id, platform, user_id, updated_at) VALUES (1, ?, ?, ?)",
+                        (platform, uid, now),
+                    )
                 conn.execute("COMMIT")
                 in_tx = False
 
@@ -335,13 +360,15 @@ class CredentialStore:
             conn: sqlite3.Connection | None = None
             try:
                 conn = self._get_connection()
+                base_sql = """
+                    SELECT a.platform, a.user_id, a.name, a.school, a.saved_at, (c.id IS NOT NULL) AS is_default
+                    FROM accounts a
+                    LEFT JOIN active_context c ON a.platform = c.platform AND a.user_id = c.user_id
+                """
                 if platform:
-                    cursor = conn.execute(
-                        "SELECT platform, user_id, name, school, saved_at FROM accounts WHERE platform = ? ORDER BY saved_at DESC",
-                        (platform,),
-                    )
+                    cursor = conn.execute(f"{base_sql} WHERE a.platform = ? ORDER BY is_default DESC, a.saved_at DESC", (platform,))
                 else:
-                    cursor = conn.execute("SELECT platform, user_id, name, school, saved_at FROM accounts ORDER BY saved_at DESC")
+                    cursor = conn.execute(f"{base_sql} ORDER BY is_default DESC, a.saved_at DESC")
                 rows = cursor.fetchall()
                 return [
                     AccountSummary(
@@ -350,6 +377,7 @@ class CredentialStore:
                         name=str(row[2]),
                         school=row[3] if isinstance(row[3], str) else None,
                         saved_at=float(row[4]),
+                        is_default=bool(row[5]),
                     )
                     for row in rows
                 ]
@@ -511,10 +539,20 @@ class CredentialStore:
                         (legacy_key_id,),
                     )
 
+                removed_default = (
+                    conn.execute("DELETE FROM active_context WHERE id = 1 AND platform = ? AND user_id = ?", (platform, uid)).rowcount > 0
+                )
                 conn.execute(
                     "DELETE FROM accounts WHERE platform = ? AND user_id = ?",
                     (platform, uid),
                 )
+                if removed_default:
+                    remaining = conn.execute("SELECT platform, user_id FROM accounts LIMIT 2").fetchall()
+                    if len(remaining) == 1:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO active_context (id, platform, user_id, updated_at) VALUES (1, ?, ?, ?)",
+                            (str(remaining[0][0]), str(remaining[0][1]), time.time()),
+                        )
                 conn.execute("COMMIT")
                 in_tx = False
 
@@ -529,6 +567,77 @@ class CredentialStore:
                 raise
             finally:
                 if conn is not None and self._memory_conn is None:
+                    conn.close()
+
+    def get_default_account(self) -> tuple[str, str] | None:
+        """获取当前默认账号及其平台标识 (platform, user_id)。"""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.execute(
+                    """
+                    SELECT c.platform, c.user_id
+                    FROM active_context c
+                    JOIN accounts a ON c.platform = a.platform AND c.user_id = a.user_id
+                    WHERE c.id = 1
+                    """
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    return str(row[0]), str(row[1])
+                conn.execute("""
+                    DELETE FROM active_context
+                    WHERE id = 1 AND NOT EXISTS (
+                        SELECT 1 FROM accounts a
+                        WHERE a.platform = active_context.platform AND a.user_id = active_context.user_id
+                    )
+                """)
+                return None
+            finally:
+                if self._memory_conn is None:
+                    conn.close()
+
+    def set_default_account(self, platform: str, user_id: str | int) -> None:
+        """切换当前默认账号；目标账号必须已存在于本地存储。"""
+        uid = str(user_id)
+        now = time.time()
+        with self._db_lock:
+            conn = self._get_connection()
+            in_tx = False
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                in_tx = True
+                cursor = conn.execute(
+                    "SELECT 1 FROM accounts WHERE platform = ? AND user_id = ?",
+                    (platform, uid),
+                )
+                if cursor.fetchone() is None:
+                    raise AuthError(f"平台 '{platform}' 下未找到已保存账号 '{uid}'，无法设为默认账号")
+                conn.execute(
+                    "INSERT OR REPLACE INTO active_context (id, platform, user_id, updated_at) VALUES (1, ?, ?, ?)",
+                    (platform, uid, now),
+                )
+                conn.execute("COMMIT")
+                in_tx = False
+            except Exception:
+                if in_tx:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                raise
+            finally:
+                if self._memory_conn is None:
+                    conn.close()
+
+    def clear_default_account(self) -> None:
+        """清除当前默认账号指针。"""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                conn.execute("DELETE FROM active_context WHERE id = 1")
+            finally:
+                if self._memory_conn is None:
                     conn.close()
 
     def get_storage_status(self) -> StorageStatus:

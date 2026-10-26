@@ -107,6 +107,13 @@ wkhelper auth status -p ykt
 # 查看本地存储的账号列表（绝不输出明文 Cookie）
 wkhelper auth list
 
+# 切换默认账号（该平台只有一个账号时可省略 -a）
+wkhelper auth switch -p icourse163 -a 123456
+
+# 后续命令使用默认账号及其所属平台
+wkhelper course list
+wkhelper auth status
+
 # 删除指定账号凭据
 wkhelper auth remove -p ykt -a 123456 --confirm
 ```

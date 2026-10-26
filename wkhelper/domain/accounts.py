@@ -19,6 +19,7 @@ class AccountSummary(Model):
     name: str
     school: str | None
     saved_at: float
+    is_default: bool = False
 
 
 class StorageStatus(Model):
@@ -62,3 +63,14 @@ class RemoveResult(Model):
     platform: str
     account: str
     deleted: bool
+
+
+class AuthSwitchResult(Model):
+    """切换默认账号结果模型。"""
+
+    platform: str
+    user_id: str
+    name: str
+    school: str | None = None
+    previous_platform: str | None = None
+    previous_user_id: str | None = None

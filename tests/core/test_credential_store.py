@@ -539,6 +539,7 @@ def test_credential_store_save_db_failure_rollback(store: CredentialStore, monke
     expected = None if operation == "create" else {"token": "original"}
     assert store.get_cookies("ykt", user.id) == expected
     assert len(store.list_accounts("ykt")) == (0 if operation == "create" else 1)
+    assert store.get_default_account() == (None if operation == "create" else ("ykt", user.id))
 
 
 def test_credential_store_session_mode_isolation(temp_db_dir: str) -> None:
@@ -628,3 +629,47 @@ def test_keyring_fractional_priority_survives_status_reconstruction(
     assert status.data_dir == str(tmp_path)
     assert status.metadata_db == str(store.db_path)
     assert original.data_dir == "" and original.metadata_db == ""
+
+
+def test_default_account_switch_relogin_and_reopen(store: CredentialStore) -> None:
+    store.save("ykt", UserInfo(id="a", name="A"), {"token": "a"})
+    store.save("icourse163", UserInfo(id="b", name="B"), {"token": "b"})
+    assert store.get_default_account() == ("ykt", "a")
+    store.set_default_account("icourse163", "b")
+    store.save("icourse163", UserInfo(id="b", name="B renewed"), {"token": "renewed"})
+    reopened = CredentialStore(data_dir=store.data_dir, backend=store.backend)
+    assert reopened.get_default_account() == ("icourse163", "b")
+    assert reopened.get_cookies("icourse163", "b") == {"token": "renewed"}
+    assert {(a.platform, a.user_id) for a in reopened.list_accounts() if a.is_default} == {("icourse163", "b")}
+
+
+@pytest.mark.parametrize("remaining", [0, 1, 2])
+def test_deleting_default_only_adopts_unique_remaining_account(store: CredentialStore, remaining: int) -> None:
+    store.save("ykt", UserInfo(id="default", name="Default"), {"token": "default"})
+    for index in range(remaining):
+        store.save("icourse163", UserInfo(id=str(index), name=str(index)), {"token": str(index)})
+    assert store.delete("ykt", "default")
+    assert store.get_default_account() == (("icourse163", "0") if remaining == 1 else None)
+
+
+def test_default_clear_and_failed_switch_preserve_selection(store: CredentialStore) -> None:
+    store.save("ykt", UserInfo(id="a", name="A"), {"token": "a"})
+    store.save("icourse163", UserInfo(id="b", name="B"), {"token": "b"})
+    with pytest.raises(AuthError):
+        store.set_default_account("ykt", "missing")
+    assert store.get_default_account() == ("ykt", "a")
+    store.clear_default_account()
+    assert store.delete("ykt", "a")
+    assert store.get_default_account() is None
+    assert not any(account.is_default for account in store.list_accounts())
+
+
+def test_switch_commit_failure_preserves_previous_default(store: CredentialStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.save("ykt", UserInfo(id="a", name="A"), {"token": "a"})
+    store.save("icourse163", UserInfo(id="b", name="B"), {"token": "b"})
+    real_get_connection = store._get_connection
+    monkeypatch.setattr(store, "_get_connection", lambda: FaultInjectionConnection(real_get_connection(), fail_commit=True))
+    with pytest.raises(sqlite3.OperationalError):
+        store.set_default_account("icourse163", "b")
+    monkeypatch.undo()
+    assert store.get_default_account() == ("ykt", "a")

@@ -76,6 +76,14 @@ COMMAND_CONTRACTS: dict[str, dict[str, Any]] = {
             "wkhelper auth login --platform ykt --method cookie --cookie-file cookies.json",
         ],
     },
+    "auth switch": {
+        "description": "切换默认账号及其所属平台，仅修改本地设置，不进行网络验证。",
+        "side_effects": "local_write",
+        "examples": [
+            "wkhelper auth switch --platform ykt",
+            "wkhelper auth switch --platform icourse163 --account 123456",
+        ],
+    },
     "auth remove": {
         "description": "删除本地已保存的账号凭据与元数据。",
         "side_effects": "local_delete",
@@ -353,7 +361,7 @@ def _hidden_command_names(node: App) -> set[str]:
         if isinstance(flags, str):
             hidden.add(flags)
         elif flags:
-            hidden.update(str(flag) for flag in flags)
+            hidden.update(flags)
     return hidden
 
 

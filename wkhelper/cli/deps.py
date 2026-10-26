@@ -2,7 +2,7 @@
 
 import logging
 import sys
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -128,15 +128,20 @@ def _resolve_account_and_platform(
         cookies = _parse_cookie_payload(_read_json_file_or_stdin(options.cookie_file))
         return platform_code, account_id or "session_user", cookies
 
+    default_ctx = store.get_default_account()
+
     plat = platform_code
     if plat is None:
-        accounts = store.list_accounts()
-        if not accounts:
-            raise AuthError("未找到任何已保存账号，请先执行 `wkhelper auth login` 登录")
-        platforms = {account.platform for account in accounts}
-        if len(platforms) != 1:
-            raise ValueError("系统存在多个平台的账号，请显式提供 `--platform` 参数")
-        plat = next(iter(platforms))
+        if default_ctx is not None:
+            plat = default_ctx[0]
+        else:
+            accounts = store.list_accounts()
+            if not accounts:
+                raise AuthError("未找到任何已保存账号，请先执行 `wkhelper auth login` 登录")
+            platforms = {account.platform for account in accounts}
+            if len(platforms) != 1:
+                raise ValueError("系统存在多个平台的账号，请显式提供 `--platform` 参数或执行 `wkhelper auth switch` 切换默认账号")
+            plat = next(iter(platforms))
 
     accounts = store.list_accounts(plat)
     if not accounts:
@@ -144,11 +149,12 @@ def _resolve_account_and_platform(
 
     acc = account_id
     if acc is None:
-        if len(accounts) == 1:
+        if default_ctx is not None and default_ctx[0] == plat:
+            acc = default_ctx[1]
+        elif len(accounts) == 1:
             acc = accounts[0].user_id
         else:
-            raise ValueError(f"平台 '{plat}' 存在多个账号，请显式提供 `--account` 参数")
-
+            raise ValueError(f"平台 '{plat}' 存在多个账号，请显式提供 `--account` 参数或执行 `wkhelper auth switch` 切换默认账号")
     cookies = store.get_cookies(plat, acc)
     if not cookies:
         raise AuthError(f"账号 '{acc}' 的凭据已丢失或损坏，请重新登录")
@@ -161,7 +167,7 @@ async def _open_platform(
     platform: str | None = None,
     account: str | None = None,
     timeout: float = 15.0,
-) -> AsyncIterator[BasePlatform]:
+) -> AsyncGenerator[BasePlatform, None]:
     """打开已认证的平台客户端上下文。"""
     store = get_context().get_store()
     platform_code, _account_id, cookies = _resolve_account_and_platform(store, platform, account)
@@ -182,7 +188,7 @@ async def _open_course(
     platform: str | None = None,
     account: str | None = None,
     timeout: float = 15.0,
-) -> AsyncIterator[tuple[BasePlatform, Course]]:
+) -> AsyncGenerator[tuple[BasePlatform, Course], None]:
     """打开已认证平台并解析目标课程。"""
     async with _open_platform(platform, account, timeout) as plat:
         yield plat, await _load_course(plat, course)

@@ -13,7 +13,15 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from wkhelper.domain.accounts import AccountListData, AuthStatusResult, LoginResult, RemoveResult, StatusData, StorageStatus
+from wkhelper.domain.accounts import (
+    AccountListData,
+    AuthStatusResult,
+    AuthSwitchResult,
+    LoginResult,
+    RemoveResult,
+    StatusData,
+    StorageStatus,
+)
 from wkhelper.domain.actions import NextAction
 from wkhelper.domain.content import (
     ArticleListData,
@@ -459,19 +467,34 @@ def _render_status(data: StatusData) -> list[str]:
         f"- **已保存账号数**：{data.accounts_count}",
         "",
     ]
-    rows = [[account.platform, account.user_id, account.name, account.school] for account in data.accounts]
+    rows = [
+        ["是" if account.is_default else "-", account.platform, account.user_id, account.name, account.school] for account in data.accounts
+    ]
     lines.append("### 已绑定账号")
-    lines.extend(_table(["平台", "账号 ID", "用户姓名", "院校归属"], rows))
+    lines.extend(_table(["默认", "平台", "账号 ID", "用户姓名", "院校归属"], rows))
     return lines
 
 
 @renderer(AccountListData)
 def _render_account_list(data: AccountListData) -> list[str]:
-    rows = [[account.platform, account.user_id, account.name, account.school] for account in data.accounts]
+    rows = [
+        ["是" if account.is_default else "-", account.platform, account.user_id, account.name, account.school] for account in data.accounts
+    ]
     return [
         f"## 已保存账号列表 (共 {len(data.accounts)} 个)",
         "",
-        *_table(["平台", "账号 ID", "姓名", "院校归属"], rows),
+        *_table(["默认", "平台", "账号 ID", "姓名", "院校归属"], rows),
+    ]
+
+
+@renderer(AuthSwitchResult)
+def _render_auth_switch(data: AuthSwitchResult) -> list[str]:
+    return [
+        "## 默认账号已切换",
+        "",
+        f"- **平台**：{_cell(data.platform)}",
+        f"- **账号 ID**：{_cell(data.user_id)}",
+        f"- **姓名**：{_cell(data.name)}",
     ]
 
 
@@ -541,7 +564,7 @@ def format_error_markdown(
     data: object = None,
 ) -> str:
     """格式化错误响应为 Markdown。"""
-    quoted = str(message).replace("\r", "").replace("\n", "\n> ")
+    quoted = message.replace("\r", "").replace("\n", "\n> ")
     lines = [f"## 操作失败 [{_cell(code)}]", "", f"> **错误信息**：{quoted}", ""]
     if data:
         render = _RENDERERS.get(type(data))

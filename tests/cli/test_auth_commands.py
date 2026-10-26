@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 
-from wkhelper.cli.context import ExecutionContext
+from wkhelper.cli.context import ExecutionContext, SessionOptions, execution_context
+from wkhelper.cli.deps import _resolve_account_and_platform
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.infra.credentials import CredentialStore
 from wkhelper.main import async_main
@@ -203,3 +204,76 @@ async def test_auth_status_calls_login_with_cookies(monkeypatch: pytest.MonkeyPa
     assert output["data"]["user_id"] == "stored_user_1"
     assert len(login_with_cookies_called) == 1
     assert login_with_cookies_called[0] == {"sessionid": "s1", "csrftoken": "c1"}
+
+
+@pytest.mark.asyncio
+async def test_auth_switch_updates_default_and_list(credential_store: CredentialStore, capsys) -> None:
+    credential_store.save("ykt", UserInfo(id="a", name="A"), {"token": "a"})
+    credential_store.save("icourse163", UserInfo(id="b", name="B"), {"token": "b"})
+    code = await async_main(["--format", "json", "--credential-mode", "session", "auth", "switch", "-p", "icourse163"])
+    output = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert output["data"]["previous_platform"] == "ykt"
+    assert output["data"]["previous_user_id"] == "a"
+    assert credential_store.get_default_account() == ("icourse163", "b")
+    assert output["next_actions"][0]["argv"] == ["wkhelper", "course", "list"]
+    code = await async_main(["--format", "json", "--credential-mode", "session", "auth", "list"])
+    accounts = json.loads(capsys.readouterr().out)["data"]["accounts"]
+    assert code == 0
+    assert [(a["platform"], a["user_id"]) for a in accounts if a["is_default"]] == [("icourse163", "b")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "expected_code"),
+    [(["-p", "ykt"], 2), (["-p", "ykt", "-a", "missing"], 3), (["-p", "xtzx"], 3)],
+)
+async def test_auth_switch_rejects_ambiguous_or_missing_account(
+    args: list[str], expected_code: int, credential_store: CredentialStore, capsys
+) -> None:
+    for user_id in ("a", "b"):
+        credential_store.save("ykt", UserInfo(id=user_id, name=user_id), {"token": user_id})
+    code = await async_main(["--format", "json", "--credential-mode", "session", "auth", "switch", *args])
+    output = json.loads(capsys.readouterr().out)
+    assert code == expected_code
+    assert output["ok"] is False
+    assert credential_store.get_default_account() == ("ykt", "a")
+    if expected_code == 2:
+        assert "a" in output["error"]["message"] and "b" in output["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("platform", "account", "clear_default", "expected"),
+    [
+        (None, None, False, ("ykt", "a")),
+        (None, "b", False, ("ykt", "b")),
+        ("ykt", None, False, ("ykt", "a")),
+        ("icourse163", None, False, ("icourse163", "a")),
+        ("icourse163", "a", False, ("icourse163", "a")),
+        ("ykt", "b", True, ("ykt", "b")),
+        (None, None, True, None),
+        ("ykt", None, True, None),
+    ],
+)
+def test_account_resolution_precedence(
+    platform: str | None,
+    account: str | None,
+    clear_default: bool,
+    expected: tuple[str, str] | None,
+    credential_store: CredentialStore,
+) -> None:
+    for code, user_id, token in (("ykt", "a", "ya"), ("ykt", "b", "yb"), ("icourse163", "a", "ma")):
+        credential_store.save(code, UserInfo(id=user_id, name=user_id), {"token": token})
+    if clear_default:
+        credential_store.clear_default_account()
+    previous = credential_store.get_default_account()
+    with execution_context(SessionOptions(credential_mode="session")):
+        if expected is None:
+            with pytest.raises(ValueError, match="auth switch"):
+                _resolve_account_and_platform(credential_store, platform, account)
+        else:
+            selected_platform, selected_account, cookies = _resolve_account_and_platform(credential_store, platform, account)
+            assert (selected_platform, selected_account) == expected
+            tokens = {("ykt", "a"): "ya", ("ykt", "b"): "yb", ("icourse163", "a"): "ma"}
+            assert cookies == {"token": tokens[expected]}
+    assert credential_store.get_default_account() == previous
