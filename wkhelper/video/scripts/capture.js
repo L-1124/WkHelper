@@ -7,9 +7,31 @@ async (args) => {
     const targetWidth = Number(args.width || 0);
     const targetHeight = Number(args.height || 0);
     const qualityRatio = Number(args.quality_ratio || 0.85);
+    const tolerance = 0.25;
+    const needsSeek = Math.abs(v.currentTime - targetTime) > 0.05;
+    let cancelFrameWait = () => {};
+    let frameReady = null;
+    if (needsSeek && typeof v.requestVideoFrameCallback === 'function') {
+        frameReady = new Promise((resolve) => {
+            let callbackId;
+            const timer = setTimeout(() => {
+                cancelFrameWait();
+            }, 5000);
+            cancelFrameWait = () => {
+                clearTimeout(timer);
+                v.cancelVideoFrameCallback(callbackId);
+                resolve(null);
+            };
+            const onFrame = (_now, metadata) => {
+                clearTimeout(timer);
+                resolve(metadata.mediaTime);
+            };
+            callbackId = v.requestVideoFrameCallback(onFrame);
+        });
+    }
 
     let seekTimedOut = false;
-    if (Math.abs(v.currentTime - targetTime) > 0.05) {
+    if (needsSeek) {
         seekTimedOut = await new Promise((resolve) => {
             let settled = false;
             const onSeeked = () => {
@@ -36,11 +58,24 @@ async (args) => {
     }
 
     if (seekTimedOut) {
+        cancelFrameWait();
         return {
             ok: false,
             error: 'seek_timeout',
             actualTime: v.currentTime
         };
+    }
+
+    if (Math.abs(v.currentTime - targetTime) > tolerance) {
+        cancelFrameWait();
+        return { ok: false, error: 'seek_restricted', actualTime: v.currentTime };
+    }
+    const frameTime = frameReady ? await frameReady : v.currentTime;
+    if (Math.abs(v.currentTime - targetTime) > tolerance) {
+        return { ok: false, error: 'seek_restricted', actualTime: v.currentTime };
+    }
+    if (frameTime === null || v.readyState < 2 || v.seeking) {
+        return { ok: false, error: 'frame_not_ready', actualTime: v.currentTime };
     }
 
     const w = targetWidth || v.videoWidth || 1280;

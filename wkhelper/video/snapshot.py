@@ -196,6 +196,8 @@ async def _extract_frames_cdp(
             data = res.get("result", {}).get("value", {})
             if not isinstance(data, dict):
                 raise RuntimeError(f"无效的帧渲染返回: {data}")
+            raw_actual_time = data.get("actualTime")
+            actual_time = float(raw_actual_time) if isinstance(raw_actual_time, (int, float)) else None
 
             if data.get("ok"):
                 data_url = str(data.get("dataUrl", ""))
@@ -205,6 +207,7 @@ async def _extract_frames_cdp(
                 frames.append(
                     VideoSnapshotFrame(
                         timestamp=ts,
+                        actual_time=actual_time,
                         file_path=str(file_path),
                         data_url=data_url,
                         width=int(data.get("width", width)),
@@ -250,6 +253,7 @@ async def _extract_frames_cdp(
                 frames.append(
                     VideoSnapshotFrame(
                         timestamp=ts,
+                        actual_time=actual_time,
                         file_path=str(file_path),
                         data_url=f"data:image/jpeg;base64,{raw_b64}",
                         width=target_w,
@@ -261,6 +265,7 @@ async def _extract_frames_cdp(
                 frames.append(
                     VideoSnapshotFrame(
                         timestamp=ts,
+                        actual_time=actual_time,
                         error=str(data.get("error", "unknown_frame_error")),
                     )
                 )

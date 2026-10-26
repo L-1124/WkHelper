@@ -25,11 +25,15 @@ class APIError(WKError):
         status_code: int | None = None,
         retry_after: float | None = None,
         retryable: bool = True,
+        data: object = None,
+        next_actions: list[NextAction] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retry_after = retry_after
         self.retryable = retryable
+        self.data = data
+        self.next_actions = next_actions or []
 
 
 class RiskControlError(WKError):
@@ -61,6 +65,7 @@ class ConfirmationRequiredError(WKError):
 class PartialFailureError(WKError):
     """批处理任务部分失败。"""
 
-    def __init__(self, message: str, data: object = None) -> None:
+    def __init__(self, message: str, data: object = None, *, next_actions: list[NextAction] | None = None) -> None:
         super().__init__(message)
         self.data: object = data
+        self.next_actions = next_actions or []

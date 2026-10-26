@@ -92,6 +92,7 @@ class VideoSnapshotFrame(Model):
     """单张视频抽帧元数据与落盘结果。"""
 
     timestamp: float
+    actual_time: float | None = None
     file_path: str | None = None
     data_url: str | None = None
     width: int = 0

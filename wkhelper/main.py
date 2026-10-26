@@ -67,7 +67,14 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
         return create_error_envelope(code="FILE_EXISTS", message=str(exc), retryable=False, details=details), 5
     if isinstance(exc, PartialFailureError):
         return (
-            create_error_envelope(code="PARTIAL_FAILURE", message=str(exc), retryable=False, details=details, data=exc.data),
+            create_error_envelope(
+                code="PARTIAL_FAILURE",
+                message=str(exc),
+                retryable=False,
+                details=details,
+                data=exc.data,
+                next_actions=exc.next_actions,
+            ),
             7,
         )
     if isinstance(exc, AuthError):
@@ -95,7 +102,17 @@ def _handle_exception(exc: BaseException) -> tuple[dict[str, Any], int]:
     if isinstance(exc, ValueError):
         return create_error_envelope(code="INVALID_ARGUMENT", message=str(exc), retryable=False, details=details), 2
     if isinstance(exc, APIError):
-        return create_error_envelope(code="PLATFORM_ERROR", message=str(exc), retryable=exc.retryable, details=details), 6
+        return (
+            create_error_envelope(
+                code="PLATFORM_ERROR",
+                message=str(exc),
+                retryable=exc.retryable,
+                details=details,
+                data=exc.data,
+                next_actions=exc.next_actions,
+            ),
+            6,
+        )
     if isinstance(exc, WKError):
         return create_error_envelope(code="BIZ_ERROR", message=str(exc), retryable=False, details=details), 1
 

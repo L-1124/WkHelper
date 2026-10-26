@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import contextlib
+import json
 import os
 import tempfile
 import time
@@ -449,16 +450,18 @@ async def test_capture_video_frames_seek_timeout(monkeypatch: pytest.MonkeyPatch
     assert frames[0].error == "seek_timeout"
 
 
+@pytest.mark.parametrize("error", ["seek_restricted", "seek_timeout", "frame_not_ready", "no_video"])
+@pytest.mark.parametrize("partial", [False, True])
 @pytest.mark.asyncio
-async def test_video_snapshot_cmd_partial_and_total_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    from wkhelper.cli.commands.video import video_snapshot_cmd
-    from wkhelper.domain.errors import APIError, PartialFailureError
+async def test_video_snapshot_cmd_partial_and_total_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: str, partial: bool
+) -> None:
+    from wkhelper.main import async_main
 
-    # 模拟全部失败
-    monkeypatch.setattr(
-        "wkhelper.cli.commands.video.capture_video_frames",
-        AsyncMock(return_value=[VideoSnapshotFrame(timestamp=10.0, error="seek_timeout")]),
-    )
+    frames = [VideoSnapshotFrame(timestamp=20.0, actual_time=2.0, error=error)]
+    if partial:
+        frames.insert(0, VideoSnapshotFrame(timestamp=10.0, actual_time=10.0, file_path="/tmp/f1.jpg", size_bytes=100))
+    monkeypatch.setattr("wkhelper.cli.commands.video.capture_video_frames", AsyncMock(return_value=frames))
 
     # 假造 _open_course
     class MockPlatform:
@@ -481,22 +484,49 @@ async def test_video_snapshot_cmd_partial_and_total_failure(monkeypatch: pytest.
 
     monkeypatch.setattr("wkhelper.cli.commands.video._open_course", lambda *a, **kw: MockCourseCtx())
 
-    with pytest.raises(APIError, match="所有视频帧均截取失败"):
-        await video_snapshot_cmd(course="1001", video="2001", timestamps="10")
-
-    # 模拟部分失败
-    monkeypatch.setattr(
-        "wkhelper.cli.commands.video.capture_video_frames",
-        AsyncMock(
-            return_value=[
-                VideoSnapshotFrame(timestamp=10.0, file_path="/tmp/f1.jpg", size_bytes=100),
-                VideoSnapshotFrame(timestamp=20.0, error="seek_timeout"),
-            ]
-        ),
+    code = await async_main(
+        [
+            "--format",
+            "json",
+            "video",
+            "snapshot",
+            "--course",
+            "1001",
+            "--video",
+            "2001",
+            "--timestamps",
+            "10,20" if partial else "20",
+        ]
     )
-
-    with pytest.raises(PartialFailureError, match="部分视频帧截取失败"):
-        await video_snapshot_cmd(course="1001", video="2001", timestamps="10,20")
+    envelope = json.loads(capsys.readouterr().out)
+    assert code == (7 if partial else 6)
+    assert envelope["ok"] is False
+    assert envelope["error"]["code"] == ("PARTIAL_FAILURE" if partial else "PLATFORM_ERROR")
+    assert envelope["error"]["retryable"] is False
+    failed = envelope["data"]["frames"][-1]
+    assert failed["timestamp"] == 20.0
+    assert failed["actual_time"] == 2.0
+    assert failed["file_path"] is None
+    assert failed["error"] == error
+    if partial:
+        assert envelope["data"]["frames"][0]["file_path"] == "/tmp/f1.jpg"
+    if error in ("seek_restricted", "seek_timeout"):
+        assert envelope["next_actions"][0]["argv"] == [
+            "wkhelper",
+            "video",
+            "learn",
+            "--course",
+            "1001",
+            "--video",
+            "2001",
+            "--dry-run",
+            "--platform",
+            "xtzx",
+            "--account",
+            "test-user",
+        ]
+    else:
+        assert envelope["next_actions"] == []
 
 
 @pytest.mark.asyncio

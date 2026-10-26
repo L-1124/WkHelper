@@ -266,6 +266,7 @@ def _render_video_snapshot_data(data: VideoSnapshotData) -> list[str]:
         [
             i,
             f"{f.timestamp:.1f}s",
+            f"{f.actual_time:.2f}s" if f.actual_time is not None else "-",
             f"{f.width}x{f.height}" if f.width else "-",
             f"{f.size_bytes / 1024:.1f} KB" if f.size_bytes else "-",
             f.file_path or "-",
@@ -274,11 +275,11 @@ def _render_video_snapshot_data(data: VideoSnapshotData) -> list[str]:
         for i, f in enumerate(data.frames, 1)
     ]
     return [
-        f"## 视频截图完成 (共 {data.total_frames} 帧)",
+        f"## 视频截图结果 (共 {data.total_frames} 帧)",
         "",
         f"- **课程 ID**：`{_cell(data.course_id)}` | **视频 ID**：`{_cell(data.video_id)}`",
         "",
-        *_table(["序号", "时间戳", "分辨率", "体积", "文件路径", "状态"], rows),
+        *_table(["序号", "请求时间", "实际时间", "分辨率", "体积", "文件路径", "状态"], rows),
     ]
 
 

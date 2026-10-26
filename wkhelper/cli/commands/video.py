@@ -266,10 +266,46 @@ async def video_snapshot_cmd(
         )
 
         failed_count = sum(1 for f in frames if f.error is not None)
+        next_actions: list[NextAction] = []
+        guidance = ""
+        if any(frame.error in ("seek_restricted", "seek_timeout") for frame in frames):
+            learn_argv = [
+                "wkhelper",
+                "video",
+                "learn",
+                "--course",
+                snapshot_input.course,
+                "--video",
+                snapshot_input.video,
+                "--dry-run",
+            ]
+            resolved_platform = plat.platform_code or matched.platform_id
+            resolved_account = str(plat.user.id) if plat.user is not None else plat.account_id
+            if resolved_platform:
+                learn_argv += ["--platform", resolved_platform]
+            if resolved_account:
+                learn_argv += ["--account", resolved_account]
+            guidance = "；目标位置不可达，若视频尚未学习，请先执行 video learn，学习后重试截图"
+            next_actions.append(
+                NextAction(
+                    reason="LEARN_BEFORE_SNAPSHOT",
+                    argv=learn_argv,
+                    description="先预览学习任务，确认执行学习后重新截图；snapshot 不会自动学习。",
+                )
+            )
         if failed_count == len(frames) and len(frames) > 0:
-            raise APIError(f"所有视频帧均截取失败 (共 {len(frames)} 帧)")
+            raise APIError(
+                f"所有视频帧均截取失败 (共 {len(frames)} 帧){guidance}",
+                retryable=False,
+                data=data,
+                next_actions=next_actions,
+            )
         if failed_count > 0:
-            raise PartialFailureError(f"部分视频帧截取失败 ({failed_count}/{len(frames)} 失败)", data=data)
+            raise PartialFailureError(
+                f"部分视频帧截取失败 ({failed_count}/{len(frames)} 失败){guidance}",
+                data=data,
+                next_actions=next_actions,
+            )
 
         return CommandResult(data=data)
 
