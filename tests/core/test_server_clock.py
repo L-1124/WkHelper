@@ -49,7 +49,7 @@ def test_parse_http_date_ms_handles_gmt_and_invalid() -> None:
 @pytest.mark.asyncio
 async def test_request_syncs_clock_from_date_header() -> None:
     """成功响应后按 Date 头记录本机与服务器的偏移。"""
-    platform = FakeAsyncPlatform(_Session(_Resp(headers={"date": _http_date(5)})))  # type: ignore[arg-type]
+    platform = FakeAsyncPlatform(_Session(_Resp(headers={"date": _http_date(5)})))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     await platform._request_json("GET", "https://api.test/ping")
     assert 4000 <= platform.clock_offset_ms <= 6500
 
@@ -58,7 +58,7 @@ async def test_request_syncs_clock_from_date_header() -> None:
 async def test_payload_server_time_wins_over_date_header() -> None:
     """响应体 server_time 精度高于 Date 头，应优先采用。"""
     server_ms = int((time.time() + 10) * 1000)
-    platform = FakeAsyncPlatform(_Session(_Resp(payload={"server_time": server_ms})))  # type: ignore[arg-type]
+    platform = FakeAsyncPlatform(_Session(_Resp(payload={"server_time": server_ms})))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     await platform._request_json("GET", "https://api.test/ping")
     assert 9000 <= platform.clock_offset_ms <= 11000
 
@@ -66,7 +66,7 @@ async def test_payload_server_time_wins_over_date_header() -> None:
 @pytest.mark.asyncio
 async def test_heartbeat_ts_uses_server_clock() -> None:
     """心跳 ts 必须叠加已测量的时钟偏移。"""
-    platform = FakeAsyncPlatform(_Session(_Resp()))  # type: ignore[arg-type]
+    platform = FakeAsyncPlatform(_Session(_Resp()))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     platform.clock.offset_ms = 5000.0
     payload = platform.build_heartbeat_payload(
         video_id="v1",

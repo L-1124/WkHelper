@@ -16,18 +16,15 @@ from wkhelper.domain.video import VideoContext
 from wkhelper.infra.markdown import html_to_md
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.parsing import PlatformCounters
-from wkhelper.platform.protocol_types import HeartbeatProfile
+from wkhelper.platform.protocol_types import (
+    HeartbeatProfile,
+    PlatformExamCoverData,
+    PlatformExamTokenData,
+    PlatformLeafInfo,
+    PlatformNoticeData,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _first_text(data: dict[str, Any], *keys: str) -> str:
-    """按优先级取第一个非空字符串字段。"""
-    for key in keys:
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return ""
 
 
 class YuketangPlatform(BasePlatform):
@@ -483,25 +480,22 @@ class YuketangPlatform(BasePlatform):
         code = resp.get("errcode")
         if code not in (None, 0):
             raise APIError(f"获取公告 {leaf_id} 失败: {resp.get('errmsg') or code}", retryable=False)
-        raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-        notice = raw.get("notice") if isinstance(raw.get("notice"), dict) else raw
-        content_value = notice.get("content")
-        if isinstance(content_value, dict):
-            content_html = _first_text(content_value, "text", "html", "content")
+        resp_data = resp.get("data")
+        if isinstance(resp_data, dict):
+            notice_val = resp_data.get("notice")
+            notice_dict = notice_val if isinstance(notice_val, dict) else resp_data
         else:
-            content_html = _first_text(notice, "content", "html", "text", "body")
-        if not content_html:
-            content_info = notice.get("content_info")
-            if isinstance(content_info, dict):
-                content_html = _first_text(content_info, "text", "content")
+            notice_dict = {}
+        notice = PlatformNoticeData.model_validate(notice_dict)
+        content_html = notice.resolve_content_html()
         return NoticeDetail(
             course_id=str(course.id),
             leaf_id=str(leaf_id),
             notice_id=notice_id,
-            title=_first_text(notice, "title", "name") or f"公告 {leaf_id}",
+            title=notice.resolved_title or f"公告 {leaf_id}",
             content=html_to_md(content_html) if content_html else "",
-            published_at=epoch_millis(notice.get("publish_time") or notice.get("create_time") or notice.get("created")),
-            publisher=_first_text(notice, "publisher", "author", "teacher_name", "creator"),
+            published_at=epoch_millis(notice.resolved_time),
+            publisher=notice.resolved_publisher,
         )
 
     @override
@@ -511,14 +505,10 @@ class YuketangPlatform(BasePlatform):
         url = self._build_leaf_info_url(leaf_id, course)
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params, **kwargs)
-        data = resp.get("data") or {}
-        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
-        ci = data.get("content_info") if isinstance(data, dict) else {}
-        eid = (
-            (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
-            or (data.get("leaf_type_id") if isinstance(data, dict) else None)
-            or leaf_id
-        )
+        leaf_raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        leaf_info = PlatformLeafInfo.model_validate(leaf_raw)
+        self._ensure_exam_leaf(leaf_id, leaf_info.leaf_type)
+        eid = (leaf_info.content_info.leaf_type_id if leaf_info.content_info else None) or leaf_info.leaf_type_id or leaf_id
 
         c_resp = await self._request_json(
             "GET",
@@ -526,10 +516,15 @@ class YuketangPlatform(BasePlatform):
             params={"exam_id": eid, "classroom_id": cid},
             **kwargs,
         )
-        raw_cover = c_resp.get("data") or {}
-        cover_data = raw_cover.get("data", raw_cover) if isinstance(raw_cover, dict) else {}
+        c_resp_data = c_resp.get("data")
+        if isinstance(c_resp_data, dict):
+            inner_cover = c_resp_data.get("data")
+            cover_dict = inner_cover if isinstance(inner_cover, dict) else c_resp_data
+        else:
+            cover_dict = {}
+        cover_data = PlatformExamCoverData.model_validate(cover_dict)
 
-        raw_status = cover_data.get("result", {}).get("status") if isinstance(cover_data.get("result"), dict) else None
+        raw_status = cover_data.result.status if cover_data.result else None
         if raw_status in (2, 3, 4, 5):
             status = "已交卷"
         elif raw_status == 1:
@@ -541,34 +536,33 @@ class YuketangPlatform(BasePlatform):
         else:
             status = str(raw_status) if raw_status is not None else "未知"
 
-        deadline = epoch_millis(cover_data.get("deadline") or (data.get("deadline") if isinstance(data, dict) else None))
+        deadline = epoch_millis(cover_data.deadline or leaf_info.deadline)
         if status in ("未开始", "答题中", "未知") and self._is_exam_overdue(deadline):
             status = "已缺考"
 
-        face_status = cover_data.get("face_auth_status") if isinstance(cover_data.get("face_auth_status"), dict) else {}
-        online_proctor = bool(cover_data.get("online_proctor") or face_status.get("online_proctor"))
-        identity_auth = bool(cover_data.get("identity_auth") or face_status.get("has_idphoto"))
+        face_status = cover_data.face_auth_status
+        online_proctor = cover_data.online_proctor or (face_status.online_proctor if face_status else False)
+        identity_auth = cover_data.identity_auth or (face_status.has_idphoto if face_status else False)
         face_auth = identity_auth or online_proctor
-        capture_screen = bool(cover_data.get("capture_screen"))
-        app_capture_screen = bool(cover_data.get("app_capture_screen"))
-        front_random_snap = bool(cover_data.get("app_front_random_snap"))
-        screen_cuts = bool(cover_data.get("open_screen_cuts"))
-        max_screen_cuts = PlatformCounters.model_validate(cover_data).max_screen_cuts_num
-        max_retry = PlatformCounters.model_validate(cover_data).max_retry
-        is_offline = bool(cover_data.get("is_offline"))
-
+        capture_screen = cover_data.capture_screen
+        app_capture_screen = cover_data.app_capture_screen
+        front_random_snap = cover_data.app_front_random_snap
+        screen_cuts = cover_data.open_screen_cuts
+        max_screen_cuts = PlatformCounters.model_validate(cover_dict).max_screen_cuts_num
+        max_retry = PlatformCounters.model_validate(cover_dict).max_retry
+        is_offline = cover_data.is_offline
         return ExamCoverDetail(
             course_id=str(course.id),
             exam_id=str(leaf_id),
-            title=str(cover_data.get("title") or (data.get("name") if isinstance(data, dict) else None) or f"考试 {leaf_id}"),
-            problem_count=int(cover_data.get("problem_count") or 0),
-            total_score=float(cover_data.get("total_score") or 0.0),
+            title=cover_data.title or leaf_info.name or f"考试 {leaf_id}",
+            problem_count=int(cover_data.problem_count or 0),
+            total_score=float(cover_data.total_score or 0.0),
             # 考场子系统 limit 单位为秒（前端 limit/60 展示分钟），0 表示不限时
-            limit_minutes=int(cover_data.get("limit") or 0) // 60,
-            start_time=epoch_millis(cover_data.get("start_time") or (data.get("start_time") if isinstance(data, dict) else None)),
+            limit_minutes=int(cover_data.limit or 0) // 60,
+            start_time=epoch_millis(cover_data.start_time or leaf_info.start_time),
             deadline=deadline,
             status=status,
-            description=str(cover_data.get("description") or ""),
+            description=cover_data.description or "",
             face_auth=face_auth,
             capture_screen=capture_screen,
             app_capture_screen=app_capture_screen,
@@ -589,14 +583,10 @@ class YuketangPlatform(BasePlatform):
         url = self._build_leaf_info_url(leaf_id, course)
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params, **kwargs)
-        data = resp.get("data") or {}
-        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
-        ci = data.get("content_info") if isinstance(data, dict) else {}
-        raw_eid = (
-            (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
-            or (data.get("leaf_type_id") if isinstance(data, dict) else None)
-            or leaf_id
-        )
+        leaf_raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        leaf_info = PlatformLeafInfo.model_validate(leaf_raw)
+        self._ensure_exam_leaf(leaf_id, leaf_info.leaf_type)
+        raw_eid = (leaf_info.content_info.leaf_type_id if leaf_info.content_info else None) or leaf_info.leaf_type_id or leaf_id
         eid = int(raw_eid)
 
         r_gen = await self._request_json(
@@ -608,15 +598,17 @@ class YuketangPlatform(BasePlatform):
         if r_gen.get("errcode") or r_gen.get("success") is False:
             reason = str(r_gen.get("errmsg") or r_gen.get("msg") or "平台未返回原因")
             raise APIError(f"考场令牌申请被拒绝: {reason}", retryable=False)
-        token_data = r_gen.get("data") if isinstance(r_gen.get("data"), dict) else {}
-        crypt = str(token_data.get("token") or token_data.get("crypt") or "")
+        r_gen_data = r_gen.get("data")
+        token_raw = r_gen_data if isinstance(r_gen_data, dict) else {}
+        token_data = PlatformExamTokenData.model_validate(token_raw)
+        crypt = token_data.token or token_data.crypt or ""
         if not crypt:
             raise APIError(
                 f"平台未返回考场令牌（节点 {leaf_id} 可能并非考试或当前账号无考试权限），已中止建立考场会话",
                 retryable=False,
             )
-        host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
-        user_id = str(token_data.get("user_id") or (self.user.id if self.user else ""))
+        host = (token_data.exam_host or "https://examination.xuetangx.com").rstrip("/")
+        user_id = str(token_data.user_id or (self.user.id if self.user else ""))
         target = "exam"
         if status is not None:
             target = "result" if status > 1 else ("start" if status == 0 else "exam")

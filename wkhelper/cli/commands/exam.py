@@ -1,7 +1,6 @@
 """考试查询、考场封面检索与进入考场命令。"""
 
 import asyncio
-import json
 import logging
 import random
 from typing import Annotated, Literal
@@ -499,27 +498,8 @@ async def exam_result_cmd(
         await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         ensure_exam_operation_allowed(cover)
-        raw = await plat.get_exam_result(exam, matched)
-        problems = raw.get("problem_results") if isinstance(raw.get("problem_results"), list) else []
-        grade = raw.get("grade")
-        duration = raw.get("duration")
-        errcode = int(raw.get("errcode") or 0)
-        message = f"{raw.get('errmsg') or ''} (errcode: {raw.get('errcode')})".strip()
-        if errcode == 10107:
-            is_submitted = (cover.raw_status is not None and cover.raw_status > 1) or cover.status == "已交卷"
-            if is_submitted:
-                message = "试卷已交卷但进度异常（平台返回 10107），建议联系任课老师核对作答与提交记录"
-            else:
-                message = "答卷尚未提交，暂无成绩"
-        return CommandResult[ExamResultData](
-            data=ExamResultData(
-                exam_id=exam,
-                grade=float(grade) if isinstance(grade, (int, float)) else None,
-                duration=int(duration) if isinstance(duration, (int, float)) else None,
-                problem_count=len(problems),
-                message=message,
-            )
-        )
+        result_data = await plat.get_exam_result(exam, matched, cover=cover)
+        return CommandResult[ExamResultData](data=result_data)
 
 
 @exam_app.command(name="status")
@@ -534,18 +514,5 @@ async def exam_status_cmd(
         await bind_browser_session(plat, exam, data_dir=get_context().options.data_dir)
         cover = await plat.get_exam_cover(exam, matched)
         ensure_exam_operation_allowed(cover)
-        raw = await plat.get_exam_status_snapshot(exam, matched)
-        return CommandResult[ExamStatusData](
-            data=ExamStatusData(
-                exam_id=exam,
-                room_status=raw.get("room_status"),
-                room_status_raw=raw.get("room_status_raw") if isinstance(raw.get("room_status_raw"), int) else None,
-                lms_status=raw.get("lms_status") if isinstance(raw.get("lms_status"), int) else None,
-                refresh_code=raw.get("refresh_code") if isinstance(raw.get("refresh_code"), int) else None,
-                refresh_message=str(raw.get("refresh_message") or ""),
-                cached_count=int(raw.get("cached_count") or 0),
-                cached_sample=json.dumps(raw.get("cached_sample"), ensure_ascii=False) if raw.get("cached_sample") else "",
-                result_code=raw.get("result_code") if isinstance(raw.get("result_code"), int) else None,
-                result_message=str(raw.get("result_message") or ""),
-            )
-        )
+        status_data = await plat.get_exam_status_snapshot(exam, matched)
+        return CommandResult[ExamStatusData](data=status_data)

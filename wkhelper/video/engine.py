@@ -301,9 +301,9 @@ async def generic_watch_video(
                     parsed = decode_json(resp.text)
                 except (ValueError, TypeError):
                     parsed = None
-                if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
-                    data_dict = parsed["data"]
-                    if video_id in data_dict:
+                if isinstance(parsed, dict):
+                    data_dict = parsed.get("data")
+                    if isinstance(data_dict, dict) and video_id in data_dict:
                         observed_rate, _ = parse_progress_text(resp.text, video_id)
                         current_rate = observed_rate
         except Exception:

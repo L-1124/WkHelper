@@ -11,7 +11,13 @@ from wkhelper.cli.context import ExecutionContext
 from wkhelper.domain.accounts import UserInfo
 from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError
-from wkhelper.domain.exam import ExamCoverDetail, ExamPaperData, ExamProblemItem, ExamStartResult
+from wkhelper.domain.exam import (
+    ExamCoverDetail,
+    ExamPaperData,
+    ExamProblemItem,
+    ExamResultData,
+    ExamStartResult,
+)
 from wkhelper.domain.homework import OptionItem
 from wkhelper.domain.time_types import EpochMillis
 from wkhelper.exam.session import ExamBrowserSession
@@ -1132,8 +1138,10 @@ async def test_exam_start_begin_browser_failure_exits(mock_exam_env: None, monke
 async def test_exam_result_reports_not_submitted_when_unstarted(mock_exam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """未交卷时 10107 表示尚未提交，不能误报进度异常。"""
 
-    async def fake_result(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, Any]:
-        return {"errcode": 10107, "errmsg": "试卷尚未提交", "problem_results": []}
+    async def fake_result(
+        self: _ExamMockPlatform, leaf_id: str | int, course: Course, cover: ExamCoverDetail | None = None
+    ) -> ExamResultData:
+        return ExamResultData(exam_id=str(leaf_id), grade=None, duration=None, problem_count=0, message="答卷尚未提交，暂无成绩")
 
     monkeypatch.setattr(_ExamMockPlatform, "get_exam_result", fake_result)
     buf = StringIO()
@@ -1155,8 +1163,16 @@ async def test_exam_result_reports_progress_anomaly_when_submitted(mock_exam_env
         base = await orig_cover(self, leaf_id, course)
         return ExamCoverDetail.model_validate(dict(base.model_dump(exclude={"has_limit"}), status="已交卷", raw_status=2))
 
-    async def fake_result(self: _ExamMockPlatform, leaf_id: str | int, course: Course) -> dict[str, Any]:
-        return {"errcode": 10107, "errmsg": "试卷尚未提交", "problem_results": []}
+    async def fake_result(
+        self: _ExamMockPlatform, leaf_id: str | int, course: Course, cover: ExamCoverDetail | None = None
+    ) -> ExamResultData:
+        return ExamResultData(
+            exam_id=str(leaf_id),
+            grade=None,
+            duration=None,
+            problem_count=0,
+            message="试卷已交卷但进度异常（平台返回 10107），建议联系任课老师核对作答与提交记录",
+        )
 
     monkeypatch.setattr(_ExamMockPlatform, "get_exam_cover", fake_cover)
     monkeypatch.setattr(_ExamMockPlatform, "get_exam_result", fake_result)

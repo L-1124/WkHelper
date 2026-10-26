@@ -15,7 +15,12 @@ from wkhelper.domain.time_types import epoch_millis
 from wkhelper.domain.video import VideoContext
 from wkhelper.platform.base import BasePlatform
 from wkhelper.platform.parsing import PlatformCounters, parse_leaf_schedules
-from wkhelper.platform.protocol_types import HeartbeatProfile
+from wkhelper.platform.protocol_types import (
+    HeartbeatProfile,
+    PlatformExamCoverData,
+    PlatformExamTokenData,
+    PlatformLeafInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -322,20 +327,20 @@ class XuetangXPlatform(BasePlatform):
         url = self._build_leaf_info_url(leaf_id, course)
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params)
-        data = resp.get("data") or {}
-        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
-        ci = data.get("content_info") if isinstance(data, dict) else {}
-        eid = (
-            (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
-            or (data.get("leaf_type_id") if isinstance(data, dict) else None)
-            or leaf_id
-        )
-
+        leaf_raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        leaf_info = PlatformLeafInfo.model_validate(leaf_raw)
+        self._ensure_exam_leaf(leaf_id, leaf_info.leaf_type)
+        eid = (leaf_info.content_info.leaf_type_id if leaf_info.content_info else None) or leaf_info.leaf_type_id or leaf_id
         c_resp = await self._request_json("GET", f"{self.api_base}/api/v1/lms/exam/cover", params={"exam_id": eid})
-        raw_cover = c_resp.get("data") or {}
-        cover_data = raw_cover.get("data", raw_cover) if isinstance(raw_cover, dict) else {}
+        c_resp_data = c_resp.get("data")
+        if isinstance(c_resp_data, dict):
+            inner_cover = c_resp_data.get("data")
+            cover_dict = inner_cover if isinstance(inner_cover, dict) else c_resp_data
+        else:
+            cover_dict = {}
+        cover_data = PlatformExamCoverData.model_validate(cover_dict)
 
-        raw_status = cover_data.get("result", {}).get("status") if isinstance(cover_data.get("result"), dict) else None
+        raw_status = cover_data.result.status if cover_data.result else None
         if raw_status in (2, 3, 4, 5):
             status = "已交卷"
         elif raw_status == 1:
@@ -347,34 +352,34 @@ class XuetangXPlatform(BasePlatform):
         else:
             status = str(raw_status) if raw_status is not None else "未知"
 
-        deadline = epoch_millis(cover_data.get("deadline") or (data.get("deadline") if isinstance(data, dict) else None))
+        deadline = epoch_millis(cover_data.deadline or leaf_info.deadline)
         if status in ("未开始", "答题中", "未知") and self._is_exam_overdue(deadline):
             status = "已缺考"
 
-        face_status = cover_data.get("face_auth_status") if isinstance(cover_data.get("face_auth_status"), dict) else {}
-        online_proctor = bool(cover_data.get("online_proctor") or face_status.get("online_proctor"))
-        identity_auth = bool(cover_data.get("identity_auth") or face_status.get("has_idphoto"))
+        face_status = cover_data.face_auth_status
+        online_proctor = cover_data.online_proctor or (face_status.online_proctor if face_status else False)
+        identity_auth = cover_data.identity_auth or (face_status.has_idphoto if face_status else False)
         face_auth = identity_auth or online_proctor
-        capture_screen = bool(cover_data.get("capture_screen"))
-        app_capture_screen = bool(cover_data.get("app_capture_screen"))
-        front_random_snap = bool(cover_data.get("app_front_random_snap"))
-        screen_cuts = bool(cover_data.get("open_screen_cuts"))
-        max_screen_cuts = PlatformCounters.model_validate(cover_data).max_screen_cuts_num
-        max_retry = PlatformCounters.model_validate(cover_data).max_retry
-        is_offline = bool(cover_data.get("is_offline"))
+        capture_screen = cover_data.capture_screen
+        app_capture_screen = cover_data.app_capture_screen
+        front_random_snap = cover_data.app_front_random_snap
+        screen_cuts = cover_data.open_screen_cuts
+        max_screen_cuts = PlatformCounters.model_validate(cover_dict).max_screen_cuts_num
+        max_retry = PlatformCounters.model_validate(cover_dict).max_retry
+        is_offline = cover_data.is_offline
 
         return ExamCoverDetail(
             course_id=str(course.id),
             exam_id=str(leaf_id),
-            title=str(cover_data.get("title") or (data.get("name") if isinstance(data, dict) else None) or f"考试 {leaf_id}"),
-            problem_count=int(cover_data.get("problem_count") or 0),
-            total_score=float(cover_data.get("total_score") or 0.0),
+            title=cover_data.title or leaf_info.name or f"考试 {leaf_id}",
+            problem_count=int(cover_data.problem_count or 0),
+            total_score=float(cover_data.total_score or 0.0),
             # 考场前端以 `1e3 * cover.limit` 换算毫秒展示，`limit` 单位为秒；0 表示不限时。
-            limit_minutes=int(cover_data.get("limit") or 0) // 60,
-            start_time=epoch_millis(cover_data.get("start_time") or (data.get("start_time") if isinstance(data, dict) else None)),
+            limit_minutes=int(cover_data.limit or 0) // 60,
+            start_time=epoch_millis(cover_data.start_time or leaf_info.start_time),
             deadline=deadline,
             status=status,
-            description=str(cover_data.get("description") or ""),
+            description=cover_data.description or "",
             face_auth=face_auth,
             capture_screen=capture_screen,
             app_capture_screen=app_capture_screen,
@@ -393,30 +398,31 @@ class XuetangXPlatform(BasePlatform):
         url = self._build_leaf_info_url(leaf_id, course)
         params = self._get_leaf_info_params(leaf_id, course)
         resp = await self._request_json("GET", url, params=params)
-        data = resp.get("data") or {}
-        self._ensure_exam_leaf(leaf_id, data.get("leaf_type") if isinstance(data, dict) else None)
-        ci = data.get("content_info") if isinstance(data, dict) else {}
-        raw_eid = (
-            (ci.get("leaf_type_id") if isinstance(ci, dict) else None)
-            or (data.get("leaf_type_id") if isinstance(data, dict) else None)
-            or leaf_id
-        )
+        leaf_raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        leaf_info = PlatformLeafInfo.model_validate(leaf_raw)
+        self._ensure_exam_leaf(leaf_id, leaf_info.leaf_type)
+        raw_eid = (leaf_info.content_info.leaf_type_id if leaf_info.content_info else None) or leaf_info.leaf_type_id or leaf_id
         eid = int(raw_eid)
 
         gen = await self._request_json("POST", f"{self.api_base}/api/v1/lms/exam/gen_token", json={"exam_id": eid})
         if gen.get("errcode") or gen.get("success") is False:
             reason = str(gen.get("errmsg") or gen.get("msg") or "平台未返回原因")
             raise APIError(f"考场令牌申请被拒绝: {reason}", retryable=False)
-        gen_data = gen.get("data") if isinstance(gen.get("data"), dict) else {}
-        token_data = gen_data.get("data") if isinstance(gen_data.get("data"), dict) else {}
-        crypt = str(token_data.get("crypt") or token_data.get("token") or "")
+        gen_data = gen.get("data")
+        if isinstance(gen_data, dict):
+            inner_token = gen_data.get("data")
+            token_raw = inner_token if isinstance(inner_token, dict) else {}
+        else:
+            token_raw = {}
+        token_data = PlatformExamTokenData.model_validate(token_raw)
+        crypt = token_data.crypt or token_data.token or ""
         if not crypt:
             raise APIError(
                 f"平台未返回考场令牌（节点 {leaf_id} 可能并非考试或当前账号无考试权限），已中止建立考场会话",
                 retryable=False,
             )
-        host = str(token_data.get("exam_host") or "https://examination.xuetangx.com").rstrip("/")
-        user_id = str((self.user.id if self.user else None) or token_data.get("user_id") or "")
+        host = (token_data.exam_host or "https://examination.xuetangx.com").rstrip("/")
+        user_id = str((self.user.id if self.user else None) or token_data.user_id or "")
         target = "exam"
         if status is not None:
             target = "result" if status > 1 else ("start" if status == 0 else "exam")

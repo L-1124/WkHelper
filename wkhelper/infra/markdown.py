@@ -30,7 +30,8 @@ class WkhelperConverter(MarkdownConverter):
             is_block = el.get("data-display") == "block" or "display" in str(el.get("class", ""))
             return f"$${latex_code}$$" if is_block else f"${latex_code}$"
 
-        return super().convert_img(el, text, *args, **kwargs)  # type: ignore[misc]
+        # markdownify 存根未声明运行时存在的 convert_img 方法
+        return super().convert_img(el, text, *args, **kwargs)  # type: ignore[misc]  # ty: ignore[unresolved-attribute]
 
 
 def html_to_md(html_str: str) -> str:

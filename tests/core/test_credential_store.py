@@ -561,7 +561,7 @@ def test_credential_store_session_mode_rollback_and_reuse(temp_db_dir: str) -> N
     real_memory_conn = store_session._memory_conn
 
     faulty_conn = FaultInjectionConnection(real_memory_conn, fail_execute=True)
-    store_session._memory_conn = faulty_conn  # type: ignore[assignment]
+    store_session._memory_conn = faulty_conn  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
     user1 = UserInfo(id="user1", name="User 1")
     with pytest.raises(sqlite3.OperationalError):

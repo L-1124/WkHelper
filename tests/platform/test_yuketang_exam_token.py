@@ -40,8 +40,9 @@ async def test_exam_cover_rejects_homework_leaf(monkeypatch: pytest.MonkeyPatch)
             await platform.get_exam_cover("1", _course())
 
 
+@pytest.mark.parametrize("token", ["", None, False, 0])
 @pytest.mark.asyncio
-async def test_mint_exam_room_rejects_empty_token(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mint_exam_room_rejects_empty_token(monkeypatch: pytest.MonkeyPatch, token: str | None | bool | int) -> None:
     """令牌为空时不得继续拼登录地址并报告成功。"""
     async with AsyncSession() as client:
         platform = _platform(client)
@@ -49,7 +50,7 @@ async def test_mint_exam_room_rejects_empty_token(monkeypatch: pytest.MonkeyPatc
         async def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
             if "leaf_info" in url:
                 return {"success": True, "data": {"leaf_type": 5, "content_info": {"leaf_type_id": 777}}}
-            return {"success": True, "data": {"token": "", "user_id": 42, "exam_host": "https://exam.test"}}
+            return {"success": True, "data": {"token": token, "user_id": 42, "exam_host": "https://exam.test"}}
 
         monkeypatch.setattr(platform, "_request_json", fake_request)
 

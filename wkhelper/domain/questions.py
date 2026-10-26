@@ -48,6 +48,8 @@ def question_type(question: QuestionPayload | None) -> int | None:
             raw = content.get("Type")
     if raw is None:
         raw = question.get("type")
+    if raw is None:
+        return None
     try:
         return int(raw)
     except (TypeError, ValueError):

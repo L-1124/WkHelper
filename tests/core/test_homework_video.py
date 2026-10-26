@@ -183,7 +183,7 @@ async def test_generic_watch_video_threshold_reached():
 
     client = FakeSession()
     res = await generic_watch_video(
-        client=client,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         video_id="v1",
         video_name="测试视频",
         classroom_id="c1",
@@ -244,7 +244,7 @@ async def test_generic_watch_video_stalled():
 
     client = FakeSession()
     res = await generic_watch_video(
-        client=client,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         video_id="v1",
         video_name="停滞视频",
         classroom_id="c1",
@@ -314,7 +314,7 @@ async def test_heartbeat_batch_timestamps_cover_past_window():
 
     before = int(time.time() * 1000)
     await generic_watch_video(
-        client=FakeSession(),  # type: ignore[arg-type]
+        client=FakeSession(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         video_id="v1",
         video_name="时间戳测试",
         classroom_id="c1",
@@ -415,7 +415,7 @@ async def test_completed_video_sends_videoend_event():
 
     client = FakeSession()
     await generic_watch_video(
-        client=client,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         video_id="v1",
         video_name="完播测试",
         classroom_id="c1",
@@ -503,7 +503,7 @@ async def test_generic_watch_video_final_progress_rollback_or_zero_fails_without
 
     client = FakeSession()
     res = await generic_watch_video(
-        client=client,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         video_id="v1",
         video_name="零进度终态回退",
         classroom_id="c1",

@@ -41,7 +41,7 @@ class _Session:
 
 
 def _platform(session: _Session, policy: RetryPolicy | None = None) -> BasePlatform:
-    return FakeAsyncPlatform(session, retry_policy=policy or RetryPolicy(max_attempts=3, base_backoff=0.01, jitter_ratio=0))  # type: ignore[arg-type]
+    return FakeAsyncPlatform(session, retry_policy=policy or RetryPolicy(max_attempts=3, base_backoff=0.01, jitter_ratio=0))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 def test_parse_retry_hint_from_header_and_body() -> None:

@@ -163,9 +163,12 @@ async def begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0)
                 last_probe_time = now
             events = client.events[baseline:]
             for event in events:
-                params = event.get("params") or {}
-                if event.get("method") == "Network.requestWillBeSent" and request_id is None:
-                    request = params.get("request") or {}
+                raw_params = event.get("params")
+                params = raw_params if isinstance(raw_params, dict) else {}
+                method = event.get("method")
+                if method == "Network.requestWillBeSent" and request_id is None:
+                    raw_req = params.get("request")
+                    request = raw_req if isinstance(raw_req, dict) else {}
                     url = urlparse(str(request.get("url", "")))
                     if (
                         request.get("method") != "POST"
@@ -179,20 +182,27 @@ async def begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0)
                         continue
                     if isinstance(payload, dict) and str(payload.get("exam_id")) == str(session.eid):
                         request_id = params.get("requestId")
-                if event.get("method") == "Network.responseReceived" and request_id and not accepted:
+                if method == "Network.responseReceived" and request_id and not accepted:
                     if params.get("requestId") != request_id:
                         continue
-                    status = (params.get("response") or {}).get("status", 0)
+                    raw_resp = params.get("response")
+                    resp = raw_resp if isinstance(raw_resp, dict) else {}
+                    status = resp.get("status", 0)
                     if not 200 <= status < 300:
                         raise APIError(f"网页开始答题失败（HTTP {status}）", retryable=False)
-                    if not any(
-                        e.get("method") == "Network.loadingFinished" and (e.get("params") or {}).get("requestId") == request_id
+
+                    loading_finished = any(
+                        e.get("method") == "Network.loadingFinished"
+                        and isinstance(p := e.get("params"), dict)
+                        and p.get("requestId") == request_id
                         for e in events
-                    ):
+                    )
+                    if not loading_finished:
                         continue
                     body = await client.call("Network.getResponseBody", {"requestId": request_id}, timeout=max(0.01, remaining))
                     try:
-                        payload = json.loads(body.get("body") or "{}")
+                        body_text = body.get("body") if isinstance(body, dict) else None
+                        payload = json.loads(body_text or "{}")
                     except (ValueError, TypeError) as exc:
                         raise APIError("网页开始答题响应无法确认，请在浏览器核对；不要重复开始", retryable=False) from exc
                     if (
@@ -209,7 +219,8 @@ async def begin_browser_exam(session: ExamBrowserSession, timeout: float = 20.0)
                     {"expression": ready_probe, "returnByValue": True},
                     timeout=max(0.01, deadline - asyncio.get_running_loop().time()),
                 )
-                if result.get("result", {}).get("value") is True:
+                result_obj = result.get("result")
+                if isinstance(result_obj, dict) and result_obj.get("value") is True:
                     return
             await asyncio.sleep(0.1)
         raise APIError(
@@ -227,13 +238,15 @@ def extract_answer_submission(events: list[dict[str, Any]], problem_id: str | in
     response: dict[str, Any] | None = None
     for event in events:
         method = event.get("method")
-        params = event.get("params") if isinstance(event.get("params"), dict) else {}
+        raw_params = event.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
         if method == "Network.requestWillBeSent":
-            raw_request = params.get("request") if isinstance(params.get("request"), dict) else {}
-            if str(raw_request.get("method", "")).upper() != "POST" or _ANSWER_ENDPOINT not in str(raw_request.get("url", "")):
+            raw_request = params.get("request")
+            request_data = raw_request if isinstance(raw_request, dict) else {}
+            if str(request_data.get("method", "")).upper() != "POST" or _ANSWER_ENDPOINT not in str(request_data.get("url", "")):
                 continue
             try:
-                payload = json.loads(raw_request.get("postData") or "{}")
+                payload = json.loads(request_data.get("postData") or "{}")
             except ValueError:
                 continue
             results = payload.get("results") if isinstance(payload, dict) else None
@@ -266,7 +279,8 @@ def extract_answer_submission(events: list[dict[str, Any]], problem_id: str | in
             request = {"request_id": params.get("requestId"), "answer": answers}
         elif method == "Network.responseReceived" and request is not None:
             if params.get("requestId") == request["request_id"]:
-                response = params.get("response") if isinstance(params.get("response"), dict) else {}
+                raw_response = params.get("response")
+                response = raw_response if isinstance(raw_response, dict) else {}
     return request, response
 
 
@@ -360,7 +374,8 @@ async def simulate_browser_answer(
         {"expression": expression, "returnByValue": True, "awaitPromise": True},
         timeout=_EVAL_TIMEOUT,
     )
-    value = res.get("result", {}).get("value")
+    result_obj = res.get("result")
+    value = result_obj.get("value") if isinstance(result_obj, dict) else None
     if not isinstance(value, dict):
         return {"success": False, "error": "考场页面未返回有效执行结果"}
     return value

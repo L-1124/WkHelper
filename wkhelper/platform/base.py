@@ -1,6 +1,7 @@
 """平台基础接口与课件树抽象。"""
 
 import asyncio
+import json
 import logging
 import sys
 import time
@@ -17,7 +18,14 @@ from wkhelper.domain.content import (
 )
 from wkhelper.domain.courses import Course
 from wkhelper.domain.errors import APIError, RiskControlError
-from wkhelper.domain.exam import ExamCoverDetail, ExamPaperData, ExamProblemItem, ExamStartResult
+from wkhelper.domain.exam import (
+    ExamCoverDetail,
+    ExamPaperData,
+    ExamProblemItem,
+    ExamResultData,
+    ExamStartResult,
+    ExamStatusData,
+)
 from wkhelper.domain.homework import Homework, OptionItem, QuestionSubmitOutcome
 from wkhelper.domain.video import VideoContext
 from wkhelper.infra.clock import ServerClock
@@ -30,7 +38,15 @@ from wkhelper.infra.http import (
 from wkhelper.infra.markdown import html_to_md, html_to_md_with_images
 from wkhelper.infra.throttle import RateGate, RetryPolicy
 from wkhelper.platform.parsing import parse_exercise_response
-from wkhelper.platform.protocol_types import HeartbeatProfile, create_page_nonce
+from wkhelper.platform.protocol_types import (
+    HeartbeatProfile,
+    PlatformExamCacheData,
+    PlatformExamCoverData,
+    PlatformExamPaperData,
+    PlatformExamProblemRaw,
+    PlatformExamResult,
+    create_page_nonce,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,53 +257,61 @@ class BasePlatform(ABC):
             return "未开始"
         return str(raw) if raw is not None else "未知"
 
-    async def get_exam_status_snapshot(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+    async def get_exam_status_snapshot(self, leaf_id: str | int, course: Course) -> ExamStatusData:
         """只读汇总考场各接口状态，用于定位「页面已提交但成绩未落库」。"""
         host, eid, _login_url = await self._open_exam_room(leaf_id, course)
-        snapshot: dict[str, Any] = {"exam_id": str(leaf_id)}
 
         cover = await self._request_json("GET", f"{host}/exam_room/cover", params={"exam_id": eid})
-        cover_data = cover.get("data") if isinstance(cover.get("data"), dict) else {}
-        result = cover_data.get("result") if isinstance(cover_data.get("result"), dict) else {}
-        snapshot["room_status"] = self._exam_status_text(result.get("status"))
-        snapshot["room_status_raw"] = result.get("status") if isinstance(result.get("status"), int) else None
-        snapshot["result_detail"] = result
+        cover_raw = cover.get("data") if isinstance(cover.get("data"), dict) else {}
+        cover_data = PlatformExamCoverData.model_validate(cover_raw)
+        result_status = cover_data.result.status if cover_data.result else None
+        room_status = self._exam_status_text(result_status)
+        room_status_raw = result_status if isinstance(result_status, int) else None
+
         try:
             lms_cover = await self.get_exam_cover(leaf_id, course)
-            snapshot["lms_status"] = lms_cover.raw_status
-            snapshot["lms_status_text"] = lms_cover.status
+            lms_status = lms_cover.raw_status
         except Exception:
-            snapshot["lms_status"] = None
+            lms_status = None
 
         refresh = await self._request_json("GET", f"{host}/exam_room/refresh_time", params={"exam_id": eid})
-        snapshot["refresh_code"] = refresh.get("errcode")
-        snapshot["refresh_message"] = str(refresh.get("errmsg") or "")
+        refresh_code = refresh.get("errcode") if isinstance(refresh.get("errcode"), int) else None
+        refresh_message = str(refresh.get("errmsg") or "")
 
         cached = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
-        cached_data = cached.get("data") if isinstance(cached.get("data"), dict) else {}
-        results = cached_data.get("results") if isinstance(cached_data.get("results"), list) else []
-        snapshot["cached_count"] = len(results)
-        snapshot["cached_sample"] = results[0] if results and isinstance(results[0], dict) else None
+        cached_raw = cached.get("data") if isinstance(cached.get("data"), dict) else {}
+        cached_data = PlatformExamCacheData.model_validate(cached_raw)
+        cached_count = len(cached_data.results)
+        cached_sample = json.dumps(cached_data.results[0].model_dump(), ensure_ascii=False) if cached_data.results else ""
 
         problem = await self._request_json("GET", f"{host}/exam_room/problem_results", params={"exam_id": eid})
-        snapshot["result_code"] = problem.get("errcode")
-        snapshot["result_message"] = str(problem.get("errmsg") or "")
-        return snapshot
+        result_code = problem.get("errcode") if isinstance(problem.get("errcode"), int) else None
+        result_message = str(problem.get("errmsg") or "")
+
+        return ExamStatusData(
+            exam_id=str(leaf_id),
+            room_status=room_status,
+            room_status_raw=room_status_raw,
+            lms_status=lms_status,
+            refresh_code=refresh_code,
+            refresh_message=refresh_message,
+            cached_count=cached_count,
+            cached_sample=cached_sample,
+            result_code=result_code,
+            result_message=result_message,
+        )
 
     async def get_exam_cached_answers(self, leaf_id: str | int, course: Course) -> dict[str, list[str]]:
         """读取考场暂存作答（只读），返回 {题目 ID: 答案列表}。"""
         host, eid, _login_url = await self._open_exam_room(leaf_id, course)
         resp = await self._request_json("GET", f"{host}/exam_room/cache_results", params={"exam_id": eid})
         data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-        results = data.get("results") if isinstance(data.get("results"), list) else []
+        cached_data = PlatformExamCacheData.model_validate(data)
         staged: dict[str, list[str]] = {}
-        for item in results:
-            if not isinstance(item, dict):
+        for item in cached_data.results:
+            if item.problem_id is None:
                 continue
-            problem_id = item.get("problem_id")
-            if problem_id is None:
-                continue
-            raw = item.get("result")
+            raw = item.result
             if isinstance(raw, list):
                 answers = [str(value) for value in raw if str(value).strip()]
             elif raw is None or str(raw).strip() == "":
@@ -295,18 +319,34 @@ class BasePlatform(ABC):
             else:
                 answers = [str(raw)]
             if answers:
-                staged[str(problem_id)] = answers
+                staged[str(item.problem_id)] = answers
         return staged
 
-    async def get_exam_result(self, leaf_id: str | int, course: Course) -> dict[str, Any]:
+    async def get_exam_result(self, leaf_id: str | int, course: Course, cover: ExamCoverDetail | None = None) -> ExamResultData:
         """读取考场成绩与作答结果（只读）；未交卷时平台返回空数据。"""
         host, eid, _login_url = await self._open_exam_room(leaf_id, course)
         resp = await self._request_json("GET", f"{host}/exam_room/problem_results", params={"exam_id": eid})
-        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-        payload = dict(data) if isinstance(data, dict) else {}
-        payload["errcode"] = resp.get("errcode")
-        payload["errmsg"] = resp.get("errmsg")
-        return payload
+        resp_data = resp.get("data")
+        raw_data = resp_data if isinstance(resp_data, dict) else {}
+        result = PlatformExamResult.model_validate(raw_data)
+
+        errcode = int(resp.get("errcode") or 0)
+        errmsg = str(resp.get("errmsg") or "")
+        message = f"{errmsg} (errcode: {errcode})".strip()
+        if errcode == 10107:
+            is_submitted = cover is not None and ((cover.raw_status is not None and cover.raw_status > 1) or cover.status == "已交卷")
+            if is_submitted:
+                message = "试卷已交卷但进度异常（平台返回 10107），建议联系任课老师核对作答与提交记录"
+            else:
+                message = "答卷尚未提交，暂无成绩"
+
+        return ExamResultData(
+            exam_id=str(leaf_id),
+            grade=result.grade,
+            duration=result.duration,
+            problem_count=len(result.problem_results),
+            message=message,
+        )
 
     async def get_exam_paper(self, leaf_id: str | int, course: Course) -> ExamPaperData:
         """读取考场子系统下发的整卷题目；风控拦截时拉起浏览器由用户完成滑块后截获。"""
@@ -327,14 +367,14 @@ class BasePlatform(ABC):
             for key, value in fresh.items():
                 self.client.cookies.set(key, value)
 
-        paper = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        raw_problems = paper.get("problems") if isinstance(paper.get("problems"), list) else []
-        problems = [self._parse_exam_problem(item, index) for index, item in enumerate(raw_problems, 1)]
+        paper_raw = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        paper = PlatformExamPaperData.model_validate(paper_raw)
+        problems = [self._parse_exam_problem(item, index) for index, item in enumerate(paper.problems, 1)]
         cover = await self.get_exam_cover(leaf_id, course)
         return ExamPaperData(
             course_id=str(course.id),
             exam_id=str(leaf_id),
-            title=str(paper.get("title") or cover.title),
+            title=paper.title or cover.title,
             problems=problems,
         )
 
@@ -342,26 +382,23 @@ class BasePlatform(ABC):
     def _parse_exam_problem(item: Any, index: int) -> ExamProblemItem:
         """把考场试卷的题目条目归一为对外模型。"""
         raw = item if isinstance(item, dict) else {}
-        raw_options = raw.get("Options") if isinstance(raw.get("Options"), list) else []
-        options = [
-            OptionItem(key=str(opt.get("key") or ""), text=html_to_md(str(opt.get("value") or "")))
-            for opt in raw_options
-            if isinstance(opt, dict)
-        ]
-        raw_answer = raw.get("Answer")
+        prob = PlatformExamProblemRaw.model_validate(raw)
+        options = [OptionItem(key=opt.key, text=html_to_md(opt.value)) for opt in prob.Options]
+        raw_answer = prob.Answer
         answers = [str(a) for a in raw_answer] if isinstance(raw_answer, list) else []
-        type_text = str(raw.get("TypeText") or raw.get("Type") or "")
-        prompt, images = html_to_md_with_images(str(raw.get("Body") or ""))
+        type_text = str(prob.TypeText or prob.Type or "")
+        prompt, images = html_to_md_with_images(prob.Body or "")
+        score_val = prob.score if prob.score is not None else prob.Score
         return ExamProblemItem(
             index=index,
-            id=str(raw.get("problem_id") or index),
+            id=str(prob.problem_id or index),
             type=type_text or None,
             prompt=prompt,
             images=images,
             options=options,
-            score=float(raw.get("score") or raw.get("Score") or 0.0),
+            score=float(score_val or 0.0),
             answer=answers,
-            has_remark=bool(raw.get("HasRemark")),
+            has_remark=bool(prob.HasRemark),
         )
 
     async def mark_article_finish(self, leaf_id: str | int, course: Course) -> bool:

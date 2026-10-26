@@ -57,8 +57,8 @@ async def test_heartbeat_payload_uses_platform_profile() -> None:
 
 def test_heartbeat_lob_differs_per_platform() -> None:
     """学堂在线 `lob=xt`、雨课堂 `lob=ykt`，不可混用。"""
-    assert XuetangXPlatform(None).heartbeat_profile.lob == "xt"  # type: ignore[arg-type]
-    assert YuketangPlatform(None).heartbeat_profile.lob == "ykt"  # type: ignore[arg-type]
+    assert XuetangXPlatform(None).heartbeat_profile.lob == "xt"  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    assert YuketangPlatform(None).heartbeat_profile.lob == "ykt"  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 def test_heartbeat_profile_is_required() -> None:
@@ -84,7 +84,7 @@ def test_heartbeat_profile_is_required() -> None:
             return {}
 
     with pytest.raises(TypeError):
-        IncompletePlatform(None)  # type: ignore[arg-type]
+        IncompletePlatform(None)  # type: ignore[arg-type]  # ty: ignore[call-non-callable,invalid-argument-type]
 
     assert HeartbeatProfile(lob="x").interval == 5
 
@@ -135,7 +135,7 @@ async def test_heartbeat_request_excludes_progress_params() -> None:
     """平台进度 query 参数只能出现在进度查询上，心跳 POST 不得携带。"""
     client = _RecordingClient()
     await generic_watch_video(
-        client=client,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         video_id="v1",
         video_name="测试",
         classroom_id="9",
